@@ -157,6 +157,31 @@ struct SplitCoordinatorTests {
     }
 
     @Test
+    func activatePaneSelectsAnExistingPaneForExternalFocus() throws {
+        var store = try makeGridStore(activePaneID: paneID(1))
+        let coordinator = SplitCoordinator()
+
+        let delta = try coordinator.apply(
+            .activatePane(
+                workspaceID: workspaceID(1),
+                tabID: tabID(1),
+                paneID: paneID(4)
+            ),
+            to: &store
+        )
+
+        #expect(
+            delta
+                == .focusChanged(
+                    workspaceID: workspaceID(1),
+                    tabID: tabID(1),
+                    sourcePaneID: paneID(1),
+                    activePaneID: paneID(4)
+                ))
+        #expect(store.tab(id: tabID(1))?.activePaneID == paneID(4))
+    }
+
+    @Test
     func sequentialFocusUsesDepthFirstOrderAndWraps() throws {
         var store = try makeGridStore()
         let coordinator = SplitCoordinator()

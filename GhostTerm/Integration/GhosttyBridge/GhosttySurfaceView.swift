@@ -81,6 +81,7 @@ import Synchronization
 
 typealias GhosttySurfaceCloseHandler = @MainActor @Sendable (PaneID, Bool) -> Void
 typealias GhosttySurfaceInputRoute = @MainActor (PaneID, NSEvent) -> Void
+typealias GhosttySurfaceFocusRoute = @MainActor (PaneID) -> Void
 typealias GhosttySurfaceCallbackRoute =
     @MainActor @Sendable (PaneID, GhosttySurfaceCallbackEvent) -> Void
 typealias GhosttyClipboardInvalidationRoute = @MainActor (PaneID) -> Void
@@ -111,6 +112,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     let paneID: PaneID
 
     private let inputRoute: GhosttySurfaceInputRoute
+    private let focusRoute: GhosttySurfaceFocusRoute
     private let applicationIsActive: @MainActor () -> Bool
     private let clipboardClient: GhosttyClipboardClient
     private let clipboardInvalidationRoute: GhosttyClipboardInvalidationRoute
@@ -168,12 +170,14 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         access _: GhosttySurfaceAccess,
         applicationIsActive: @escaping @MainActor () -> Bool,
         inputRoute: @escaping GhosttySurfaceInputRoute,
+        focusRoute: @escaping GhosttySurfaceFocusRoute,
         clipboardClient: GhosttyClipboardClient,
         callbackRoute: @escaping GhosttySurfaceCallbackRoute,
         clipboardInvalidationRoute: @escaping GhosttyClipboardInvalidationRoute
     ) {
         self.paneID = paneID
         self.inputRoute = inputRoute
+        self.focusRoute = focusRoute
         self.applicationIsActive = applicationIsActive
         self.clipboardClient = clipboardClient
         self.clipboardInvalidationRoute = clipboardInvalidationRoute
@@ -272,6 +276,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         let result = super.becomeFirstResponder()
         if result {
             setSurfaceFocused(window?.isKeyWindow == true)
+            focusRoute(paneID)
         }
         return result
     }

@@ -17,11 +17,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let persistNormalWindowFrame: NormalWindowFramePersistence
     private let onError: ErrorHandler
     private let workspaceViewController = WorkspaceViewController()
+    private let splitCoordinator = SplitCoordinator()
     private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
     private var isCreatingReplacementShell = false
     private var activeHotKey = HotKeyDescriptor(key: .f12)
+
+    #if DEBUG
+        private var failsNextSplitMutationForTesting = false
+    #endif
+
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
         [weak self] presentation, completion in
         guard let self else {
@@ -93,6 +99,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hotKeyRelay.action = { [weak self] in
             self?.presentationController.toggleQuakeVisibility()
         }
+        ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
+            self?.surfaceDidBecomeFirstResponder(id: paneID)
+        }
         ghosttyBridge.clipboardConfirmationHandler = { [weak self] event in
             switch event {
             case .request(let request, let response):
@@ -110,6 +119,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     isolated deinit {
         try? hotKeyController.unregister()
+        ghosttyBridge.surfaceFocusHandler = nil
         ghosttyBridge.clipboardConfirmationHandler = nil
         if normalWindowController.window?.delegate === self {
             normalWindowController.window?.delegate = nil
@@ -192,6 +202,66 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         } catch {
             onError(error)
         }
+    }
+
+    func splitActivePane(axis: SplitAxis) throws {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let workspace = workspaceStore.workspace(id: workspaceID),
+            let tabID = workspace.activeTabID,
+            let tab = workspaceStore.tab(id: tabID),
+            let descriptor = tab.paneDescriptor(for: tab.activePaneID),
+            surfaces[tab.activePaneID] != nil
+        else {
+            return
+        }
+
+        let paneID = PaneID()
+        var splitConfiguration = surfaceConfiguration
+        splitConfiguration.workingDirectory = descriptor.cwd
+        splitConfiguration.command = nil
+        splitConfiguration.initialInput = nil
+        splitConfiguration.context = .split
+        let surface = try ghosttyBridge.makeSurface(
+            id: paneID,
+            configuration: splitConfiguration
+        ) { [weak self] paneID, processAlive in
+            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+        }
+        let newPane = TerminalPaneDescriptor(
+            id: paneID,
+            cwd: descriptor.cwd,
+            startupCommand: .shell
+        )
+        var candidate = workspaceStore
+
+        do {
+            #if DEBUG
+                if failsNextSplitMutationForTesting {
+                    failsNextSplitMutationForTesting = false
+                    throw SplitCoordinatorError.paneNotFound(tab.activePaneID)
+                }
+            #endif
+
+            _ = try splitCoordinator.apply(
+                .split(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    paneID: tab.activePaneID,
+                    axis: axis,
+                    newPane: newPane,
+                    ratio: 0.5
+                ),
+                to: &candidate
+            )
+        } catch {
+            ghosttyBridge.closeSurface(id: paneID)
+            throw error
+        }
+
+        surfaces[paneID] = surface
+        workspaceStore = candidate
+        refreshWorkspacePresentation(focusTerminal: true)
     }
 
     func activateTab(at index: Int) {
@@ -317,17 +387,111 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         let activeTab = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?
             .activeTabID
             .flatMap { workspaceStore.tab(id: $0) }
-        let surface = activePaneID.flatMap { surfaces[$0] }
+        let activeTabSurfaces = Dictionary(
+            uniqueKeysWithValues: (activeTab?.root.leaves ?? []).compactMap { paneID in
+                surfaces[paneID].map { (paneID, $0) }
+            }
+        )
+        let surface = activePaneID.flatMap { activeTabSurfaces[$0] }
         workspaceViewController.displayTerminal(
             root: activeTab?.root,
-            surfaces: surfaces,
+            surfaces: activeTabSurfaces,
             palette: ghosttyBridge.chromePalette,
-            onResize: { _, _ in },
-            onEqualize: { _ in }
+            onResize: { [weak self] splitID, ratio in
+                self?.updateActiveSplitRatio(id: splitID, ratio: ratio)
+            },
+            onEqualize: { [weak self] splitID in
+                self?.equalizeActiveSplits(triggeredBy: splitID)
+            }
         )
-        if focusTerminal, let surface {
-            activeWindow?.makeFirstResponder(surface)
+        if focusTerminal, let surface, let paneID = activePaneID {
+            focus(surface, paneID: paneID)
         }
+    }
+
+    private func focus(
+        _ surface: GhosttySurfaceView,
+        paneID: PaneID,
+        retryingAfterPresentation: Bool = false
+    ) {
+        guard let window = activeWindow else { return }
+        guard surface.window === window else {
+            guard !retryingAfterPresentation else { return }
+            DispatchQueue.main.async { [weak self, weak surface] in
+                guard let self, let surface, self.activePaneID == paneID else { return }
+                self.focus(surface, paneID: paneID, retryingAfterPresentation: true)
+            }
+            return
+        }
+        window.makeFirstResponder(surface)
+    }
+
+    private func surfaceDidBecomeFirstResponder(id paneID: PaneID) {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let workspace = workspaceStore.workspace(id: workspaceID),
+            let tabID = workspace.activeTabID,
+            let tab = workspaceStore.tab(id: tabID),
+            tab.root.contains(paneID),
+            tab.activePaneID != paneID,
+            surfaces[paneID] != nil
+        else {
+            return
+        }
+
+        var candidate = workspaceStore
+        guard
+            (try? splitCoordinator.apply(
+                .activatePane(workspaceID: workspaceID, tabID: tabID, paneID: paneID),
+                to: &candidate
+            )) != nil
+        else {
+            return
+        }
+        workspaceStore = candidate
+        refreshWorkspacePresentation(focusTerminal: false)
+    }
+
+    private func updateActiveSplitRatio(id splitID: UUID, ratio: Double) {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID else { return }
+        var candidate = workspaceStore
+        guard
+            (try? splitCoordinator.apply(
+                .updateRatio(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    splitID: splitID,
+                    ratio: ratio
+                ),
+                to: &candidate
+            )) != nil
+        else {
+            return
+        }
+        workspaceStore = candidate
+        refreshWorkspacePresentation(focusTerminal: false)
+    }
+
+    private func equalizeActiveSplits(triggeredBy splitID: UUID) {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID,
+            workspaceStore.tab(id: tabID)?.root.contains(splitID: splitID) == true
+        else {
+            return
+        }
+        var candidate = workspaceStore
+        guard
+            (try? splitCoordinator.apply(
+                .equalize(workspaceID: workspaceID, tabID: tabID),
+                to: &candidate
+            )) != nil
+        else {
+            return
+        }
+        workspaceStore = candidate
+        refreshWorkspacePresentation(focusTerminal: false)
     }
 
     private func presentMoveToNewWorkspace(_ tabIDs: [TabID]) {
@@ -487,6 +651,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         func activateTabForTesting(_ tabID: TabID) {
             try? workspaceStore.activateTab(tabID, in: workspaceStore.activeWorkspaceID)
             refreshWorkspacePresentation(focusTerminal: true)
+        }
+
+        func splitActivePaneForTesting(axis: SplitAxis) throws {
+            try splitActivePane(axis: axis)
+        }
+
+        func failNextSplitMutationForTesting() {
+            failsNextSplitMutationForTesting = true
         }
 
         func requestCloseTabForTesting(_ tabID: TabID) {
@@ -706,8 +878,34 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         closeBridgeSurface: Bool,
         createsReplacement: Bool
     ) {
-        guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else { return }
-        closeOwningTab(containing: id)
+        guard surfaces[id] != nil else { return }
+        let location = workspaceStore.workspaces.lazy
+            .flatMap(\.tabs)
+            .first { $0.root.contains(id) }
+        guard let tab = location,
+            let workspace = workspaceStore.workspaces.first(where: {
+                $0.tabs.contains(where: { $0.id == tab.id })
+            })
+        else {
+            _ = removeSurface(id: id, closeBridgeSurface: closeBridgeSurface)
+            return
+        }
+
+        var candidate = workspaceStore
+        guard
+            (try? splitCoordinator.apply(
+                .closePane(
+                    workspaceID: workspace.id,
+                    tabID: tab.id,
+                    paneID: id
+                ),
+                to: &candidate
+            )) != nil,
+            removeSurface(id: id, closeBridgeSurface: closeBridgeSurface)
+        else {
+            return
+        }
+        workspaceStore = candidate
         refreshWorkspacePresentation(focusTerminal: true)
 
         guard createsReplacement,

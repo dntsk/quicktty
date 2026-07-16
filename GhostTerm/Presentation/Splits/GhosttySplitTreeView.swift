@@ -106,6 +106,7 @@ private struct GhosttySplitNodeView: View {
         case .pane(let paneID):
             if let surface = surfaces[paneID] {
                 GhosttySurfaceRepresentable(surface: surface)
+                    .id(paneID)
             } else {
                 Color.clear.accessibilityLabel("Terminal pane unavailable")
             }

@@ -49,6 +49,40 @@ struct GhosttySplitTreeViewTests {
     }
 
     @Test
+    func switchingPaneRootsReplacesTheActualHostedSurfaceView() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let controller = WorkspaceViewController()
+
+        controller.displayTerminal(
+            root: .pane(first.paneID),
+            surfaces: [first.paneID: first],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+        await Task.yield()
+        #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
+
+        controller.displayTerminal(
+            root: .pane(second.paneID),
+            surfaces: [second.paneID: second],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+        await Task.yield()
+
+        #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(second)])
+    }
+
+    @Test
     func resizeAndEqualizeCallbacksKeepTheSplitIdentity() {
         let splitID = UUID(uuidString: "10000000-0000-0000-0000-000000000003")!
         var resized: (UUID, Double)?

@@ -138,6 +138,7 @@ final class GhosttyBridge {
     typealias RuntimeActionHandler = @MainActor @Sendable (GhosttyRuntimeAction) -> Void
     typealias RuntimeActionDeliveryCompletion = @MainActor @Sendable (Bool) -> Void
     typealias SurfaceCloseHandler = GhosttySurfaceCloseHandler
+    typealias SurfaceFocusHandler = @MainActor (PaneID) -> Void
 
     private static let runtimeBootstrapResult =
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
@@ -151,9 +152,11 @@ final class GhosttyBridge {
     private var surfaceCloseHandlers: [PaneID: SurfaceCloseHandler] = [:]
 
     var clipboardConfirmationHandler: GhosttyClipboardConfirmationHandler?
+    var surfaceFocusHandler: SurfaceFocusHandler?
 
     #if DEBUG
         private var inputObservations: [GhosttyBridgeInputObservation] = []
+        private var surfaceConfigurationsForTesting: [PaneID: GhosttySurfaceConfiguration] = [:]
         private var failsNextSurfaceCreationForTesting = false
     #endif
 
@@ -263,6 +266,9 @@ final class GhosttyBridge {
                 inputRoute: { [weak self] paneID, event in
                     self?.routeInput(event, from: paneID)
                 },
+                focusRoute: { [weak self] paneID in
+                    self?.routeSurfaceFocus(from: paneID)
+                },
                 clipboardClient: clipboardClient,
                 callbackRoute: { [weak self] paneID, event in
                     self?.routeSurfaceCallback(event, from: paneID)
@@ -277,12 +283,22 @@ final class GhosttyBridge {
 
         surfaces[id] = surface
         surfaceCloseHandlers[id] = closeHandler
+
+        #if DEBUG
+            surfaceConfigurationsForTesting[id] = configuration
+        #endif
+
         return surface
     }
 
     func closeSurface(id: PaneID) {
         guard let surface = surfaces.removeValue(forKey: id) else { return }
         surfaceCloseHandlers.removeValue(forKey: id)
+
+        #if DEBUG
+            surfaceConfigurationsForTesting.removeValue(forKey: id)
+        #endif
+
         surface.close()
     }
 
@@ -359,6 +375,10 @@ final class GhosttyBridge {
 
         var inputObservationsForTesting: [GhosttyBridgeInputObservation] {
             inputObservations
+        }
+
+        func surfaceConfigurationForTesting(id: PaneID) -> GhosttySurfaceConfiguration? {
+            surfaceConfigurationsForTesting[id]
         }
 
         func failNextSurfaceCreationForTesting() {
@@ -466,6 +486,11 @@ final class GhosttyBridge {
         }
     }
 
+    private func routeSurfaceFocus(from paneID: PaneID) {
+        guard surfaces[paneID] != nil else { return }
+        surfaceFocusHandler?(paneID)
+    }
+
     private func routeSurfaceCallback(
         _ event: GhosttySurfaceCallbackEvent,
         from paneID: PaneID
@@ -506,6 +531,11 @@ final class GhosttyBridge {
 
         surfaces.removeValue(forKey: id)
         let closeHandler = surfaceCloseHandlers.removeValue(forKey: id)
+
+        #if DEBUG
+            surfaceConfigurationsForTesting.removeValue(forKey: id)
+        #endif
+
         surface.close()
         closeHandler?(id, false)
     }
@@ -514,6 +544,11 @@ final class GhosttyBridge {
         let activeSurfaces = Array(surfaces.values)
         surfaces.removeAll()
         surfaceCloseHandlers.removeAll()
+
+        #if DEBUG
+            surfaceConfigurationsForTesting.removeAll()
+        #endif
+
         for surface in activeSurfaces {
             surface.close()
         }

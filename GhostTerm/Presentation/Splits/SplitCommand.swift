@@ -24,6 +24,7 @@ enum SplitCommand: Equatable, Sendable {
         ratio: Double
     )
     case equalize(workspaceID: WorkspaceID, tabID: TabID)
+    case activatePane(workspaceID: WorkspaceID, tabID: TabID, paneID: PaneID)
     case focusNext(workspaceID: WorkspaceID, tabID: TabID, from: PaneID)
     case focusPrevious(workspaceID: WorkspaceID, tabID: TabID, from: PaneID)
     case focus(

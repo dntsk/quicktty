@@ -20,6 +20,12 @@ final class WorkspaceViewController: NSViewController {
     private var chromePalette = GhosttyChromePalette.fallback
     private var splitHostingController: NSHostingController<GhosttySplitTreeView>?
     private var splitHostingConstraints: [NSLayoutConstraint] = []
+    private var splitResizeHandler: ((UUID, Double) -> Void)?
+    private var splitEqualizeHandler: ((UUID) -> Void)?
+
+    #if DEBUG
+        private var hostedSurfacesForTesting: [PaneID: GhosttySurfaceView] = [:]
+    #endif
 
     override func loadView() {
         let rootView = NSView()
@@ -155,6 +161,26 @@ final class WorkspaceViewController: NSViewController {
         var emptyWorkspaceLabelIsVisibleForTesting: Bool {
             !emptyLabel.isHidden
         }
+
+        var hostedSurfaceIdentifiersForTesting: [PaneID: ObjectIdentifier] {
+            Dictionary(
+                uniqueKeysWithValues: hostedSurfacesForTesting.map {
+                    ($0.key, ObjectIdentifier($0.value))
+                })
+        }
+
+        var renderedSurfaceIdentifiersForTesting: [ObjectIdentifier] {
+            guard let splitHostingController else { return [] }
+            return surfaceViews(in: splitHostingController.view).map(ObjectIdentifier.init)
+        }
+
+        func invokeResizeForTesting(splitID: UUID, ratio: Double) {
+            splitResizeHandler?(splitID, ratio)
+        }
+
+        func invokeEqualizeForTesting(splitID: UUID) {
+            splitEqualizeHandler?(splitID)
+        }
     #endif
 
     func displayTerminal(
@@ -166,10 +192,24 @@ final class WorkspaceViewController: NSViewController {
     ) {
         loadViewIfNeeded()
         guard let root else {
+            splitResizeHandler = nil
+            splitEqualizeHandler = nil
+
+            #if DEBUG
+                hostedSurfacesForTesting = [:]
+            #endif
+
             removeSplitHost()
             emptyLabel.isHidden = false
             return
         }
+
+        splitResizeHandler = onResize
+        splitEqualizeHandler = onEqualize
+
+        #if DEBUG
+            hostedSurfacesForTesting = surfaces
+        #endif
 
         emptyLabel.isHidden = true
         let splitTreeView = GhosttySplitTreeView(
@@ -181,6 +221,7 @@ final class WorkspaceViewController: NSViewController {
         )
         if let splitHostingController {
             splitHostingController.rootView = splitTreeView
+            splitHostingController.view.layoutSubtreeIfNeeded()
             return
         }
 
@@ -197,7 +238,15 @@ final class WorkspaceViewController: NSViewController {
         ]
         NSLayoutConstraint.activate(splitHostingConstraints)
         self.splitHostingController = splitHostingController
+        splitHostingView.layoutSubtreeIfNeeded()
     }
+
+    #if DEBUG
+        private func surfaceViews(in view: NSView) -> [GhosttySurfaceView] {
+            let directSurface = (view as? GhosttySurfaceView).map { [$0] } ?? []
+            return directSurface + view.subviews.flatMap(surfaceViews)
+        }
+    #endif
 
     private func removeSplitHost() {
         guard let splitHostingController else { return }

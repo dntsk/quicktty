@@ -132,6 +132,20 @@ struct SplitCoordinator: Sendable {
                 root: tab.root
             )
 
+        case .activatePane(let workspaceID, let tabID, let paneID):
+            let location = try locateTab(workspaceID: workspaceID, tabID: tabID, in: store)
+            guard location.tab.root.contains(paneID) else {
+                throw SplitCoordinatorError.paneNotFound(paneID)
+            }
+            return try activate(
+                paneID,
+                from: location.tab.activePaneID,
+                workspaceID: workspaceID,
+                tabID: tabID,
+                location: location,
+                store: &store
+            )
+
         case .focusNext(let workspaceID, let tabID, let sourcePaneID):
             return try focusSequentially(
                 workspaceID: workspaceID,
