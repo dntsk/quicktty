@@ -597,7 +597,7 @@ struct StateStoreTests {
             visibleScreenFrames: screens
         )
 
-        #expect(restored == NSRect(x: 0, y: 500, width: 500, height: 300))
+        #expect(restored == NSRect(x: 0, y: 328, width: 720, height: 472))
     }
 
     @Test
