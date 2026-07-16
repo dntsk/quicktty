@@ -2,15 +2,19 @@ import AppKit
 
 @MainActor
 final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
+    static let minimumContentHeight: CGFloat = 200
+
     init(contentRect: NSRect = .zero) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
         title = "GhostTerm Quake Terminal"
         level = .floating
+        contentMinSize = NSSize(width: 0, height: Self.minimumContentHeight)
+        minSize = NSSize(width: 0, height: Self.minimumContentHeight)
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         animationBehavior = .none
         isFloatingPanel = true
@@ -43,6 +47,14 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
             contentViewController.removeFromParent()
         }
         self.contentViewController = contentViewController
+    }
+
+    func setPresentationLevel(_ level: QuakePresentationLevel) {
+        self.level =
+            switch level {
+            case .floating: .floating
+            case .popUpMenu: .popUpMenu
+            }
     }
 
     func orderFrontForPresentation() {

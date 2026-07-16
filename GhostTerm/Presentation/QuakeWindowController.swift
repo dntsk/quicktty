@@ -45,6 +45,27 @@ struct QuakeWindowGeometry: Equatable, Sendable {
         )
     }
 
+    func normalizedManualFrame(
+        proposedHeight: CGFloat,
+        in visibleFrame: NSRect,
+        minimumHeight: CGFloat
+    ) -> NSRect? {
+        guard
+            proposedHeight.isFinite,
+            minimumHeight.isFinite,
+            minimumHeight > 0,
+            let targetFrame = targetFrame(in: visibleFrame)
+        else { return nil }
+        let maximumHeight = visibleFrame.height - (padding * 2)
+        let height = min(max(proposedHeight, min(minimumHeight, maximumHeight)), maximumHeight)
+        return NSRect(
+            x: targetFrame.minX,
+            y: visibleFrame.maxY - padding - height,
+            width: targetFrame.width,
+            height: height
+        )
+    }
+
     private static func isValidVisibleFrame(_ frame: NSRect) -> Bool {
         frame.minX.isFinite && frame.minY.isFinite && frame.width.isFinite
             && frame.height.isFinite && frame.width > 0 && frame.height > 0
@@ -106,11 +127,34 @@ protocol PresentationScheduling: AnyObject {
     ) -> any PresentationCancellation
 }
 
+enum QuakePresentationLevel: Equatable, Sendable {
+    case floating
+    case popUpMenu
+}
+
+enum QuakeAnimationCurve: Equatable, Sendable {
+    case easeIn
+    case easeOut
+}
+
+struct QuakeAnimationRequest: Equatable, Sendable {
+    let visibility: QuakeVisibility
+    let curve: QuakeAnimationCurve
+}
+
+@MainActor
+protocol PresentationDeferring: AnyObject {
+    func deferAction(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation
+}
+
 @MainActor
 protocol QuakeFrameAnimating: AnyObject {
     func animate(
         window: any QuakeWindowRepresenting,
         to frame: NSRect,
+        request: QuakeAnimationRequest,
         duration: TimeInterval,
         completion: @escaping @MainActor () -> Void
     ) -> any PresentationCancellation
@@ -129,6 +173,7 @@ protocol QuakeWindowRepresenting: AnyObject {
     var hasAttachedSheet: Bool { get }
 
     func setPresentationFrame(_ frame: NSRect)
+    func setPresentationLevel(_ level: QuakePresentationLevel)
     func installContentViewController(_ contentViewController: NSViewController?) throws
     func orderFrontForPresentation()
     func focusForPresentation()
@@ -152,21 +197,28 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     typealias FocusLossSuppression = @MainActor () -> Bool
     typealias PriorApplicationProvider = @MainActor () -> (any PresentationApplicationActivation)?
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias QuakeHeightPersistence = @MainActor (Double) -> Void
 
     private let quakeWindow: any QuakeWindowRepresenting
     private var configuration: QuakeWindowConfiguration
     private let visibleFrames: VisibleFramesProvider
     private let cursorLocation: CursorLocationProvider
     private let animator: any QuakeFrameAnimating
+    private let animationDeferrer: any PresentationDeferring
     private let scheduler: any PresentationScheduling
     private let isFocusLossSuppressed: FocusLossSuppression
     private let priorApplicationProvider: PriorApplicationProvider
+    private let persistQuakeHeight: QuakeHeightPersistence
     private let onError: ErrorHandler
     private var animationCancellation: (any PresentationCancellation)?
+    private var deferredAnimationCancellation: (any PresentationCancellation)?
     private var focusLossCancellation: (any PresentationCancellation)?
     private var animationGeneration = 0
     private var lastVisibleFrame: NSRect?
     private var priorApplication: (any PresentationApplicationActivation)?
+    private var isLiveResizing = false
+    private var isNormalizingLiveResize = false
+    private var liveResizeVisibleFrame: NSRect?
     private(set) var requestedVisibility: QuakeVisibility
 
     init(
@@ -175,9 +227,11 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         visibleFrames: @escaping VisibleFramesProvider,
         cursorLocation: @escaping CursorLocationProvider,
         animator: any QuakeFrameAnimating,
+        animationDeferrer: any PresentationDeferring = MainRunLoopPresentationDeferrer(),
         scheduler: any PresentationScheduling,
         isFocusLossSuppressed: @escaping FocusLossSuppression,
         priorApplicationProvider: @escaping PriorApplicationProvider,
+        persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
         onError: @escaping ErrorHandler = { _ in }
     ) {
         quakeWindow = window
@@ -185,9 +239,11 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         self.visibleFrames = visibleFrames
         self.cursorLocation = cursorLocation
         self.animator = animator
+        self.animationDeferrer = animationDeferrer
         self.scheduler = scheduler
         self.isFocusLossSuppressed = isFocusLossSuppressed
         self.priorApplicationProvider = priorApplicationProvider
+        self.persistQuakeHeight = persistQuakeHeight
         self.onError = onError
         requestedVisibility = window.isPresentationVisible ? .shown : .hidden
         super.init()
@@ -198,7 +254,10 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         self.init(configuration: QuakeWindowConfiguration())
     }
 
-    convenience init(configuration: QuakeWindowConfiguration) {
+    convenience init(
+        configuration: QuakeWindowConfiguration,
+        persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in }
+    ) {
         let window = QuakeWindow()
         self.init(
             window: window,
@@ -206,6 +265,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             visibleFrames: { NSScreen.screens.map(\.visibleFrame) },
             cursorLocation: { NSEvent.mouseLocation },
             animator: AppKitQuakeFrameAnimator(),
+            animationDeferrer: MainRunLoopPresentationDeferrer(),
             scheduler: TaskPresentationScheduler(),
             isFocusLossSuppressed: {
                 window.hasAttachedSheet || NSApp.modalWindow != nil
@@ -213,7 +273,8 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             },
             priorApplicationProvider: {
                 RunningApplicationActivationAdapter.frontmostOtherApplication()
-            }
+            },
+            persistQuakeHeight: persistQuakeHeight
         )
     }
 
@@ -221,6 +282,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     isolated deinit {
         animationCancellation?.cancel()
+        deferredAnimationCancellation?.cancel()
         focusLossCancellation?.cancel()
         if let window = quakeWindow as? NSWindow, window.delegate === self {
             window.delegate = nil
@@ -266,11 +328,9 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     func deactivateForModeTransition() {
-        animationGeneration += 1
-        animationCancellation?.cancel()
-        animationCancellation = nil
+        beginAnimationRequest(.hidden)
         cancelFocusLossHide()
-        requestedVisibility = .hidden
+        quakeWindow.setPresentationLevel(.floating)
         quakeWindow.orderOutForPresentation()
         priorApplication = nil
     }
@@ -303,6 +363,77 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         focusDidBecomeKey()
     }
 
+    func windowWillStartLiveResize(_ notification: Notification) {
+        guard notification.object as? NSWindow === appKitWindow else { return }
+        isLiveResizing = true
+        liveResizeVisibleFrame = try? selectedVisibleFrame()
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard
+            sender === appKitWindow,
+            isLiveResizing,
+            !isNormalizingLiveResize,
+            let visibleFrame = liveResizeVisibleFrame,
+            let frame = configuration.geometry.normalizedManualFrame(
+                proposedHeight: frameSize.height,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        else { return frameSize }
+        return frame.size
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard
+            let window = notification.object as? NSWindow,
+            window === appKitWindow,
+            isLiveResizing,
+            !isNormalizingLiveResize,
+            let visibleFrame = liveResizeVisibleFrame,
+            let frame = configuration.geometry.normalizedManualFrame(
+                proposedHeight: window.frame.height,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        else { return }
+        guard window.frame != frame else { return }
+        isNormalizingLiveResize = true
+        window.setFrame(frame, display: true)
+        isNormalizingLiveResize = false
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        defer {
+            isLiveResizing = false
+            liveResizeVisibleFrame = nil
+        }
+        guard
+            let window = notification.object as? NSWindow,
+            window === appKitWindow,
+            isLiveResizing,
+            let visibleFrame = liveResizeVisibleFrame,
+            let frame = configuration.geometry.normalizedManualFrame(
+                proposedHeight: window.frame.height,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        else { return }
+        if window.frame != frame {
+            window.setFrame(frame, display: true)
+        }
+        let heightFraction = frame.height / visibleFrame.height
+        guard
+            let geometry = QuakeWindowGeometry(
+                heightFraction: heightFraction,
+                padding: configuration.geometry.padding
+            )
+        else { return }
+        configuration.geometry = geometry
+        lastVisibleFrame = visibleFrame
+        persistQuakeHeight(heightFraction)
+    }
+
     private func requestShow() throws {
         let visibleFrame = try selectedVisibleFrame()
         guard let targetFrame = configuration.geometry.targetFrame(in: visibleFrame) else {
@@ -319,11 +450,19 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         if priorApplication == nil {
             priorApplication = priorApplicationProvider()
         }
-        if !quakeWindow.isPresentationVisible {
-            quakeWindow.setPresentationFrame(hiddenFrame)
-        }
+        quakeWindow.setPresentationFrame(hiddenFrame)
+        quakeWindow.setPresentationLevel(.popUpMenu)
         quakeWindow.orderFrontForPresentation()
-        animate(to: targetFrame, visibility: .shown)
+        let generation = animationGeneration
+        deferredAnimationCancellation = animationDeferrer.deferAction { [weak self] in
+            guard
+                let self,
+                self.animationGeneration == generation,
+                self.requestedVisibility == .shown
+            else { return }
+            self.deferredAnimationCancellation = nil
+            self.animate(to: targetFrame, visibility: .shown)
+        }
     }
 
     private func requestHide() throws {
@@ -353,16 +492,29 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     private func beginAnimationRequest(_ visibility: QuakeVisibility) {
         animationGeneration += 1
+        let hasOutstandingAnimation =
+            animationCancellation != nil
+            || deferredAnimationCancellation != nil
         animationCancellation?.cancel()
         animationCancellation = nil
+        deferredAnimationCancellation?.cancel()
+        deferredAnimationCancellation = nil
+        if hasOutstandingAnimation {
+            quakeWindow.setPresentationLevel(.floating)
+        }
         requestedVisibility = visibility
     }
 
     private func animate(to frame: NSRect, visibility: QuakeVisibility) {
         let generation = animationGeneration
+        let request = QuakeAnimationRequest(
+            visibility: visibility,
+            curve: visibility == .shown ? .easeOut : .easeIn
+        )
         animationCancellation = animator.animate(
             window: quakeWindow,
             to: frame,
+            request: request,
             duration: configuration.animationDuration
         ) { [weak self] in
             guard let self, self.animationGeneration == generation,
@@ -372,9 +524,11 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             self.quakeWindow.setPresentationFrame(frame)
             switch visibility {
             case .shown:
+                self.quakeWindow.setPresentationLevel(.floating)
                 self.quakeWindow.focusForPresentation()
             case .hidden:
                 self.quakeWindow.orderOutForPresentation()
+                self.quakeWindow.setPresentationLevel(.floating)
                 let priorApplication = self.priorApplication
                 self.priorApplication = nil
                 priorApplication?.activate()
@@ -405,6 +559,22 @@ private final class PresentationCancellationToken: PresentationCancellation {
 }
 
 @MainActor
+private final class MainRunLoopPresentationDeferrer: PresentationDeferring {
+    func deferAction(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation {
+        let cancellation = PresentationCancellationToken()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard !cancellation.isCancelled else { return }
+                action()
+            }
+        }
+        return cancellation
+    }
+}
+
+@MainActor
 private final class TaskPresentationScheduler: PresentationScheduling {
     func schedule(
         after delay: TimeInterval,
@@ -428,6 +598,7 @@ private final class AppKitQuakeFrameAnimator: QuakeFrameAnimating {
     func animate(
         window: any QuakeWindowRepresenting,
         to frame: NSRect,
+        request: QuakeAnimationRequest,
         duration: TimeInterval,
         completion: @escaping @MainActor () -> Void
     ) -> any PresentationCancellation {
@@ -440,7 +611,9 @@ private final class AppKitQuakeFrameAnimator: QuakeFrameAnimating {
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(
+                name: request.curve == .easeOut ? .easeOut : .easeIn
+            )
             appKitWindow.animator().setFrame(frame, display: true)
         } completionHandler: {
             MainActor.assumeIsolated {

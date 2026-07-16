@@ -37,6 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.logConfigurationError(error)
                     }
                 },
+                persistQuakeHeight: { [weak self] height in
+                    do {
+                        try self?.configController?.updateQuakeHeight(height)
+                    } catch {
+                        self?.logConfigurationError(error)
+                    }
+                },
                 onError: { [weak self] error in
                     self?.logConfigurationError(error)
                 }

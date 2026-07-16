@@ -26,6 +26,47 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func geometryNormalizesManualHeightWithFixedWidthAndTopAnchor() throws {
+        let geometry = try #require(QuakeWindowGeometry(heightFraction: 0.75, padding: 10))
+        let visibleFrame = NSRect(x: 100, y: 20, width: 1_200, height: 800)
+
+        let resized = try #require(
+            geometry.normalizedManualFrame(
+                proposedHeight: 260,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        )
+        let minimum = try #require(
+            geometry.normalizedManualFrame(
+                proposedHeight: 10,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        )
+        let maximum = try #require(
+            geometry.normalizedManualFrame(
+                proposedHeight: 2_000,
+                in: visibleFrame,
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        )
+        let tiny = try #require(
+            geometry.normalizedManualFrame(
+                proposedHeight: 260,
+                in: NSRect(x: 0, y: 0, width: 500, height: 120),
+                minimumHeight: QuakeWindow.minimumContentHeight
+            )
+        )
+
+        #expect(resized == NSRect(x: 110, y: 550, width: 1_180, height: 260))
+        #expect(resized.maxY == visibleFrame.maxY - 10)
+        #expect(minimum.height == QuakeWindow.minimumContentHeight)
+        #expect(maximum.height == 780)
+        #expect(tiny == NSRect(x: 10, y: 10, width: 480, height: 100))
+    }
+
+    @Test
     func geometryUsesNearestVisibleFrameForMenuBarAndRejectsInvalidConfiguration() {
         let left = NSRect(x: 0, y: 0, width: 1_000, height: 800)
         let right = NSRect(x: 1_000, y: 0, width: 1_000, height: 760)
@@ -39,6 +80,56 @@ struct PresentationStateMachineTests {
         #expect(QuakeWindowGeometry(heightFraction: 0, padding: 0) == nil)
         #expect(QuakeWindowGeometry(heightFraction: 1.01, padding: 0) == nil)
         #expect(QuakeWindowGeometry(heightFraction: 0.75, padding: -1) == nil)
+    }
+
+    @Test
+    func quakeWindowIsBorderlessResizableAndHasMinimumHeight() {
+        let window = QuakeWindow()
+
+        #expect(window.styleMask.contains(.borderless))
+        #expect(window.styleMask.contains(.resizable))
+        #expect(window.contentMinSize.height == QuakeWindow.minimumContentHeight)
+    }
+
+    @Test
+    func liveResizePersistsNormalizedHeightOnceAndIgnoresProgrammaticFrames() throws {
+        let window = QuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        var persistedHeights: [Double] = []
+        let controller = QuakeWindowController(
+            window: window,
+            configuration: QuakeWindowConfiguration(
+                geometry: QuakeWindowGeometry(heightFraction: 0.75, padding: 0)!
+            ),
+            visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
+            cursorLocation: { NSPoint(x: 500, y: 500) },
+            animator: animator,
+            animationDeferrer: ImmediatePresentationDeferrer(),
+            scheduler: scheduler,
+            isFocusLossSuppressed: { false },
+            priorApplicationProvider: { nil },
+            persistQuakeHeight: { persistedHeights.append($0) }
+        )
+        let notification = Notification(name: NSWindow.didEndLiveResizeNotification, object: window)
+
+        controller.setPresentationFrame(NSRect(x: 1, y: 2, width: 3, height: 4))
+        controller.windowDidEndLiveResize(notification)
+        #expect(persistedHeights.isEmpty)
+
+        controller.windowWillStartLiveResize(
+            Notification(name: NSWindow.willStartLiveResizeNotification, object: window)
+        )
+        #expect(
+            controller.windowWillResize(window, to: NSSize(width: 600, height: 300))
+                == NSSize(width: 1_200, height: 300)
+        )
+        window.setFrame(NSRect(x: 100, y: 400, width: 600, height: 300), display: false)
+        controller.windowDidEndLiveResize(notification)
+        controller.windowDidEndLiveResize(notification)
+
+        #expect(persistedHeights == [300.0 / 780.0])
+        #expect(window.frame == NSRect(x: 0, y: 500, width: 1_200, height: 300))
     }
 
     @Test
@@ -200,6 +291,73 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func deferredShowUsesExpectedLevelCurveAndCompletionOrder() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let deferrer = ManualPresentationDeferrer()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler,
+            animationDeferrer: deferrer
+        )
+
+        try controller.requestVisibility(.shown)
+
+        #expect(window.events.suffix(3) == ["frame", "level.popUpMenu", "front"])
+        #expect(animator.requests.isEmpty)
+        deferrer.runActiveRequests()
+        #expect(animator.requests.count == 1)
+        #expect(
+            animator.requests[0].request
+                == QuakeAnimationRequest(
+                    visibility: .shown,
+                    curve: .easeOut
+                ))
+
+        animator.completeRequest(at: 0)
+        let restore = try #require(window.events.lastIndex(of: "level.floating"))
+        let focus = try #require(window.events.lastIndex(of: "focus"))
+        #expect(restore < focus)
+    }
+
+    @Test
+    func cancellingDeferredShowPreventsItsAnimationAndHideUsesEaseIn() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let deferrer = ManualPresentationDeferrer()
+        let priorApplication = FakeApplicationActivation()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler,
+            animationDeferrer: deferrer,
+            priorApplicationProvider: { priorApplication }
+        )
+
+        try controller.requestVisibility(.shown)
+        try controller.requestVisibility(.hidden)
+
+        #expect(deferrer.requests[0].cancellation.isCancelled)
+        deferrer.runActiveRequests()
+        #expect(animator.requests.count == 1)
+        #expect(
+            animator.requests[0].request
+                == QuakeAnimationRequest(
+                    visibility: .hidden,
+                    curve: .easeIn
+                ))
+
+        animator.completeRequest(at: 0)
+        let orderOut = try #require(window.events.lastIndex(of: "out"))
+        let floating = try #require(window.events.lastIndex(of: "level.floating"))
+        #expect(orderOut < floating)
+        #expect(priorApplication.activationCount == 1)
+    }
+
+    @Test
     func focusLossDelayCancelsAndHonorsInjectedSuppression() throws {
         let window = FakeQuakeWindow()
         let animator = ManualQuakeAnimator()
@@ -262,6 +420,7 @@ struct PresentationStateMachineTests {
         window: FakeQuakeWindow,
         animator: ManualQuakeAnimator,
         scheduler: ManualPresentationScheduler,
+        animationDeferrer: any PresentationDeferring = ImmediatePresentationDeferrer(),
         isFocusLossSuppressed: @escaping @MainActor () -> Bool = { false },
         priorApplicationProvider:
             @escaping @MainActor () ->
@@ -277,6 +436,7 @@ struct PresentationStateMachineTests {
             visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
             cursorLocation: { NSPoint(x: 500, y: 500) },
             animator: animator,
+            animationDeferrer: animationDeferrer,
             scheduler: scheduler,
             isFocusLossSuppressed: isFocusLossSuppressed,
             priorApplicationProvider: priorApplicationProvider
@@ -408,9 +568,15 @@ private final class FakeQuakeWindow: QuakeWindowRepresenting {
     private(set) var installedContentViewController: NSViewController?
     var hasAttachedSheet = false
     private(set) var focusCount = 0
+    private(set) var events: [String] = []
 
     func setPresentationFrame(_ frame: NSRect) {
         presentationFrame = frame
+        events.append("frame")
+    }
+
+    func setPresentationLevel(_ level: QuakePresentationLevel) {
+        events.append(level == .floating ? "level.floating" : "level.popUpMenu")
     }
 
     func installContentViewController(_ contentViewController: NSViewController?) throws {
@@ -419,15 +585,18 @@ private final class FakeQuakeWindow: QuakeWindowRepresenting {
 
     func orderFrontForPresentation() {
         isPresentationVisible = true
+        events.append("front")
     }
 
     func focusForPresentation() {
         focusCount += 1
         isPresentationVisible = true
+        events.append("focus")
     }
 
     func orderOutForPresentation() {
         isPresentationVisible = false
+        events.append("out")
     }
 }
 
@@ -444,6 +613,7 @@ private final class ManualCancellation: PresentationCancellation {
 private final class ManualQuakeAnimator: QuakeFrameAnimating {
     struct Request {
         let frame: NSRect
+        let request: QuakeAnimationRequest
         let completion: @MainActor () -> Void
         let cancellation: ManualCancellation
     }
@@ -453,16 +623,60 @@ private final class ManualQuakeAnimator: QuakeFrameAnimating {
     func animate(
         window: any QuakeWindowRepresenting,
         to frame: NSRect,
+        request: QuakeAnimationRequest,
         duration: TimeInterval,
         completion: @escaping @MainActor () -> Void
     ) -> any PresentationCancellation {
         let cancellation = ManualCancellation()
-        requests.append(Request(frame: frame, completion: completion, cancellation: cancellation))
+        requests.append(
+            Request(
+                frame: frame,
+                request: request,
+                completion: completion,
+                cancellation: cancellation
+            )
+        )
         return cancellation
     }
 
     func completeRequest(at index: Int) {
         requests[index].completion()
+    }
+}
+
+@MainActor
+private final class ManualPresentationDeferrer: PresentationDeferring {
+    struct Request {
+        let action: @MainActor @Sendable () -> Void
+        let cancellation: ManualCancellation
+    }
+
+    private(set) var requests: [Request] = []
+
+    func deferAction(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation {
+        let cancellation = ManualCancellation()
+        requests.append(Request(action: action, cancellation: cancellation))
+        return cancellation
+    }
+
+    func runActiveRequests() {
+        let pendingRequests = requests
+        requests.removeAll()
+        for request in pendingRequests where !request.cancellation.isCancelled {
+            request.action()
+        }
+    }
+}
+
+@MainActor
+private final class ImmediatePresentationDeferrer: PresentationDeferring {
+    func deferAction(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation {
+        action()
+        return ManualCancellation()
     }
 }
 

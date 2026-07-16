@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
     typealias ModePersistence = @MainActor (PresentationMode) -> Void
+    typealias QuakeHeightPersistence = @MainActor (Double) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
 
     private let ghosttyBridge: GhosttyBridge
@@ -40,6 +41,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         persistPresentationMode: @escaping ModePersistence = { _ in },
+        persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
         onError: @escaping ErrorHandler = { _ in },
         hotKeyController: (any HotKeyControlling)? = nil,
         visibleScreenFrames: @escaping @MainActor () -> [NSRect] = {
@@ -47,7 +49,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
     ) {
         let normalWindowController = NormalWindowController()
-        let quakeWindowController = QuakeWindowController(configuration: quakeConfiguration)
+        let quakeWindowController = QuakeWindowController(
+            configuration: quakeConfiguration,
+            persistQuakeHeight: persistQuakeHeight
+        )
         let hotKeyRelay = HotKeyActionRelay()
         let resolvedHotKeyController =
             hotKeyController
