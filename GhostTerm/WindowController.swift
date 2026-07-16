@@ -19,15 +19,17 @@ final class WindowController: NSWindowController {
         super.init(window: window)
     }
 
-    func embed(_ view: NSView) {
-        guard let contentView = contentViewController?.view else { return }
+    func embed(_ viewController: NSViewController) {
+        guard let contentViewController else { return }
+        contentViewController.addChild(viewController)
+        let view = viewController.view
         view.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(view)
+        contentViewController.view.addSubview(view)
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: contentView.topAnchor),
-            view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            view.topAnchor.constraint(equalTo: contentViewController.view.topAnchor),
+            view.leadingAnchor.constraint(equalTo: contentViewController.view.leadingAnchor),
+            view.bottomAnchor.constraint(equalTo: contentViewController.view.bottomAnchor),
+            view.trailingAnchor.constraint(equalTo: contentViewController.view.trailingAnchor),
         ])
     }
 

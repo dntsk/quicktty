@@ -6,6 +6,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let windowController: WindowController
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
+    private let workspaceViewController = WorkspaceViewController()
+    private var workspaceStore = WorkspaceStore()
+    private var createWorkspaceController: CreateWorkspaceController?
     private var defaultSurface: GhosttySurfaceView?
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
         [weak self] presentation, completion in
@@ -58,6 +61,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 self?.confirmationQueue.invalidateClipboard(for: paneID)
             }
         }
+        configurePresentationCallbacks()
     }
 
     isolated deinit {
@@ -123,7 +127,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func start() throws {
-        // Runtime restoration waits for command confirmation, so Task 6 starts only a safe shell.
         let paneID = PaneID()
         let surface = try ghosttyBridge.makeSurface(
             id: paneID,
@@ -131,10 +134,178 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ) { [weak self] paneID, processAlive in
             self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
         }
+
+        let startupCommand = surfaceConfiguration.command.map(StartupCommand.custom) ?? .shell
+        let descriptor = TerminalPaneDescriptor(
+            id: paneID,
+            cwd: surfaceConfiguration.workingDirectory
+                ?? FileManager.default.homeDirectoryForCurrentUser.path,
+            startupCommand: startupCommand
+        )
+        let tab = TerminalTab(title: "Shell", pane: descriptor)
+        do {
+            try workspaceStore.addTab(tab, to: workspaceStore.activeWorkspaceID)
+        } catch {
+            ghosttyBridge.closeSurface(id: paneID)
+            throw error
+        }
+
         defaultSurface = surface
-        windowController.embed(surface)
+        workspaceViewController.apply(workspaceStore)
+        workspaceViewController.displayTerminal(surface)
+        windowController.embed(workspaceViewController)
         windowController.showWindow(nil)
         windowController.window?.makeFirstResponder(surface)
+    }
+
+    private func configurePresentationCallbacks() {
+        workspaceViewController.onActivateWorkspace = { [weak self] workspaceID in
+            guard let self else { return }
+            try? workspaceStore.activateWorkspace(workspaceID)
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+        workspaceViewController.onActivateTab = { [weak self] tabID in
+            guard let self else { return }
+            try? workspaceStore.activateTab(tabID, in: workspaceStore.activeWorkspaceID)
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+        workspaceViewController.onCloseTab = { [weak self] tabID in
+            self?.requestCloseTab(tabID)
+        }
+        workspaceViewController.onMoveToNewWorkspace = { [weak self] tabIDs in
+            self?.presentMoveToNewWorkspace(tabIDs)
+        }
+        workspaceViewController.onMoveToWorkspace = { [weak self] tabIDs, workspaceID in
+            self?.moveTabs(tabIDs, to: workspaceID)
+        }
+        workspaceViewController.onReorderTabs = { [weak self] tabIDs in
+            self?.reorderTabs(tabIDs)
+        }
+    }
+
+    private func refreshWorkspacePresentation(focusTerminal: Bool) {
+        workspaceViewController.apply(workspaceStore)
+        let activePaneID = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?
+            .activeTabID
+            .flatMap { workspaceStore.tab(id: $0)?.activePaneID }
+        let surface = activePaneID.flatMap { paneID in
+            defaultSurface?.paneID == paneID ? defaultSurface : nil
+        }
+        workspaceViewController.displayTerminal(surface)
+        if focusTerminal, let surface {
+            windowController.window?.makeFirstResponder(surface)
+        }
+    }
+
+    private func presentMoveToNewWorkspace(_ tabIDs: [TabID]) {
+        guard !tabIDs.isEmpty, let window = windowController.window else { return }
+        let sourceWorkspaceID = workspaceStore.activeWorkspaceID
+        let controller = CreateWorkspaceController(
+            existingNames: { [weak self] in
+                self?.workspaceStore.workspaces.map(\.name) ?? []
+            },
+            submit: { [weak self] name in
+                guard let self else {
+                    return .failure(.workspaceNotFound(sourceWorkspaceID))
+                }
+                var updatedStore = workspaceStore
+                do {
+                    let destinationID = try updatedStore.createWorkspace(named: name)
+                    try updatedStore.moveTabs(
+                        tabIDs,
+                        from: sourceWorkspaceID,
+                        to: destinationID
+                    )
+                    workspaceStore = updatedStore
+                    workspaceViewController.tabBarViewController.clearSelectionAfterMove()
+                    refreshWorkspacePresentation(focusTerminal: true)
+                    return .success(())
+                } catch let error as WorkspaceError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.workspaceNotFound(sourceWorkspaceID))
+                }
+            }
+        )
+        controller.onDismiss = { [weak self] in
+            self?.createWorkspaceController = nil
+        }
+        createWorkspaceController = controller
+        controller.presentSheet(for: window)
+    }
+
+    private func moveTabs(_ tabIDs: [TabID], to destinationWorkspaceID: WorkspaceID) {
+        let sourceWorkspaceID = workspaceStore.activeWorkspaceID
+        do {
+            try workspaceStore.moveTabs(
+                tabIDs,
+                from: sourceWorkspaceID,
+                to: destinationWorkspaceID
+            )
+            workspaceViewController.tabBarViewController.clearSelectionAfterMove()
+            refreshWorkspacePresentation(focusTerminal: true)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    private func reorderTabs(_ orderedTabIDs: [TabID]) {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let workspaceIndex = workspaceStore.workspaces.firstIndex(where: {
+                $0.id == workspaceID
+            })
+        else { return }
+        let workspace = workspaceStore.workspaces[workspaceIndex]
+        guard Set(orderedTabIDs) == Set(workspace.tabs.map(\.id)) else { return }
+        let tabsByID = Dictionary(uniqueKeysWithValues: workspace.tabs.map { ($0.id, $0) })
+
+        var workspaces = workspaceStore.workspaces
+        workspaces[workspaceIndex].tabs = orderedTabIDs.compactMap { tabsByID[$0] }
+        guard
+            let reorderedStore = try? WorkspaceStore(
+                workspaces: workspaces,
+                activeWorkspaceID: workspaceStore.activeWorkspaceID
+            )
+        else { return }
+        workspaceStore = reorderedStore
+        refreshWorkspacePresentation(focusTerminal: false)
+    }
+
+    private func requestCloseTab(_ tabID: TabID) {
+        guard let tab = workspaceStore.tab(id: tabID) else { return }
+        let paneIDs = tab.root.leaves
+        if let confirmationPaneID = paneIDs.first(where: {
+            ghosttyBridge.surfaceNeedsConfirmQuit(id: $0)
+        }) {
+            confirmationQueue.enqueueClose(paneID: confirmationPaneID) { [weak self] response in
+                guard response == .allow else { return }
+                self?.closeTab(tabID, paneIDs: paneIDs)
+            }
+            return
+        }
+        closeTab(tabID, paneIDs: paneIDs)
+    }
+
+    private func closeTab(_ tabID: TabID, paneIDs: [PaneID]) {
+        for paneID in paneIDs {
+            confirmationQueue.invalidatePane(paneID)
+        }
+        for paneID in paneIDs {
+            ghosttyBridge.closeSurface(id: paneID)
+            if defaultSurface?.paneID == paneID {
+                defaultSurface = nil
+            }
+        }
+        if let owner = workspaceStore.workspaces.first(where: {
+            $0.tabs.contains(where: { $0.id == tabID })
+        }) {
+            _ = try? workspaceStore.closeTab(tabID, in: owner.id)
+        }
+        refreshWorkspacePresentation(focusTerminal: true)
+        if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
+            windowController.close()
+        }
     }
 
     #if DEBUG
@@ -148,6 +319,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
             confirmationQueue.activePresentation
+        }
+
+        var workspaceStoreForTesting: WorkspaceStore {
+            workspaceStore
         }
     #endif
 
@@ -335,6 +510,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         if defaultSurface?.paneID == id {
             defaultSurface = nil
         }
+        if let workspace = workspaceStore.workspaces.first(where: { workspace in
+            workspace.tabs.contains(where: { $0.root.contains(id) })
+        }), let tabID = workspace.tabs.first(where: { $0.root.contains(id) })?.id {
+            _ = try? workspaceStore.closeTab(tabID, in: workspace.id)
+        }
+        refreshWorkspacePresentation(focusTerminal: false)
 
         guard ghosttyBridge.activeSurfaceCount == 0,
             presentationMode == .normal
