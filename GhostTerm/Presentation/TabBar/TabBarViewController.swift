@@ -55,6 +55,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
+    var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID]) -> Void)?
@@ -131,6 +132,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         collectionView.reloadData()
     }
 
+    #if DEBUG
+        var displayedTabsForTesting: [TerminalTab] {
+            tabs
+        }
+    #endif
+
     func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
 
     func collectionView(
@@ -167,7 +174,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
                 self?.onCloseTab?(tab.id)
             },
             menuProvider: { [weak self] in
-                self?.menu(for: tab.id) ?? NSMenu()
+                self?.contextMenu(for: tab.id) ?? NSMenu()
             }
         )
         return item
@@ -233,7 +240,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         }
     }
 
-    private func menu(for tabID: TabID) -> NSMenu {
+    func contextMenu(for tabID: TabID) -> NSMenu {
         if !selection.selectedTabIDs.contains(tabID) {
             selection.select(tabID, gesture: .click)
             collectionView.reloadData()
@@ -241,6 +248,17 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         }
 
         let menu = NSMenu()
+        let isBroadcasting = tabs.first(where: { $0.id == tabID })?.isBroadcasting ?? false
+        let broadcast = NSMenuItem(
+            title: "Broadcast Input",
+            action: #selector(toggleBroadcast),
+            keyEquivalent: ""
+        )
+        broadcast.state = isBroadcasting ? .on : .off
+        broadcast.target = self
+        menu.addItem(broadcast)
+        menu.addItem(.separator())
+
         let moveToNew = NSMenuItem(
             title: "Move to New Workspace…",
             action: #selector(moveToNewWorkspace),
@@ -301,6 +319,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private static func areEqual(_ lhs: NSEdgeInsets, _ rhs: NSEdgeInsets) -> Bool {
         lhs.top == rhs.top && lhs.left == rhs.left && lhs.bottom == rhs.bottom
             && lhs.right == rhs.right
+    }
+
+    @objc private func toggleBroadcast() {
+        onToggleBroadcast?()
     }
 
     @objc private func moveToNewWorkspace() {

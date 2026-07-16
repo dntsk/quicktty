@@ -250,6 +250,80 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func commandBReturnsToAppKitBeforeGhosttyBindingsWhileModifiedBRemainsBindable() throws {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+KeyB=ignore\n"
+                + "keybind = cmd+shift+KeyB=ignore\n"
+                + "keybind = cmd+opt+KeyB=ignore\n"
+                + "keybind = cmd+ctrl+KeyB=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandB = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "b",
+            charactersIgnoringModifiers: "b",
+            keyCode: 11
+        )
+        let commandCapsLockB = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: "B",
+            charactersIgnoringModifiers: "B",
+            keyCode: 11,
+            timestamp: 2
+        )
+        let commandShiftB = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "B",
+            charactersIgnoringModifiers: "b",
+            keyCode: 11,
+            timestamp: 3
+        )
+        let commandOptionB = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: "b",
+            charactersIgnoringModifiers: "b",
+            keyCode: 11,
+            timestamp: 4
+        )
+        let commandControlB = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .control],
+            characters: "b",
+            charactersIgnoringModifiers: "b",
+            keyCode: 11,
+            timestamp: 5
+        )
+
+        #expect(surface.isBroadcastShortcutForTesting(commandB))
+        #expect(surface.isBroadcastShortcutForTesting(commandCapsLockB))
+        #expect(!surface.isBroadcastShortcutForTesting(commandShiftB))
+        #expect(!surface.isBroadcastShortcutForTesting(commandOptionB))
+        #expect(!surface.isBroadcastShortcutForTesting(commandControlB))
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandB))
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockB))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(surface.performKeyEquivalent(with: commandShiftB))
+        #expect(surface.performKeyEquivalent(with: commandOptionB))
+        #expect(surface.performKeyEquivalent(with: commandControlB))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 3)
+    }
+
+    @Test
     func splitPaneShortcutsReturnToAppKitBeforeBindingsWhileModifiedAndPlainDRemainAvailable()
         throws
     {

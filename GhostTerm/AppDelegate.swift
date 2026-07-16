@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installPresentationMenuItem()
             installTabSelectionMenuItems()
             installPaneNavigationMenuItems()
+            installToggleBroadcastMenuItem()
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
@@ -142,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let focusRightPaneMenuItemAction = #selector(AppDelegate.focusRightPane)
     static let focusUpPaneMenuItemAction = #selector(AppDelegate.focusUpPane)
     static let focusDownPaneMenuItemAction = #selector(AppDelegate.focusDownPane)
+    static let toggleBroadcastMenuItemAction = #selector(AppDelegate.toggleBroadcast)
 
     static func makeNewTabMenuItem(
         target: AnyObject,
@@ -386,6 +388,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return canonicalItem
     }
 
+    static func makeToggleBroadcastMenuItem(
+        target: AnyObject,
+        action: Selector = toggleBroadcastMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "Toggle Broadcast Input",
+            action: action,
+            keyEquivalent: "b"
+        )
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installToggleBroadcastMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = toggleBroadcastMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu = viewMenu(in: mainMenu)
+        let canonicalItems = viewMenu.items.filter(isCanonicalToggleBroadcastMenuItem)
+        guard let canonicalItem = canonicalItems.first else {
+            viewMenu.addItem(makeToggleBroadcastMenuItem(target: target, action: action))
+            return mainMenu
+        }
+
+        canonicalItem.title = "Toggle Broadcast Input"
+        canonicalItem.action = action
+        canonicalItem.keyEquivalent = "b"
+        canonicalItem.keyEquivalentModifierMask = [.command]
+        canonicalItem.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            viewMenu.removeItem(duplicate)
+        }
+        return mainMenu
+    }
+
+    static func validateToggleBroadcastMenuItem(
+        _ item: NSMenuItem,
+        canToggleBroadcast: Bool,
+        isBroadcastingActiveTab: Bool
+    ) -> Bool {
+        item.state = isBroadcastingActiveTab ? .on : .off
+        return canToggleBroadcast
+    }
+
+    private static func isCanonicalToggleBroadcastMenuItem(_ item: NSMenuItem) -> Bool {
+        item.title == "Toggle Broadcast Input"
+            || (item.keyEquivalent.lowercased() == "b"
+                && normalizedShortcutModifiers(for: item) == [.command])
+    }
+
     private static func fileMenu(in mainMenu: NSMenu) -> NSMenu {
         if let fileItem = mainMenu.item(withTitle: "File") {
             if let existingFileMenu = fileItem.submenu {
@@ -477,6 +533,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return mainMenu
     }
 
+    @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == Self.toggleBroadcastMenuItemAction else { return true }
+        return Self.validateToggleBroadcastMenuItem(
+            menuItem,
+            canToggleBroadcast: windowCoordinator?.canToggleBroadcast ?? false,
+            isBroadcastingActiveTab: windowCoordinator?.isBroadcastingActiveTab ?? false
+        )
+    }
+
     @objc private func createNewTab() {
         windowCoordinator?.createNewTab()
     }
@@ -524,6 +589,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func focusDownPane() {
         windowCoordinator?.focusPane(direction: .down)
+    }
+
+    @objc private func toggleBroadcast() {
+        windowCoordinator?.toggleBroadcast()
     }
 
     @objc private func togglePresentationMode() {
@@ -605,6 +674,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installPaneNavigationMenuItems() {
         let mainMenu = Self.installPaneNavigationMenuItems(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installToggleBroadcastMenuItem() {
+        let mainMenu = Self.installToggleBroadcastMenuItem(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }

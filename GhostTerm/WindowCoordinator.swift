@@ -42,6 +42,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var presentationMode: PresentationMode { presentationController.mode }
 
+    var isBroadcastingActiveTab: Bool {
+        activeTab?.isBroadcasting ?? false
+    }
+
+    var canToggleBroadcast: Bool {
+        activeTab != nil
+    }
+
     init(
         ghosttyBridge: GhosttyBridge,
         presentationMode: PresentationMode = .normal,
@@ -289,6 +297,31 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
+    func toggleBroadcast() {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let workspace = workspaceStore.workspace(id: workspaceID),
+            let tabID = workspace.activeTabID,
+            let tab = workspaceStore.tab(id: tabID)
+        else {
+            return
+        }
+
+        do {
+            try workspaceStore.setBroadcasting(
+                !tab.isBroadcasting,
+                for: tabID,
+                in: workspaceID
+            )
+            workspaceViewController.apply(workspaceStore)
+            if let surface = activePaneID.flatMap({ surfaces[$0] }), let paneID = activePaneID {
+                focus(surface, paneID: paneID)
+            }
+        } catch {
+            onError(error)
+        }
+    }
+
     func focusPreviousPane() {
         focusActivePane(using: .previous)
     }
@@ -389,6 +422,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onCloseTab = { [weak self] tabID in
             self?.requestCloseTab(tabID)
         }
+        workspaceViewController.onToggleBroadcast = { [weak self] in
+            self?.toggleBroadcast()
+        }
         workspaceViewController.onMoveToNewWorkspace = { [weak self] tabIDs in
             self?.presentMoveToNewWorkspace(tabIDs)
         }
@@ -454,17 +490,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
-    private var activePaneID: PaneID? {
+    private var activeTab: TerminalTab? {
         workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?
             .activeTabID
-            .flatMap { workspaceStore.tab(id: $0)?.activePaneID }
+            .flatMap { workspaceStore.tab(id: $0) }
+    }
+
+    private var activePaneID: PaneID? {
+        activeTab?.activePaneID
     }
 
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
         workspaceViewController.apply(workspaceStore)
-        let activeTab = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?
-            .activeTabID
-            .flatMap { workspaceStore.tab(id: $0) }
         let activeTabSurfaces = Dictionary(
             uniqueKeysWithValues: (activeTab?.root.leaves ?? []).compactMap { paneID in
                 surfaces[paneID].map { (paneID, $0) }
