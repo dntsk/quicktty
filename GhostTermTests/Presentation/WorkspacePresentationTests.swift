@@ -78,4 +78,77 @@ struct WorkspacePresentationTests {
 
         #expect(newTabCount == 1)
     }
+
+    @Test(arguments: [1, 2, 5, 24])
+    func equalTabWidthsFillAvailableWidthWithoutOverflow(tabCount: Int) {
+        let availableWidth: CGFloat = 500
+        let metrics = TabBarEqualWidthLayout.metrics(
+            availableWidth: availableWidth,
+            tabCount: tabCount
+        )
+
+        #expect(metrics.itemWidth >= 0)
+        #expect(metrics.occupiedWidth <= availableWidth)
+        #expect(
+            metrics.itemWidth * CGFloat(tabCount) + metrics.spacing * CGFloat(tabCount - 1)
+                + metrics.horizontalInset * 2 <= availableWidth)
+    }
+
+    @Test
+    func equalTabWidthsShrinkAsTabCountIncreasesWithoutMinimumWidth() {
+        let oneTab = TabBarEqualWidthLayout.metrics(availableWidth: 500, tabCount: 1)
+        let fiveTabs = TabBarEqualWidthLayout.metrics(availableWidth: 500, tabCount: 5)
+        let manyTabs = TabBarEqualWidthLayout.metrics(availableWidth: 500, tabCount: 200)
+
+        #expect(oneTab.itemWidth > fiveTabs.itemWidth)
+        #expect(fiveTabs.itemWidth > manyTabs.itemWidth)
+        #expect(manyTabs.itemWidth < 10)
+    }
+
+    @Test
+    func tabPresentationKeepsShortcutRightAndHoverCloseLeft() {
+        let idle = TabItemView.displayState(
+            tabIndex: 0,
+            isActive: false,
+            isSelected: false,
+            isHovered: false,
+            isBroadcasting: false
+        )
+        let hoveredBroadcasting = TabItemView.displayState(
+            tabIndex: 0,
+            isActive: true,
+            isSelected: false,
+            isHovered: true,
+            isBroadcasting: true
+        )
+        let afterNinthTab = TabItemView.displayState(
+            tabIndex: 9,
+            isActive: false,
+            isSelected: false,
+            isHovered: false,
+            isBroadcasting: false
+        )
+
+        #expect(idle.backgroundStyle == .transparent)
+        #expect(idle.shortcut == "⌘1")
+        #expect(!idle.showsCloseButton)
+        #expect(hoveredBroadcasting.backgroundStyle == .activeCapsule)
+        #expect(hoveredBroadcasting.showsCloseButton)
+        #expect(!hoveredBroadcasting.showsBroadcastIndicator)
+        #expect(hoveredBroadcasting.shortcut == "⌘1")
+        #expect(afterNinthTab.shortcut == nil)
+    }
+
+    @Test
+    func tabBarHasNoScrollViewAndUsesCircularAccessibleNewTabButton() {
+        let workspaceController = WorkspaceViewController()
+        workspaceController.apply(WorkspaceStore())
+        let controller = workspaceController.tabBarViewController
+        let button = controller.newTabButtonForTesting
+
+        #expect(!controller.usesScrollViewForTesting)
+        #expect(button.accessibilityLabel() == "New Tab")
+        #expect(button.toolTip == "New Tab (Command+T)")
+        #expect(controller.newTabButtonIsCircularForTesting)
+    }
 }

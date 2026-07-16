@@ -408,6 +408,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
                 processAlive
             )
         }
+
+        func isPlainCommandDigitForTesting(_ event: NSEvent) -> Bool {
+            isPlainCommandDigit(event)
+        }
     #endif
 
     private func startObservingWindow(_ window: NSWindow?) {
@@ -822,7 +826,7 @@ extension GhosttySurfaceView {
             let surface
         else { return false }
 
-        guard !isPlainCommandT(event) else {
+        guard !isPlainCommandT(event), !isPlainCommandDigit(event) else {
             lastPerformKeyEvent = nil
             return false
         }
@@ -875,7 +879,16 @@ extension GhosttySurfaceView {
 
     private func isPlainCommandT(_ event: NSEvent) -> Bool {
         event.charactersIgnoringModifiers?.lowercased() == "t"
-            && event.modifierFlags.contains(.command)
+            && isPlainCommandShortcut(event)
+    }
+
+    private func isPlainCommandDigit(_ event: NSEvent) -> Bool {
+        guard let character = event.charactersIgnoringModifiers?.first else { return false }
+        return "123456789".contains(character) && isPlainCommandShortcut(event)
+    }
+
+    private func isPlainCommandShortcut(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.command)
             && event.modifierFlags.isDisjoint(with: [.shift, .control, .option])
     }
 

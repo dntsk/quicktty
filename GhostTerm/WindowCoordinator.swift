@@ -192,6 +192,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
     }
 
+    func activateTab(at index: Int) {
+        guard index > 0,
+            let workspace = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID),
+            workspace.tabs.indices.contains(index - 1)
+        else { return }
+
+        try? workspaceStore.activateTab(
+            workspace.tabs[index - 1].id,
+            in: workspaceStore.activeWorkspaceID
+        )
+        refreshWorkspacePresentation(focusTerminal: true)
+    }
+
     func createShellTab(in workspaceID: WorkspaceID? = nil) throws {
         let destinationWorkspaceID = workspaceID ?? workspaceStore.activeWorkspaceID
         let paneID = PaneID()

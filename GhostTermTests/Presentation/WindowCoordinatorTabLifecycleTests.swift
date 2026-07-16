@@ -51,6 +51,32 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func commandNumberActivationUsesOneBasedIndexAndIgnoresOutOfRangeIndices() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+
+        coordinator.activateTab(at: 1)
+        #expect(coordinator.activeSurfaceForTesting === firstSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstSurface)
+
+        coordinator.activateTab(at: 0)
+        #expect(coordinator.activeSurfaceForTesting === firstSurface)
+        coordinator.activateTab(at: 3)
+        #expect(coordinator.activeSurfaceForTesting === firstSurface)
+
+        coordinator.activateTab(at: 2)
+        #expect(coordinator.activeSurfaceForTesting === secondSurface)
+    }
+
+    @Test
     func createNewTabActivatesAndFocusesNewSurfaceInQuakeMode() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

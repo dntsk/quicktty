@@ -1,5 +1,47 @@
 import AppKit
 
+struct TabBarEqualWidthLayout {
+    struct Metrics: Equatable {
+        let horizontalInset: CGFloat
+        let spacing: CGFloat
+        let itemWidth: CGFloat
+
+        var occupiedWidth: CGFloat {
+            itemWidth * CGFloat(tabCount) + spacing * CGFloat(max(0, tabCount - 1))
+                + horizontalInset * 2
+        }
+
+        fileprivate let tabCount: Int
+    }
+
+    static let preferredHorizontalInset: CGFloat = 3
+    static let preferredSpacing: CGFloat = 2
+
+    static func metrics(availableWidth: CGFloat, tabCount: Int) -> Metrics {
+        guard tabCount > 0 else {
+            return Metrics(horizontalInset: 0, spacing: 0, itemWidth: 0, tabCount: 0)
+        }
+
+        let width = max(0, availableWidth)
+        let horizontalInset = min(preferredHorizontalInset, width / 2)
+        let contentWidth = max(0, width - horizontalInset * 2)
+        let spacing = min(
+            preferredSpacing,
+            tabCount > 1 ? contentWidth / CGFloat(tabCount - 1) : 0
+        )
+        let itemWidth = max(
+            0,
+            (contentWidth - spacing * CGFloat(tabCount - 1)) / CGFloat(tabCount)
+        )
+        return Metrics(
+            horizontalInset: horizontalInset,
+            spacing: spacing,
+            itemWidth: itemWidth,
+            tabCount: tabCount
+        )
+    }
+}
+
 @MainActor
 final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     NSCollectionViewDelegateFlowLayout
@@ -17,7 +59,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     var onReorderTabs: (([TabID]) -> Void)?
 
     private let collectionView = NSCollectionView()
-    private let newTabButton = NSButton()
+    private let collectionViewLayout = NSCollectionViewFlowLayout()
+    private let newTabButton: NSButton = CircularOutlineButton()
     private var tabs: [TerminalTab] = []
     private var destinations: [WorkspaceDestination] = []
     private var selection = TabSelectionModel()
@@ -26,13 +69,17 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let rootView = NSView()
         rootView.identifier = NSUserInterfaceItemIdentifier("tab-bar")
 
-        let layout = NSCollectionViewFlowLayout()
-        layout.scrollDirection = .horizontal
-        layout.minimumInteritemSpacing = 2
-        layout.minimumLineSpacing = 2
-        layout.sectionInset = NSEdgeInsets(top: 0, left: 3, bottom: 0, right: 3)
+        collectionViewLayout.scrollDirection = .horizontal
+        collectionViewLayout.minimumInteritemSpacing = TabBarEqualWidthLayout.preferredSpacing
+        collectionViewLayout.minimumLineSpacing = TabBarEqualWidthLayout.preferredSpacing
+        collectionViewLayout.sectionInset = NSEdgeInsets(
+            top: 0,
+            left: TabBarEqualWidthLayout.preferredHorizontalInset,
+            bottom: 0,
+            right: TabBarEqualWidthLayout.preferredHorizontalInset
+        )
 
-        collectionView.collectionViewLayout = layout
+        collectionView.collectionViewLayout = collectionViewLayout
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.isSelectable = false
@@ -45,16 +92,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
 
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.hasVerticalScroller = false
-        scrollView.documentView = collectionView
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-
-        newTabButton.title = "+"
-        newTabButton.bezelStyle = .texturedRounded
-        newTabButton.controlSize = .small
+        newTabButton.image = NSImage(
+            systemSymbolName: "plus",
+            accessibilityDescription: "New Tab"
+        )
+        newTabButton.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+        newTabButton.contentTintColor = .secondaryLabelColor
         newTabButton.target = self
         newTabButton.action = #selector(createNewTab)
         newTabButton.identifier = NSUserInterfaceItemIdentifier("new-tab-button")
@@ -62,18 +105,25 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         newTabButton.toolTip = "New Tab (Command+T)"
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
 
-        rootView.addSubview(scrollView)
+        rootView.addSubview(collectionView)
         rootView.addSubview(newTabButton)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: rootView.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: newTabButton.leadingAnchor, constant: -4),
+            collectionView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            collectionView.trailingAnchor.constraint(
+                equalTo: newTabButton.leadingAnchor, constant: -4),
             newTabButton.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -4),
             newTabButton.centerYAnchor.constraint(equalTo: rootView.centerYAnchor),
-            newTabButton.widthAnchor.constraint(equalToConstant: 26),
+            newTabButton.widthAnchor.constraint(equalToConstant: 24),
+            newTabButton.heightAnchor.constraint(equalToConstant: 24),
         ])
         view = rootView
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        updateLayoutMetrics()
     }
 
     func apply(
@@ -84,6 +134,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         self.tabs = tabs
         self.destinations = destinations
         selection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
+        updateLayoutMetrics()
         collectionView.reloadData()
     }
 
@@ -116,6 +167,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let tab = tabs[indexPath.item]
         item.configure(
             title: tab.title,
+            tabIndex: indexPath.item,
             isActive: selection.activeTabID == tab.id,
             isSelected: selection.selectedTabIDs.contains(tab.id),
             isBroadcasting: tab.isBroadcasting,
@@ -137,10 +189,11 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         layout collectionViewLayout: NSCollectionViewLayout,
         sizeForItemAt indexPath: IndexPath
     ) -> NSSize {
-        let titleWidth = (tabs[indexPath.item].title as NSString).size(
-            withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
-        ).width
-        return NSSize(width: min(max(titleWidth + 70, 120), 220), height: 34)
+        let metrics = TabBarEqualWidthLayout.metrics(
+            availableWidth: collectionView.bounds.width,
+            tabCount: tabs.count
+        )
+        return NSSize(width: metrics.itemWidth, height: 34)
     }
 
     func collectionView(
@@ -238,9 +291,44 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         return menu
     }
 
+    private func updateLayoutMetrics() {
+        let metrics = TabBarEqualWidthLayout.metrics(
+            availableWidth: collectionView.bounds.width,
+            tabCount: tabs.count
+        )
+        let sectionInset = NSEdgeInsets(
+            top: 0,
+            left: metrics.horizontalInset,
+            bottom: 0,
+            right: metrics.horizontalInset
+        )
+        guard
+            collectionViewLayout.minimumInteritemSpacing != metrics.spacing
+                || collectionViewLayout.minimumLineSpacing != metrics.spacing
+                || !Self.areEqual(collectionViewLayout.sectionInset, sectionInset)
+        else { return }
+        collectionViewLayout.minimumInteritemSpacing = metrics.spacing
+        collectionViewLayout.minimumLineSpacing = metrics.spacing
+        collectionViewLayout.sectionInset = sectionInset
+        collectionViewLayout.invalidateLayout()
+    }
+
+    private static func areEqual(_ lhs: NSEdgeInsets, _ rhs: NSEdgeInsets) -> Bool {
+        lhs.top == rhs.top && lhs.left == rhs.left && lhs.bottom == rhs.bottom
+            && lhs.right == rhs.right
+    }
+
     #if DEBUG
         var newTabButtonForTesting: NSButton {
             newTabButton
+        }
+
+        var usesScrollViewForTesting: Bool {
+            collectionView.superview is NSScrollView
+        }
+
+        var newTabButtonIsCircularForTesting: Bool {
+            newTabButton is CircularOutlineButton
         }
     #endif
 
@@ -255,6 +343,49 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let selectedIDs = selection.selectedTabIDsInOrder
         guard !selectedIDs.isEmpty else { return }
         onMoveToWorkspace?(selectedIDs, WorkspaceID(rawValue: rawID as UUID))
+    }
+}
+
+@MainActor
+private final class CircularOutlineButton: NSButton {
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let path = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+        if isHovered {
+            NSColor.labelColor.withAlphaComponent(0.08).setFill()
+            path.fill()
+        }
+        NSColor.separatorColor.withAlphaComponent(0.8).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        )
+        self.trackingArea = trackingArea
+        addTrackingArea(trackingArea)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
     }
 }
 

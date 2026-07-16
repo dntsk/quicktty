@@ -13,6 +13,15 @@ private final class NewTabMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class TabSelectionMenuActionTarget: NSObject {
+    private(set) var selectedIndices: [Int] = []
+
+    @objc func activateTab(_ sender: NSMenuItem) {
+        selectedIndices.append((sender.representedObject as? NSNumber)?.intValue ?? -1)
+    }
+}
+
+@MainActor
 struct AppDelegateLifecycleTests {
     @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
@@ -238,5 +247,43 @@ struct AppDelegateLifecycleTests {
         )
 
         #expect(fileMenu.items.count == 2)
+    }
+
+    @Test
+    func tabSelectionMenuItemsUseExactCommandDigitsAndInstallIdempotently() throws {
+        let target = TabSelectionMenuActionTarget()
+        let mainMenu = NSMenu()
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        fileItem.submenu = NSMenu(title: "File")
+        mainMenu.addItem(fileItem)
+
+        AppDelegate.installTabSelectionMenuItems(
+            in: mainMenu,
+            target: target,
+            action: #selector(TabSelectionMenuActionTarget.activateTab(_:))
+        )
+        AppDelegate.installTabSelectionMenuItems(
+            in: mainMenu,
+            target: target,
+            action: #selector(TabSelectionMenuActionTarget.activateTab(_:))
+        )
+
+        let viewMenu = try #require(mainMenu.item(withTitle: "View")?.submenu)
+        let items = viewMenu.items.filter { $0.title.hasPrefix("Select Tab ") }
+        #expect(items.count == 9)
+        for (offset, item) in items.enumerated() {
+            let index = offset + 1
+            #expect(item.title == "Select Tab \(index)")
+            #expect(item.keyEquivalent == "\(index)")
+            #expect(item.keyEquivalentModifierMask == [.command])
+            #expect((item.representedObject as? NSNumber)?.intValue == index)
+            #expect(item.target === target)
+            #expect(item.action == #selector(TabSelectionMenuActionTarget.activateTab(_:)))
+        }
+
+        let seventhItem = try #require(items.last)
+        #expect(NSApp.sendAction(seventhItem.action!, to: seventhItem.target, from: seventhItem))
+        #expect(target.selectedIndices == [9])
+        #expect(fileItem.submenu?.item(withTitle: "New Tab") == nil)
     }
 }

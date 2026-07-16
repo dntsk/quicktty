@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try windowCoordinator.start()
             installNewTabMenuItem()
             installPresentationMenuItem()
+            installTabSelectionMenuItems()
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
@@ -130,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
+    static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
 
     static func makeNewTabMenuItem(
         target: AnyObject,
@@ -189,8 +191,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     == [.command])
     }
 
+    static func makeTabSelectionMenuItem(
+        index: Int,
+        target: AnyObject,
+        action: Selector = tabSelectionMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "Select Tab \(index)",
+            action: action,
+            keyEquivalent: "\(index)"
+        )
+        item.keyEquivalentModifierMask = [.command]
+        item.representedObject = NSNumber(value: index)
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installTabSelectionMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = tabSelectionMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu: NSMenu
+        if let viewItem = mainMenu.item(withTitle: "View") {
+            if let existingViewMenu = viewItem.submenu {
+                viewMenu = existingViewMenu
+            } else {
+                let newViewMenu = NSMenu(title: "View")
+                viewItem.submenu = newViewMenu
+                viewMenu = newViewMenu
+            }
+        } else {
+            let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+            let newViewMenu = NSMenu(title: "View")
+            viewItem.submenu = newViewMenu
+            mainMenu.addItem(viewItem)
+            viewMenu = newViewMenu
+        }
+
+        for index in 1...9 {
+            let canonicalItems = viewMenu.items.filter {
+                $0.title == "Select Tab \(index)"
+                    || ($0.keyEquivalent == "\(index)"
+                        && $0.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+                            == [.command])
+            }
+            guard let canonicalItem = canonicalItems.first else {
+                viewMenu.addItem(
+                    makeTabSelectionMenuItem(index: index, target: target, action: action))
+                continue
+            }
+
+            canonicalItem.title = "Select Tab \(index)"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = "\(index)"
+            canonicalItem.keyEquivalentModifierMask = [.command]
+            canonicalItem.representedObject = NSNumber(value: index)
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                viewMenu.removeItem(duplicate)
+            }
+        }
+        return mainMenu
+    }
+
     @objc private func createNewTab() {
         windowCoordinator?.createNewTab()
+    }
+
+    @objc private func activateTab(_ sender: NSMenuItem) {
+        guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
+        windowCoordinator?.activateTab(at: index)
     }
 
     @objc private func togglePresentationMode() {
@@ -281,6 +354,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.keyEquivalentModifierMask = [.command, .option]
         item.target = self
         menu.addItem(item)
+    }
+
+    private func installTabSelectionMenuItems() {
+        let mainMenu = Self.installTabSelectionMenuItems(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
     }
 
     private func logConfigurationError(_ error: Error) {

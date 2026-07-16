@@ -250,6 +250,56 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func commandDigitsReturnToAppKitBeforeGhosttyBindingsWhileModifiedDigitsRemainBindable() throws
+    {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+Key1=ignore\nkeybind = cmd+shift+Key1=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18
+        )
+        let commandCapsLockOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 2
+        )
+        let commandShiftOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "!",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 3
+        )
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(surface.isPlainCommandDigitForTesting(commandOne))
+        #expect(surface.isPlainCommandDigitForTesting(commandCapsLockOne))
+        #expect(!surface.performKeyEquivalent(with: commandOne))
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockOne))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(!surface.isPlainCommandDigitForTesting(commandShiftOne))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+    }
+
+    @Test
     func keyEquivalentRedispatchesMatchingTimestampWithoutStealingOtherShortcuts() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
