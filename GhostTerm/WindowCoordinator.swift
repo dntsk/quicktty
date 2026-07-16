@@ -2,14 +2,22 @@ import AppKit
 
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
+    typealias ModePersistence = @MainActor (PresentationMode) -> Void
+    typealias ErrorHandler = @MainActor (Error) -> Void
+
     private let ghosttyBridge: GhosttyBridge
-    private let windowController: WindowController
+    private let normalWindowController: NormalWindowController
+    private let quakeWindowController: QuakeWindowController
+    private let presentationController: PresentationController
+    private let hotKeyController: any HotKeyControlling
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
+    private let onError: ErrorHandler
     private let workspaceViewController = WorkspaceViewController()
     private var workspaceStore = WorkspaceStore()
     private var createWorkspaceController: CreateWorkspaceController?
     private var defaultSurface: GhosttySurfaceView?
+    private var activeHotKey = HotKeyDescriptor(command: true, key: .f12)
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
         [weak self] presentation, completion in
         guard let self else {
@@ -21,33 +29,56 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         return presentConfirmation(presentation, completion: completion)
     }
-    private(set) var presentationMode: PresentationMode
+
+    var presentationMode: PresentationMode { presentationController.mode }
 
     init(
         ghosttyBridge: GhosttyBridge,
         presentationMode: PresentationMode = .normal,
         normalWindowFrame: NormalWindowFrame? = nil,
+        quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
+        persistPresentationMode: @escaping ModePersistence = { _ in },
+        onError: @escaping ErrorHandler = { _ in },
+        hotKeyController: (any HotKeyControlling)? = nil,
         visibleScreenFrames: @escaping @MainActor () -> [NSRect] = {
             NSScreen.screens.map(\.visibleFrame)
         }
     ) {
+        let normalWindowController = NormalWindowController()
+        let quakeWindowController = QuakeWindowController(configuration: quakeConfiguration)
+        let hotKeyRelay = HotKeyActionRelay()
+        let resolvedHotKeyController =
+            hotKeyController
+            ?? GlobalHotKeyController {
+                hotKeyRelay.perform()
+            }
+        let restoredNormalFrame = normalWindowFrame.flatMap {
+            Self.restoredWindowFrame(from: $0, visibleScreenFrames: visibleScreenFrames())
+        }
+
         self.ghosttyBridge = ghosttyBridge
-        self.presentationMode = presentationMode
+        self.normalWindowController = normalWindowController
+        self.quakeWindowController = quakeWindowController
+        self.hotKeyController = resolvedHotKeyController
         self.surfaceConfiguration = surfaceConfiguration
         self.confirmationPresenter = confirmationPresenter
-        windowController = WindowController()
+        self.onError = onError
+        presentationController = try! PresentationController(
+            contentViewController: workspaceViewController,
+            normalWindowController: normalWindowController,
+            quakeWindowController: quakeWindowController,
+            initialMode: presentationMode,
+            savedNormalFrame: restoredNormalFrame,
+            persistSuccessfulMode: persistPresentationMode,
+            onError: onError
+        )
         super.init()
 
-        windowController.window?.delegate = self
-        if let normalWindowFrame,
-            let restoredFrame = Self.restoredWindowFrame(
-                from: normalWindowFrame,
-                visibleScreenFrames: visibleScreenFrames()
-            )
-        {
-            windowController.window?.setFrame(restoredFrame, display: false)
+        normalWindowController.window?.delegate = self
+        hotKeyRelay.action = { [weak self] in
+            self?.presentationController.toggleQuakeVisibility()
         }
         ghosttyBridge.clipboardConfirmationHandler = { [weak self] event in
             switch event {
@@ -65,14 +96,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     isolated deinit {
+        try? hotKeyController.unregister()
         ghosttyBridge.clipboardConfirmationHandler = nil
-        if windowController.window?.delegate === self {
-            windowController.window?.delegate = nil
+        if normalWindowController.window?.delegate === self {
+            normalWindowController.window?.delegate = nil
         }
     }
 
     var normalWindowFrame: NormalWindowFrame? {
-        windowController.window.flatMap { Self.normalWindowFrame(from: $0.frame) }
+        normalWindowController.window.flatMap { Self.normalWindowFrame(from: $0.frame) }
+    }
+
+    private var activeWindow: NSWindow? {
+        switch presentationMode {
+        case .normal:
+            normalWindowController.window
+        case .quake:
+            quakeWindowController.appKitWindow
+        }
     }
 
     static func windowFrame(from frame: NormalWindowFrame) -> NSRect {
@@ -153,9 +194,48 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         defaultSurface = surface
         workspaceViewController.apply(workspaceStore)
         workspaceViewController.displayTerminal(surface)
-        windowController.embed(workspaceViewController)
-        windowController.showWindow(nil)
-        windowController.window?.makeFirstResponder(surface)
+        activeWindow?.makeFirstResponder(surface)
+    }
+
+    func applyConfiguration(_ config: GhostTermConfig) {
+        activeHotKey = config.globalToggle
+        let geometry =
+            QuakeWindowGeometry(
+                heightFraction: config.quakeHeight,
+                padding: config.quakePadding
+            ) ?? QuakeWindowConfiguration().geometry
+        quakeWindowController.updateConfiguration(
+            QuakeWindowConfiguration(
+                geometry: geometry,
+                animationDuration: config.quakeAnimationDuration,
+                hideOnFocusLoss: config.hideOnFocusLoss
+            )
+        )
+
+        do {
+            try presentationController.transition(to: config.presentationMode, persist: false)
+            if presentationMode == .quake {
+                try hotKeyController.register(config.globalToggle)
+            } else {
+                try hotKeyController.unregister()
+            }
+        } catch {
+            onError(error)
+        }
+    }
+
+    func togglePresentationMode() {
+        let target: PresentationMode = presentationMode == .normal ? .quake : .normal
+        do {
+            try presentationController.transition(to: target)
+            if target == .quake {
+                try hotKeyController.register(activeHotKey)
+            } else {
+                try hotKeyController.unregister()
+            }
+        } catch {
+            onError(error)
+        }
     }
 
     private func configurePresentationCallbacks() {
@@ -193,12 +273,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         workspaceViewController.displayTerminal(surface)
         if focusTerminal, let surface {
-            windowController.window?.makeFirstResponder(surface)
+            activeWindow?.makeFirstResponder(surface)
         }
     }
 
     private func presentMoveToNewWorkspace(_ tabIDs: [TabID]) {
-        guard !tabIDs.isEmpty, let window = windowController.window else { return }
+        guard !tabIDs.isEmpty, let window = activeWindow else { return }
         let sourceWorkspaceID = workspaceStore.activeWorkspaceID
         let controller = CreateWorkspaceController(
             existingNames: { [weak self] in
@@ -304,13 +384,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         refreshWorkspacePresentation(focusTerminal: true)
         if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
-            windowController.close()
+            normalWindowController.close()
         }
     }
 
     #if DEBUG
         var windowForTesting: NSWindow? {
-            windowController.window
+            normalWindowController.window
         }
 
         var defaultSurfaceForTesting: GhosttySurfaceView? {
@@ -327,7 +407,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     #endif
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard sender === windowController.window else { return true }
+        guard sender === normalWindowController.window else { return true }
         let activeSurfaceIDs = ghosttyBridge.activeSurfaceIDs
         guard !activeSurfaceIDs.isEmpty else { return true }
         guard
@@ -345,7 +425,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             guard response == .allow,
                 let self,
                 let window,
-                windowController.window === window
+                normalWindowController.window === window
             else { return }
 
             closeActiveSurfaces()
@@ -356,7 +436,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-            window === windowController.window
+            window === normalWindowController.window
         else { return }
 
         confirmationQueue.invalidateAll()
@@ -397,7 +477,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ presentation: GhosttyConfirmationPresentation,
         completion: @escaping GhosttyConfirmationQueue.Completion
     ) -> GhosttyConfirmationQueue.Dismiss? {
-        guard let window = windowController.window else {
+        guard let window = activeWindow else {
             completion(.deny)
             return nil
         }
@@ -520,6 +600,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         guard ghosttyBridge.activeSurfaceCount == 0,
             presentationMode == .normal
         else { return }
-        windowController.close()
+        normalWindowController.close()
+    }
+}
+
+@MainActor
+private final class HotKeyActionRelay {
+    var action: (@MainActor () -> Void)?
+
+    func perform() {
+        action?()
     }
 }

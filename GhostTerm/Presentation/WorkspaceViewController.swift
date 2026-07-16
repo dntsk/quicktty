@@ -55,12 +55,13 @@ final class WorkspaceViewController: NSViewController {
             chrome.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             chrome.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             chrome.heightAnchor.constraint(equalToConstant: 38),
-            workspaceSelector.leadingAnchor.constraint(equalTo: chrome.leadingAnchor, constant: 10),
+            tabBarView.leadingAnchor.constraint(equalTo: chrome.leadingAnchor, constant: 6),
+            tabBarView.trailingAnchor.constraint(
+                equalTo: workspaceSelector.leadingAnchor, constant: -8),
+            workspaceSelector.trailingAnchor.constraint(
+                equalTo: chrome.trailingAnchor, constant: -10),
             workspaceSelector.centerYAnchor.constraint(equalTo: chrome.centerYAnchor),
             workspaceSelector.widthAnchor.constraint(equalToConstant: 148),
-            tabBarView.leadingAnchor.constraint(
-                equalTo: workspaceSelector.trailingAnchor, constant: 8),
-            tabBarView.trailingAnchor.constraint(equalTo: chrome.trailingAnchor, constant: -6),
             tabBarView.topAnchor.constraint(equalTo: chrome.topAnchor, constant: 2),
             tabBarView.bottomAnchor.constraint(equalTo: chrome.bottomAnchor, constant: -2),
             separator.topAnchor.constraint(equalTo: chrome.bottomAnchor),

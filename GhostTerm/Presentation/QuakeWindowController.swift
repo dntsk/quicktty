@@ -154,7 +154,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     typealias ErrorHandler = @MainActor (Error) -> Void
 
     private let quakeWindow: any QuakeWindowRepresenting
-    private let configuration: QuakeWindowConfiguration
+    private var configuration: QuakeWindowConfiguration
     private let visibleFrames: VisibleFramesProvider
     private let cursorLocation: CursorLocationProvider
     private let animator: any QuakeFrameAnimating
@@ -195,9 +195,14 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     convenience override init() {
+        self.init(configuration: QuakeWindowConfiguration())
+    }
+
+    convenience init(configuration: QuakeWindowConfiguration) {
         let window = QuakeWindow()
         self.init(
             window: window,
+            configuration: configuration,
             visibleFrames: { NSScreen.screens.map(\.visibleFrame) },
             cursorLocation: { NSEvent.mouseLocation },
             animator: AppKitQuakeFrameAnimator(),
@@ -211,6 +216,8 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             }
         )
     }
+
+    var appKitWindow: NSWindow? { quakeWindow as? NSWindow }
 
     isolated deinit {
         animationCancellation?.cancel()
@@ -242,6 +249,10 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     func hidePresentationWindow() {
         deactivateForModeTransition()
+    }
+
+    func updateConfiguration(_ configuration: QuakeWindowConfiguration) {
+        self.configuration = configuration
     }
 
     func requestVisibility(_ visibility: QuakeVisibility) throws {

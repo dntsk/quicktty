@@ -9,28 +9,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private var ghosttyBridge: GhosttyBridge?
     private var windowCoordinator: WindowCoordinator?
+    private var configController: ConfigController?
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !ApplicationEnvironment.isRunningHostedTests else { return }
 
-        do {
-            let stateStore = try StateStore.production()
-            let applicationState = try stateStore.load()
-            self.stateStore = stateStore
-            self.applicationState = applicationState
+        let applicationState = loadApplicationState()
+        self.applicationState = applicationState
 
+        do {
             let ghosttyBridge = try GhosttyBridge()
             ghosttyBridge.setApplicationFocused(NSApp.isActive)
             self.ghosttyBridge = ghosttyBridge
 
+            let config = startConfigController(using: ghosttyBridge)
             let windowCoordinator = WindowCoordinator(
                 ghosttyBridge: ghosttyBridge,
-                normalWindowFrame: applicationState.normalWindowFrame
+                presentationMode: config.presentationMode,
+                normalWindowFrame: applicationState.normalWindowFrame,
+                quakeConfiguration: quakeConfiguration(for: config),
+                persistPresentationMode: { [weak self] mode in
+                    do {
+                        try self?.configController?.updatePresentationMode(mode)
+                    } catch {
+                        self?.logConfigurationError(error)
+                    }
+                },
+                onError: { [weak self] error in
+                    self?.logConfigurationError(error)
+                }
             )
-            try windowCoordinator.start()
             self.windowCoordinator = windowCoordinator
+            windowCoordinator.applyConfiguration(config)
+            try windowCoordinator.start()
+            installPresentationMenuItem()
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
@@ -52,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        configController?.stop()
         if var applicationState, let stateStore {
             if let normalWindowFrame = windowCoordinator?.normalWindowFrame {
                 applicationState.normalWindowFrame = normalWindowFrame
@@ -78,5 +93,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         !ApplicationEnvironment.isRunningHostedTests
+    }
+
+    @objc private func togglePresentationMode() {
+        windowCoordinator?.togglePresentationMode()
+    }
+
+    private func loadApplicationState() -> ApplicationState {
+        do {
+            let stateStore = try StateStore.production()
+            let applicationState = try stateStore.load()
+            self.stateStore = stateStore
+            return applicationState
+        } catch {
+            logger.error("State load failed: \(error.localizedDescription, privacy: .public)")
+            return ApplicationState()
+        }
+    }
+
+    private func startConfigController(using ghosttyBridge: GhosttyBridge) -> GhostTermConfig {
+        do {
+            let configController = try ConfigController.production(
+                reloadGhostty: { try ghosttyBridge.reloadConfig(at: $0) },
+                onUpdate: { [weak self] config in
+                    self?.windowCoordinator?.applyConfiguration(config)
+                },
+                onError: { [weak self] error in
+                    self?.logConfigurationError(error)
+                }
+            )
+            self.configController = configController
+            do {
+                try configController.start()
+            } catch {
+                logConfigurationError(error)
+            }
+            return configController.activeConfig
+        } catch {
+            logConfigurationError(error)
+            return GhostTermConfig()
+        }
+    }
+
+    private func quakeConfiguration(for config: GhostTermConfig) -> QuakeWindowConfiguration {
+        let geometry =
+            QuakeWindowGeometry(
+                heightFraction: config.quakeHeight,
+                padding: config.quakePadding
+            ) ?? QuakeWindowConfiguration().geometry
+        return QuakeWindowConfiguration(
+            geometry: geometry,
+            animationDuration: config.quakeAnimationDuration,
+            hideOnFocusLoss: config.hideOnFocusLoss
+        )
+    }
+
+    private func installPresentationMenuItem() {
+        let menu =
+            NSApp.mainMenu?.item(withTitle: "View")?.submenu
+            ?? {
+                let item = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+                let menu = NSMenu(title: "View")
+                item.submenu = menu
+                NSApp.mainMenu?.addItem(item)
+                return menu
+            }()
+        let item = NSMenuItem(
+            title: "Toggle Presentation Mode",
+            action: #selector(togglePresentationMode),
+            keyEquivalent: "p"
+        )
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.target = self
+        menu.addItem(item)
+    }
+
+    private func logConfigurationError(_ error: Error) {
+        logger.error("Configuration update failed: \(error.localizedDescription, privacy: .public)")
     }
 }

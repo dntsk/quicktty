@@ -80,6 +80,28 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func configDrivenTransitionDoesNotPersistWhileReparentingContent() throws {
+        let content = NSViewController()
+        content.view = NSView()
+        let normal = FakePresentationContainer()
+        let quake = FakeQuakeContainer()
+        var persistedModes: [PresentationMode] = []
+        let controller = try PresentationController(
+            contentViewController: content,
+            normalWindowController: normal,
+            quakeWindowController: quake,
+            persistSuccessfulMode: { persistedModes.append($0) }
+        )
+
+        try controller.transition(to: .quake, persist: false)
+
+        #expect(controller.mode == .quake)
+        #expect(normal.installedContentViewController == nil)
+        #expect(quake.installedContentViewController === content)
+        #expect(persistedModes.isEmpty)
+    }
+
+    @Test
     func failedTransitionRollsBackOwnershipVisibilityAndPersistence() throws {
         let content = NSViewController()
         content.view = NSView()

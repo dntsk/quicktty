@@ -13,6 +13,7 @@ final class NormalWindowController: NSWindowController, PresentationWindowContai
             defer: false
         )
         window.title = title
+        window.center()
         window.isReleasedWhenClosed = false
         super.init(window: window)
     }

@@ -63,7 +63,7 @@ final class PresentationController {
         }
     }
 
-    func transition(to targetMode: PresentationMode) throws {
+    func transition(to targetMode: PresentationMode, persist: Bool = true) throws {
         guard targetMode != mode else { return }
         switch (mode, targetMode) {
         case (.normal, .quake):
@@ -74,7 +74,9 @@ final class PresentationController {
             return
         }
         mode = targetMode
-        persistSuccessfulMode(targetMode)
+        if persist {
+            persistSuccessfulMode(targetMode)
+        }
     }
 
     func requestQuakeVisibility(_ visibility: QuakeVisibility) throws {
