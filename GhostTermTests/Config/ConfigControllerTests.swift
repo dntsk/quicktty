@@ -121,6 +121,83 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func quakeHeightUpdateWritesAtomicallyAndAppliesDocument() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            "ghostterm-quake-height = 75%\r\nfont-size = 14\r\n".utf8
+        ).write(to: fixture.configURL)
+        var reloadCount = 0
+        var updates: [GhostTermConfig] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in reloadCount += 1 },
+            onUpdate: { updates.append($0) }
+        )
+        try controller.load()
+
+        try controller.updateQuakeHeight(0.73125)
+
+        #expect(
+            try Data(contentsOf: fixture.configURL)
+                == Data("ghostterm-quake-height = 73.125%\r\nfont-size = 14\r\n".utf8)
+        )
+        #expect(controller.activeConfig.quakeHeight == 0.73125)
+        #expect(updates.map(\.quakeHeight) == [0.75, 0.73125])
+        #expect(reloadCount == 2)
+        #expect(try Data(contentsOf: fixture.effectiveURL) == Data("font-size = 14\r\n".utf8))
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                at: fixture.directoryURL,
+                includingPropertiesForKeys: nil
+            ).contains { $0.lastPathComponent.contains(".tmp-") } == false
+        )
+    }
+
+    @Test
+    func quakeHeightUpdateRollsBackAppliedStateWhenBridgeReloadFails() throws {
+        enum Failure: Error { case rejected }
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        let failureSwitch = ReloadFailureSwitch()
+        var updates: [GhostTermConfig] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in
+                if failureSwitch.shouldFail { throw Failure.rejected }
+            },
+            onUpdate: { updates.append($0) }
+        )
+        try controller.load()
+        let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
+        failureSwitch.shouldFail = true
+
+        #expect(throws: ConfigControllerError.self) {
+            try controller.updateQuakeHeight(0.73125)
+        }
+
+        #expect(
+            try Data(contentsOf: fixture.configURL)
+                == Data(
+                    """
+                    font-family = Mono
+                    ghostterm-presentation-mode = normal
+                    ghostterm-global-toggle = f12
+                    ghostterm-quake-height = 73.125%
+                    ghostterm-quake-animation-duration = 0.18
+                    ghostterm-quake-padding = 0
+                    ghostterm-hide-on-focus-loss = true
+                    """.utf8
+                )
+        )
+        #expect(controller.activeConfig.quakeHeight == 0.75)
+        #expect(try Data(contentsOf: fixture.effectiveURL) == effectiveBefore)
+        #expect(updates.map(\.quakeHeight) == [0.75])
+    }
+
+    @Test
     func watcherUsesInjectedSourceURLAndCoalescesWithoutSleeping() throws {
         let fixture = try ConfigFixture()
         defer { fixture.remove() }

@@ -146,8 +146,22 @@ struct ConfigDocument: Equatable, Sendable {
         )
     }
 
+    static func formattedQuakeHeight(_ fraction: Double) -> String {
+        precondition(fraction.isFinite && fraction > 0 && fraction <= 1)
+
+        var percentage = String(fraction * 100)
+        if percentage.hasSuffix(".0") {
+            percentage.removeLast(2)
+        }
+        return "\(percentage)%"
+    }
+
     mutating func setPresentationMode(_ mode: PresentationMode) {
         setValue(mode.rawValue, for: .presentationMode)
+    }
+
+    mutating func setQuakeHeight(_ fraction: Double) {
+        setValue(Self.formattedQuakeHeight(fraction), for: .quakeHeight)
     }
 
     private var preferredTerminator: Data {

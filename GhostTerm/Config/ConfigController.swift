@@ -171,6 +171,23 @@ final class ConfigController {
         try apply(document)
     }
 
+    func updateQuakeHeight(_ fraction: Double) throws {
+        let source: Data
+        do {
+            source = try fileClient.read(configURL)
+        } catch {
+            throw ConfigControllerError.sourceReadFailed(String(describing: error))
+        }
+        var document = ConfigDocument(data: source)
+        document.setQuakeHeight(fraction)
+        do {
+            try fileClient.writeAtomic(document.data, configURL)
+        } catch {
+            throw ConfigControllerError.sourceWriteFailed(String(describing: error))
+        }
+        try apply(document)
+    }
+
     private func ensureStarterConfig() throws {
         guard !fileClient.fileExists(configURL) else { return }
         do {

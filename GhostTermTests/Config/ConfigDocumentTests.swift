@@ -69,6 +69,24 @@ struct ConfigDocumentTests {
     }
 
     @Test
+    func quakeHeightFormattingAndUpdatePreserveInlineCommentAndCRLF() {
+        #expect(ConfigDocument.formattedQuakeHeight(0.75) == "75%")
+        #expect(ConfigDocument.formattedQuakeHeight(0.73125) == "73.125%")
+
+        var document = ConfigDocument(
+            data: Data("ghostterm-quake-height  =  75%  # preserved\r\nfont-size = 14\r\n".utf8)
+        )
+        document.setQuakeHeight(0.73125)
+
+        #expect(
+            document.data
+                == Data(
+                    "ghostterm-quake-height  =  73.125%  # preserved\r\nfont-size = 14\r\n".utf8
+                )
+        )
+    }
+
+    @Test
     func appendPreservesExistingUnterminatedBytesAndUsesExistingTerminatorStyle() {
         var document = ConfigDocument(data: Data("font-size = 13".utf8))
 
