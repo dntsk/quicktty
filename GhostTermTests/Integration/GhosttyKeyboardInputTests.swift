@@ -354,6 +354,141 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func paneNavigationShortcutsReturnToAppKitBeforeBindingsAndRejectExtraModifiers() throws {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+BracketLeft=ignore\n"
+                + "keybind = cmd+shift+BracketLeft=ignore\n"
+                + "keybind = cmd+ctrl+BracketRight=ignore\n"
+                + "keybind = cmd+opt+ArrowLeft=ignore\n"
+                + "keybind = cmd+opt+shift+ArrowLeft=ignore\n"
+                + "keybind = cmd+opt+ctrl+ArrowRight=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let leftArrow = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        let rightArrow = String(UnicodeScalar(NSRightArrowFunctionKey)!)
+        let upArrow = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+        let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        let commandLeftBracket = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "[",
+            charactersIgnoringModifiers: "[",
+            keyCode: 33
+        )
+        let commandCapsLockRightBracket = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: "]",
+            charactersIgnoringModifiers: "]",
+            keyCode: 30,
+            timestamp: 2
+        )
+        let commandOptionLeft = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: leftArrow,
+            charactersIgnoringModifiers: leftArrow,
+            keyCode: 123,
+            timestamp: 3
+        )
+        let commandOptionRight = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: rightArrow,
+            charactersIgnoringModifiers: rightArrow,
+            keyCode: 124,
+            timestamp: 4
+        )
+        let commandOptionUp = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: upArrow,
+            charactersIgnoringModifiers: upArrow,
+            keyCode: 126,
+            timestamp: 5
+        )
+        let commandOptionCapsLockDown = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .capsLock],
+            characters: downArrow,
+            charactersIgnoringModifiers: downArrow,
+            keyCode: 125,
+            timestamp: 6
+        )
+        let commandShiftLeftBracket = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "{",
+            charactersIgnoringModifiers: "[",
+            keyCode: 33,
+            timestamp: 7
+        )
+        let commandControlRightBracket = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .control],
+            characters: "]",
+            charactersIgnoringModifiers: "]",
+            keyCode: 30,
+            timestamp: 8
+        )
+        let commandOptionShiftLeft = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .shift],
+            characters: leftArrow,
+            charactersIgnoringModifiers: leftArrow,
+            keyCode: 123,
+            timestamp: 9
+        )
+        let commandOptionControlRight = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .control],
+            characters: rightArrow,
+            charactersIgnoringModifiers: rightArrow,
+            keyCode: 124,
+            timestamp: 10
+        )
+
+        for event in [
+            commandLeftBracket,
+            commandCapsLockRightBracket,
+            commandOptionLeft,
+            commandOptionRight,
+            commandOptionUp,
+            commandOptionCapsLockDown,
+        ] {
+            #expect(surface.isPaneNavigationShortcutForTesting(event))
+        }
+        for event in [
+            commandShiftLeftBracket,
+            commandControlRightBracket,
+            commandOptionShiftLeft,
+            commandOptionControlRight,
+        ] {
+            #expect(!surface.isPaneNavigationShortcutForTesting(event))
+        }
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandLeftBracket))
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockRightBracket))
+        #expect(!surface.performKeyEquivalent(with: commandOptionLeft))
+        #expect(!surface.performKeyEquivalent(with: commandOptionCapsLockDown))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+
+        #expect(surface.performKeyEquivalent(with: commandShiftLeftBracket))
+        #expect(surface.performKeyEquivalent(with: commandControlRightBracket))
+        #expect(surface.performKeyEquivalent(with: commandOptionShiftLeft))
+        #expect(surface.performKeyEquivalent(with: commandOptionControlRight))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 4)
+    }
+
+    @Test
     func commandDigitsReturnToAppKitBeforeGhosttyBindingsWhileModifiedDigitsRemainBindable() throws
     {
         let config = try KeyboardShortcutConfig(

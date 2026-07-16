@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installSplitPaneMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
+            installPaneNavigationMenuItems()
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
@@ -135,6 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
+    static let previousPaneMenuItemAction = #selector(AppDelegate.focusPreviousPane)
+    static let nextPaneMenuItemAction = #selector(AppDelegate.focusNextPane)
+    static let focusLeftPaneMenuItemAction = #selector(AppDelegate.focusLeftPane)
+    static let focusRightPaneMenuItemAction = #selector(AppDelegate.focusRightPane)
+    static let focusUpPaneMenuItemAction = #selector(AppDelegate.focusUpPane)
+    static let focusDownPaneMenuItemAction = #selector(AppDelegate.focusDownPane)
 
     static func makeNewTabMenuItem(
         target: AnyObject,
@@ -264,6 +271,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return canonicalItem
     }
 
+    static func makePaneNavigationMenuItem(
+        title: String,
+        keyEquivalent: String,
+        modifierMask: NSEvent.ModifierFlags,
+        target: AnyObject,
+        action: Selector
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.keyEquivalentModifierMask = modifierMask
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installPaneNavigationMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        previousAction: Selector = previousPaneMenuItemAction,
+        nextAction: Selector = nextPaneMenuItemAction,
+        leftAction: Selector = focusLeftPaneMenuItemAction,
+        rightAction: Selector = focusRightPaneMenuItemAction,
+        upAction: Selector = focusUpPaneMenuItemAction,
+        downAction: Selector = focusDownPaneMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu = viewMenu(in: mainMenu)
+        let items = [
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Previous Pane",
+                keyEquivalent: "[",
+                modifierMask: [.command],
+                target: target,
+                action: previousAction
+            ),
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Next Pane",
+                keyEquivalent: "]",
+                modifierMask: [.command],
+                target: target,
+                action: nextAction
+            ),
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Focus Left Pane",
+                keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+                modifierMask: [.command, .option],
+                target: target,
+                action: leftAction
+            ),
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Focus Right Pane",
+                keyEquivalent: String(UnicodeScalar(NSRightArrowFunctionKey)!),
+                modifierMask: [.command, .option],
+                target: target,
+                action: rightAction
+            ),
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Focus Up Pane",
+                keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                modifierMask: [.command, .option],
+                target: target,
+                action: upAction
+            ),
+            canonicalPaneNavigationMenuItem(
+                in: viewMenu,
+                title: "Focus Down Pane",
+                keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                modifierMask: [.command, .option],
+                target: target,
+                action: downAction
+            ),
+        ]
+        for item in items where !viewMenu.items.contains(where: { $0 === item }) {
+            viewMenu.addItem(item)
+        }
+        return mainMenu
+    }
+
+    private static func canonicalPaneNavigationMenuItem(
+        in menu: NSMenu,
+        title: String,
+        keyEquivalent: String,
+        modifierMask: NSEvent.ModifierFlags,
+        target: AnyObject,
+        action: Selector
+    ) -> NSMenuItem {
+        let canonicalItems = menu.items.filter {
+            $0.title == title
+                || ($0.keyEquivalent == keyEquivalent
+                    && normalizedShortcutModifiers(for: $0) == modifierMask)
+        }
+        let canonicalItem =
+            canonicalItems.first
+            ?? makePaneNavigationMenuItem(
+                title: title,
+                keyEquivalent: keyEquivalent,
+                modifierMask: modifierMask,
+                target: target,
+                action: action
+            )
+        canonicalItem.title = title
+        canonicalItem.action = action
+        canonicalItem.keyEquivalent = keyEquivalent
+        canonicalItem.keyEquivalentModifierMask = modifierMask
+        canonicalItem.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            menu.removeItem(duplicate)
+        }
+        return canonicalItem
+    }
+
     private static func fileMenu(in mainMenu: NSMenu) -> NSMenu {
         if let fileItem = mainMenu.item(withTitle: "File") {
             if let existingFileMenu = fileItem.submenu {
@@ -285,6 +407,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.keyEquivalentModifierMask
             .intersection(.deviceIndependentFlagsMask)
             .subtracting(.capsLock)
+    }
+
+    private static func viewMenu(in mainMenu: NSMenu) -> NSMenu {
+        if let viewItem = mainMenu.item(withTitle: "View") {
+            if let existingViewMenu = viewItem.submenu {
+                return existingViewMenu
+            }
+            let newViewMenu = NSMenu(title: "View")
+            viewItem.submenu = newViewMenu
+            return newViewMenu
+        }
+
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let newViewMenu = NSMenu(title: "View")
+        viewItem.submenu = newViewMenu
+        mainMenu.addItem(viewItem)
+        return newViewMenu
     }
 
     static func makeTabSelectionMenuItem(
@@ -310,22 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         action: Selector = tabSelectionMenuItemAction
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
-        let viewMenu: NSMenu
-        if let viewItem = mainMenu.item(withTitle: "View") {
-            if let existingViewMenu = viewItem.submenu {
-                viewMenu = existingViewMenu
-            } else {
-                let newViewMenu = NSMenu(title: "View")
-                viewItem.submenu = newViewMenu
-                viewMenu = newViewMenu
-            }
-        } else {
-            let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
-            let newViewMenu = NSMenu(title: "View")
-            viewItem.submenu = newViewMenu
-            mainMenu.addItem(viewItem)
-            viewMenu = newViewMenu
-        }
+        let viewMenu = viewMenu(in: mainMenu)
 
         for index in 1...9 {
             let canonicalItems = viewMenu.items.filter {
@@ -376,6 +500,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activateTab(_ sender: NSMenuItem) {
         guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
         windowCoordinator?.activateTab(at: index)
+    }
+
+    @objc private func focusPreviousPane() {
+        windowCoordinator?.focusPreviousPane()
+    }
+
+    @objc private func focusNextPane() {
+        windowCoordinator?.focusNextPane()
+    }
+
+    @objc private func focusLeftPane() {
+        windowCoordinator?.focusPane(direction: .left)
+    }
+
+    @objc private func focusRightPane() {
+        windowCoordinator?.focusPane(direction: .right)
+    }
+
+    @objc private func focusUpPane() {
+        windowCoordinator?.focusPane(direction: .up)
+    }
+
+    @objc private func focusDownPane() {
+        windowCoordinator?.focusPane(direction: .down)
     }
 
     @objc private func togglePresentationMode() {
@@ -450,6 +598,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installSplitPaneMenuItems() {
         let mainMenu = Self.installSplitPaneMenuItems(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installPaneNavigationMenuItems() {
+        let mainMenu = Self.installPaneNavigationMenuItems(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }

@@ -281,6 +281,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
+    func focusPreviousPane() {
+        focusActivePane(using: .previous)
+    }
+
+    func focusNextPane() {
+        focusActivePane(using: .next)
+    }
+
+    func focusPane(direction: SplitFocusDirection) {
+        focusActivePane(using: .direction(direction))
+    }
+
     func createShellTab(in workspaceID: WorkspaceID? = nil) throws {
         let destinationWorkspaceID = workspaceID ?? workspaceStore.activeWorkspaceID
         let paneID = PaneID()
@@ -378,6 +390,60 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onReorderTabs = { [weak self] tabIDs in
             self?.reorderTabs(tabIDs)
         }
+    }
+
+    private enum PaneFocusCommand {
+        case previous
+        case next
+        case direction(SplitFocusDirection)
+    }
+
+    private func focusActivePane(using command: PaneFocusCommand) {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        guard
+            let workspace = workspaceStore.workspace(id: workspaceID),
+            let tabID = workspace.activeTabID,
+            let tab = workspaceStore.tab(id: tabID),
+            tab.root.leaves.count > 1
+        else { return }
+
+        var candidate = workspaceStore
+        let splitCommand: SplitCommand =
+            switch command {
+            case .previous:
+                .focusPrevious(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    from: tab.activePaneID
+                )
+            case .next:
+                .focusNext(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    from: tab.activePaneID
+                )
+            case .direction(let direction):
+                .focus(
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    from: tab.activePaneID,
+                    direction: direction
+                )
+            }
+        let delta: SplitDelta
+        do {
+            delta = try splitCoordinator.apply(splitCommand, to: &candidate)
+        } catch {
+            return
+        }
+
+        guard case .focusChanged(_, _, let sourcePaneID, let destinationPaneID) = delta,
+            sourcePaneID != destinationPaneID,
+            surfaces[destinationPaneID] != nil
+        else { return }
+
+        workspaceStore = candidate
+        refreshWorkspacePresentation(focusTerminal: true)
     }
 
     private var activePaneID: PaneID? {

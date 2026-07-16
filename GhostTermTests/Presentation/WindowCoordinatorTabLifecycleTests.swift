@@ -437,6 +437,91 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func paneNavigationMovesThroughNestedLiveSurfacesWithoutRecreatingThem() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        try coordinator.start()
+        let first = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let second = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+
+        _ = window.makeFirstResponder(first)
+        try coordinator.splitActivePaneForTesting(axis: .vertical)
+        let third = try #require(coordinator.activeSurfaceForTesting)
+        _ = window.makeFirstResponder(second)
+        try coordinator.splitActivePaneForTesting(axis: .vertical)
+        let fourth = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+
+        _ = window.makeFirstResponder(first)
+        coordinator.focusNextPane()
+        #expect(coordinator.activeSurfaceForTesting === third)
+        #expect(window.firstResponder === third)
+        coordinator.focusNextPane()
+        #expect(coordinator.activeSurfaceForTesting === second)
+        #expect(window.firstResponder === second)
+        coordinator.focusNextPane()
+        #expect(coordinator.activeSurfaceForTesting === fourth)
+        #expect(window.firstResponder === fourth)
+        coordinator.focusNextPane()
+        #expect(coordinator.activeSurfaceForTesting === first)
+        #expect(window.firstResponder === first)
+        coordinator.focusPreviousPane()
+        #expect(coordinator.activeSurfaceForTesting === fourth)
+        #expect(window.firstResponder === fourth)
+
+        _ = window.makeFirstResponder(first)
+        coordinator.focusPane(direction: .right)
+        #expect(coordinator.activeSurfaceForTesting === second)
+        #expect(window.firstResponder === second)
+        coordinator.focusPane(direction: .down)
+        #expect(coordinator.activeSurfaceForTesting === fourth)
+        #expect(window.firstResponder === fourth)
+        coordinator.focusPane(direction: .left)
+        #expect(coordinator.activeSurfaceForTesting === third)
+        #expect(window.firstResponder === third)
+        coordinator.focusPane(direction: .up)
+        #expect(coordinator.activeSurfaceForTesting === first)
+        #expect(window.firstResponder === first)
+        #expect(activeTab(of: coordinator).activePaneID == first.paneID)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceIDs == surfaceIDs)
+    }
+
+    @Test
+    func paneNavigationIsANoOpForASingleLivePane() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let store = coordinator.workspaceStoreForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+
+        coordinator.focusPreviousPane()
+        coordinator.focusNextPane()
+        coordinator.focusPane(direction: .left)
+        coordinator.focusPane(direction: .right)
+        coordinator.focusPane(direction: .up)
+        coordinator.focusPane(direction: .down)
+
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(window.firstResponder === surface)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceIDs == surfaceIDs)
+    }
+
+    @Test
     func nestedDividerCallbacksUpdateRatiosWithoutRecreatingSurfacesAndEqualizeAll() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

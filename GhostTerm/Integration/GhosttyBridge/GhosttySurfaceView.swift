@@ -432,6 +432,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         func isSplitPaneShortcutForTesting(_ event: NSEvent) -> Bool {
             isSplitPaneShortcut(event)
         }
+
+        func isPaneNavigationShortcutForTesting(_ event: NSEvent) -> Bool {
+            isPaneNavigationShortcut(event)
+        }
     #endif
 
     private func startObservingWindow(_ window: NSWindow?) {
@@ -846,7 +850,11 @@ extension GhosttySurfaceView {
             let surface
         else { return false }
 
-        guard !isPlainCommandT(event), !isPlainCommandDigit(event), !isSplitPaneShortcut(event)
+        guard
+            !isPlainCommandT(event),
+            !isPlainCommandDigit(event),
+            !isSplitPaneShortcut(event),
+            !isPaneNavigationShortcut(event)
         else {
             lastPerformKeyEvent = nil
             return false
@@ -912,6 +920,24 @@ extension GhosttySurfaceView {
         event.charactersIgnoringModifiers?.lowercased() == "d"
             && event.modifierFlags.contains(.command)
             && event.modifierFlags.isDisjoint(with: [.control, .option])
+    }
+
+    private func isPaneNavigationShortcut(_ event: NSEvent) -> Bool {
+        guard let key = event.charactersIgnoringModifiers else { return false }
+        if key == "[" || key == "]" {
+            return isPlainCommandShortcut(event)
+        }
+
+        switch key {
+        case String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            String(UnicodeScalar(NSRightArrowFunctionKey)!),
+            String(UnicodeScalar(NSUpArrowFunctionKey)!),
+            String(UnicodeScalar(NSDownArrowFunctionKey)!):
+            return event.modifierFlags.contains([.command, .option])
+                && event.modifierFlags.isDisjoint(with: [.shift, .control])
+        default:
+            return false
+        }
     }
 
     private func isPlainCommandShortcut(_ event: NSEvent) -> Bool {

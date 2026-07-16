@@ -36,6 +36,35 @@ private final class SplitPaneMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class PaneNavigationMenuActionTarget: NSObject {
+    private(set) var invocations: [String] = []
+
+    @objc func focusPreviousPane() {
+        invocations.append("previous")
+    }
+
+    @objc func focusNextPane() {
+        invocations.append("next")
+    }
+
+    @objc func focusLeftPane() {
+        invocations.append("left")
+    }
+
+    @objc func focusRightPane() {
+        invocations.append("right")
+    }
+
+    @objc func focusUpPane() {
+        invocations.append("up")
+    }
+
+    @objc func focusDownPane() {
+        invocations.append("down")
+    }
+}
+
+@MainActor
 struct AppDelegateLifecycleTests {
     @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
@@ -364,6 +393,115 @@ struct AppDelegateLifecycleTests {
         #expect(splitDown.target === target)
         #expect(fileMenu.items.contains { $0 === commandOptionDItem })
         #expect(fileMenu.items.contains { $0 === commandControlDItem })
+    }
+
+    @Test
+    func paneNavigationMenuItemsUsePinnedShortcutsAndDispatchActions() throws {
+        let target = PaneNavigationMenuActionTarget()
+        let mainMenu = AppDelegate.installPaneNavigationMenuItems(
+            in: nil,
+            target: target,
+            previousAction: #selector(PaneNavigationMenuActionTarget.focusPreviousPane),
+            nextAction: #selector(PaneNavigationMenuActionTarget.focusNextPane),
+            leftAction: #selector(PaneNavigationMenuActionTarget.focusLeftPane),
+            rightAction: #selector(PaneNavigationMenuActionTarget.focusRightPane),
+            upAction: #selector(PaneNavigationMenuActionTarget.focusUpPane),
+            downAction: #selector(PaneNavigationMenuActionTarget.focusDownPane)
+        )
+        let viewMenu = try #require(mainMenu.item(withTitle: "View")?.submenu)
+        let expected = [
+            ("Previous Pane", "[", NSEvent.ModifierFlags.command),
+            ("Next Pane", "]", .command),
+            (
+                "Focus Left Pane", String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+                [.command, .option]
+            ),
+            (
+                "Focus Right Pane", String(UnicodeScalar(NSRightArrowFunctionKey)!),
+                [.command, .option]
+            ),
+            (
+                "Focus Up Pane", String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                [.command, .option]
+            ),
+            (
+                "Focus Down Pane", String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                [.command, .option]
+            ),
+        ]
+
+        #expect(viewMenu.items.count == expected.count)
+        for (title, keyEquivalent, modifierMask) in expected {
+            let item = try #require(viewMenu.item(withTitle: title))
+            #expect(item.keyEquivalent == keyEquivalent)
+            #expect(item.keyEquivalentModifierMask == modifierMask)
+            #expect(item.target === target)
+            #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        }
+        #expect(target.invocations == ["previous", "next", "left", "right", "up", "down"])
+    }
+
+    @Test
+    func paneNavigationMenuInstallerNormalizesDuplicatesAndPreservesForeignShortcuts() throws {
+        let target = PaneNavigationMenuActionTarget()
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+        let commandBracket = NSMenuItem(title: "Foreign Previous", action: nil, keyEquivalent: "[")
+        commandBracket.keyEquivalentModifierMask = [.command]
+        let titledPrevious = NSMenuItem(title: "Previous Pane", action: nil, keyEquivalent: "x")
+        let commandOptionLeft = NSMenuItem(
+            title: "Foreign Left",
+            action: nil,
+            keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        )
+        commandOptionLeft.keyEquivalentModifierMask = [.command, .option]
+        let titledLeft = NSMenuItem(title: "Focus Left Pane", action: nil, keyEquivalent: "x")
+        let commandShiftBracket = NSMenuItem(
+            title: "Foreign Shift", action: nil, keyEquivalent: "[")
+        commandShiftBracket.keyEquivalentModifierMask = [.command, .shift]
+        let commandControlOptionLeft = NSMenuItem(
+            title: "Foreign Control",
+            action: nil,
+            keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        )
+        commandControlOptionLeft.keyEquivalentModifierMask = [.command, .option, .control]
+        [
+            commandBracket,
+            titledPrevious,
+            commandOptionLeft,
+            titledLeft,
+            commandShiftBracket,
+            commandControlOptionLeft,
+        ].forEach(viewMenu.addItem)
+
+        for _ in 0..<2 {
+            AppDelegate.installPaneNavigationMenuItems(
+                in: mainMenu,
+                target: target,
+                previousAction: #selector(PaneNavigationMenuActionTarget.focusPreviousPane),
+                nextAction: #selector(PaneNavigationMenuActionTarget.focusNextPane),
+                leftAction: #selector(PaneNavigationMenuActionTarget.focusLeftPane),
+                rightAction: #selector(PaneNavigationMenuActionTarget.focusRightPane),
+                upAction: #selector(PaneNavigationMenuActionTarget.focusUpPane),
+                downAction: #selector(PaneNavigationMenuActionTarget.focusDownPane)
+            )
+        }
+
+        #expect(viewMenu.items.count == 8)
+        #expect(viewMenu.items.filter { $0.title == "Previous Pane" }.count == 1)
+        #expect(viewMenu.items.filter { $0.title == "Focus Left Pane" }.count == 1)
+        #expect(commandBracket.title == "Previous Pane")
+        #expect(
+            commandBracket.action == #selector(PaneNavigationMenuActionTarget.focusPreviousPane))
+        #expect(commandBracket.target === target)
+        #expect(commandOptionLeft.title == "Focus Left Pane")
+        #expect(commandOptionLeft.action == #selector(PaneNavigationMenuActionTarget.focusLeftPane))
+        #expect(commandOptionLeft.target === target)
+        #expect(viewMenu.items.contains { $0 === commandShiftBracket })
+        #expect(viewMenu.items.contains { $0 === commandControlOptionLeft })
     }
 
     @Test
