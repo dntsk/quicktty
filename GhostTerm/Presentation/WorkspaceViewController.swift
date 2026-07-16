@@ -5,6 +5,7 @@ final class WorkspaceViewController: NSViewController {
     var onActivateWorkspace: ((WorkspaceID) -> Void)?
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
+    var onNewTab: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID]) -> Void)?
@@ -84,6 +85,9 @@ final class WorkspaceViewController: NSViewController {
         }
         tabBarViewController.onCloseTab = { [weak self] tabID in
             self?.onCloseTab?(tabID)
+        }
+        tabBarViewController.onNewTab = { [weak self] in
+            self?.onNewTab?()
         }
         tabBarViewController.onMoveToNewWorkspace = { [weak self] tabIDs in
             self?.onMoveToNewWorkspace?(tabIDs)

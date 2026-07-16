@@ -11,11 +11,13 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
+    var onNewTab: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID]) -> Void)?
 
     private let collectionView = NSCollectionView()
+    private let newTabButton = NSButton()
     private var tabs: [TerminalTab] = []
     private var destinations: [WorkspaceDestination] = []
     private var selection = TabSelectionModel()
@@ -50,12 +52,26 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         scrollView.documentView = collectionView
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        newTabButton.title = "+"
+        newTabButton.bezelStyle = .texturedRounded
+        newTabButton.controlSize = .small
+        newTabButton.target = self
+        newTabButton.action = #selector(createNewTab)
+        newTabButton.identifier = NSUserInterfaceItemIdentifier("new-tab-button")
+        newTabButton.setAccessibilityLabel("New Tab")
+        newTabButton.toolTip = "New Tab (Command+T)"
+        newTabButton.translatesAutoresizingMaskIntoConstraints = false
+
         rootView.addSubview(scrollView)
+        rootView.addSubview(newTabButton)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: rootView.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: newTabButton.leadingAnchor, constant: -4),
+            newTabButton.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -4),
+            newTabButton.centerYAnchor.constraint(equalTo: rootView.centerYAnchor),
+            newTabButton.widthAnchor.constraint(equalToConstant: 26),
         ])
         view = rootView
     }
@@ -166,6 +182,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         return true
     }
 
+    @objc private func createNewTab() {
+        onNewTab?()
+    }
+
     private func select(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
         let previousActiveID = selection.activeTabID
         selection.select(tabID, gesture: gesture)
@@ -217,6 +237,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         menu.addItem(duplicate)
         return menu
     }
+
+    #if DEBUG
+        var newTabButtonForTesting: NSButton {
+            newTabButton
+        }
+    #endif
 
     @objc private func moveToNewWorkspace() {
         let selectedIDs = selection.selectedTabIDsInOrder

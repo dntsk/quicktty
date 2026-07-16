@@ -200,6 +200,44 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func commandTReturnsToAppKitBeforeGhosttyBindingsWhileModifiedTRemainsBindable() throws {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+KeyT=ignore\nkeybind = cmd+shift+KeyT=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandT = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "t",
+            charactersIgnoringModifiers: "t",
+            keyCode: 17
+        )
+        let commandShiftT = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "T",
+            charactersIgnoringModifiers: "t",
+            keyCode: 17,
+            timestamp: 2
+        )
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandT))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(surface.performKeyEquivalent(with: commandShiftT))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 1)
+    }
+
+    @Test
     func keyEquivalentRedispatchesMatchingTimestampWithoutStealingOtherShortcuts() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -491,7 +529,7 @@ private struct KeyboardShortcutConfig {
     let directoryURL: URL
     let url: URL
 
-    init() throws {
+    init(contents: String = "keybind = ctrl+KeyA=ignore\n") throws {
         directoryURL = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString,
             directoryHint: .isDirectory
@@ -501,7 +539,7 @@ private struct KeyboardShortcutConfig {
             withIntermediateDirectories: true
         )
         url = directoryURL.appending(path: "config")
-        try Data("keybind = ctrl+KeyA=ignore\n".utf8).write(to: url)
+        try Data(contents.utf8).write(to: url)
     }
 
     func remove() {

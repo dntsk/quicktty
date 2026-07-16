@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.windowCoordinator = windowCoordinator
             windowCoordinator.applyConfiguration(config)
             try windowCoordinator.start()
+            installNewTabMenuItem()
             installPresentationMenuItem()
 
             NSApp.activate(ignoringOtherApps: true)
@@ -113,6 +114,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return presentationMode != .quake
     }
 
+    static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
+
+    static func makeNewTabMenuItem(target: AppDelegate) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "New Tab",
+            action: newTabMenuItemAction,
+            keyEquivalent: "t"
+        )
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        return item
+    }
+
+    @objc private func createNewTab() {
+        windowCoordinator?.createNewTab()
+    }
+
     @objc private func togglePresentationMode() {
         windowCoordinator?.togglePresentationMode()
     }
@@ -164,6 +182,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             animationDuration: config.quakeAnimationDuration,
             hideOnFocusLoss: config.hideOnFocusLoss
         )
+    }
+
+    private func installNewTabMenuItem() {
+        let mainMenu: NSMenu
+        if let existingMainMenu = NSApp.mainMenu {
+            mainMenu = existingMainMenu
+        } else {
+            let newMainMenu = NSMenu()
+            NSApp.mainMenu = newMainMenu
+            mainMenu = newMainMenu
+        }
+
+        let fileMenu: NSMenu
+        if let fileItem = mainMenu.item(withTitle: "File") {
+            if let existingFileMenu = fileItem.submenu {
+                fileMenu = existingFileMenu
+            } else {
+                let newFileMenu = NSMenu(title: "File")
+                fileItem.submenu = newFileMenu
+                fileMenu = newFileMenu
+            }
+        } else {
+            let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+            let newFileMenu = NSMenu(title: "File")
+            fileItem.submenu = newFileMenu
+            mainMenu.addItem(fileItem)
+            fileMenu = newFileMenu
+        }
+
+        guard
+            !fileMenu.items.contains(where: {
+                $0.action == Self.newTabMenuItemAction && $0.target === self
+            })
+        else { return }
+        fileMenu.addItem(Self.makeNewTabMenuItem(target: self))
     }
 
     private func installPresentationMenuItem() {

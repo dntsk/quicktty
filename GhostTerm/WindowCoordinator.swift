@@ -275,6 +275,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onCloseTab = { [weak self] tabID in
             self?.requestCloseTab(tabID)
         }
+        workspaceViewController.onNewTab = { [weak self] in
+            self?.createNewTab()
+        }
         workspaceViewController.onMoveToNewWorkspace = { [weak self] tabIDs in
             self?.presentMoveToNewWorkspace(tabIDs)
         }
@@ -433,6 +436,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     #if DEBUG
         var windowForTesting: NSWindow? {
             normalWindowController.window
+        }
+
+        var workspaceViewControllerForTesting: WorkspaceViewController {
+            workspaceViewController
         }
 
         var defaultSurfaceForTesting: GhosttySurfaceView? {

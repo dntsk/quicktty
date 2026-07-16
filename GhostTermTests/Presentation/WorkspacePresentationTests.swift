@@ -50,4 +50,32 @@ struct WorkspacePresentationTests {
         #expect(terminal.superview?.identifier?.rawValue == "terminal-content")
         #expect(controller.view.subviews.count == 3)
     }
+
+    @Test
+    func newTabButtonIsAccessibleAndInvokesCallbackOnceWithoutTabs() {
+        let controller = WorkspaceViewController()
+        var newTabCount = 0
+        controller.onNewTab = { newTabCount += 1 }
+
+        controller.apply(WorkspaceStore())
+        let button = controller.tabBarViewController.newTabButtonForTesting
+        button.performClick(nil)
+
+        #expect(button.identifier?.rawValue == "new-tab-button")
+        #expect(button.accessibilityLabel() == "New Tab")
+        #expect(button.toolTip == "New Tab (Command+T)")
+        #expect(newTabCount == 1)
+    }
+
+    @Test
+    func workspaceControllerForwardsNewTabAction() {
+        let controller = WorkspaceViewController()
+        var newTabCount = 0
+        controller.onNewTab = { newTabCount += 1 }
+
+        controller.apply(WorkspaceStore())
+        controller.tabBarViewController.newTabButtonForTesting.performClick(nil)
+
+        #expect(newTabCount == 1)
+    }
 }

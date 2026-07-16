@@ -41,4 +41,16 @@ struct AppDelegateLifecycleTests {
             )
         )
     }
+
+    @Test
+    func newTabMenuItemUsesCommandTAndAppDelegateAction() {
+        let delegate = AppDelegate()
+        let item = AppDelegate.makeNewTabMenuItem(target: delegate)
+
+        #expect(item.title == "New Tab")
+        #expect(item.keyEquivalent == "t")
+        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(item.target === delegate)
+        #expect(item.action == AppDelegate.newTabMenuItemAction)
+    }
 }

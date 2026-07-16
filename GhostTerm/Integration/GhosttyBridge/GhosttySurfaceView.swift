@@ -822,6 +822,11 @@ extension GhosttySurfaceView {
             let surface
         else { return false }
 
+        guard !isPlainCommandT(event) else {
+            lastPerformKeyEvent = nil
+            return false
+        }
+
         let bindingEvent = event.ghosttyKeyEvent(.press, text: event.characters ?? "")
         var bindingFlags = GHOSTTY_BINDING_FLAGS_CONSUMED
         let isBinding = bindingEvent.withCValue { value in
@@ -866,6 +871,11 @@ extension GhosttySurfaceView {
             lastPerformKeyEvent = event.timestamp
             return false
         }
+    }
+
+    private func isPlainCommandT(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers == "t"
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command]
     }
 
     override func doCommand(by _: Selector) {
