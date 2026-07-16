@@ -154,6 +154,7 @@ final class GhosttyBridge {
 
     #if DEBUG
         private var inputObservations: [GhosttyBridgeInputObservation] = []
+        private var failsNextSurfaceCreationForTesting = false
     #endif
 
     private(set) var diagnostics: [String]
@@ -242,6 +243,13 @@ final class GhosttyBridge {
         guard surfaces[id] == nil else {
             throw GhosttyBridgeError.duplicatePaneID(id)
         }
+
+        #if DEBUG
+            if failsNextSurfaceCreationForTesting {
+                failsNextSurfaceCreationForTesting = false
+                throw GhosttyBridgeError.surfaceCreationFailed(id)
+            }
+        #endif
 
         guard
             let surface = GhosttySurfaceView(
@@ -348,6 +356,10 @@ final class GhosttyBridge {
 
         var inputObservationsForTesting: [GhosttyBridgeInputObservation] {
             inputObservations
+        }
+
+        func failNextSurfaceCreationForTesting() {
+            failsNextSurfaceCreationForTesting = true
         }
 
         static func runtimeReloadActionForTesting(soft: Bool) -> GhosttyRuntimeAction {

@@ -15,7 +15,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
     private let onError: ErrorHandler
     private let workspaceViewController = WorkspaceViewController()
-    private var workspaceStore = WorkspaceStore()
+    private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
     private var isCreatingReplacementShell = false
@@ -40,6 +40,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         normalWindowFrame: NormalWindowFrame? = nil,
         quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
+        initialWorkspaceStore: WorkspaceStore = WorkspaceStore(),
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         persistPresentationMode: @escaping ModePersistence = { _ in },
         persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
@@ -69,6 +70,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.quakeWindowController = quakeWindowController
         self.hotKeyController = resolvedHotKeyController
         self.surfaceConfiguration = surfaceConfiguration
+        workspaceStore = initialWorkspaceStore
         self.confirmationPresenter = confirmationPresenter
         self.onError = onError
         presentationController = try! PresentationController(
@@ -450,6 +452,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             refreshWorkspacePresentation(focusTerminal: true)
         }
 
+        func requestCloseTabForTesting(_ tabID: TabID) {
+            requestCloseTab(tabID)
+        }
+
+        func surfaceDidRequestCloseForTesting(id: PaneID, processAlive: Bool) {
+            surfaceDidRequestClose(id: id, processAlive: processAlive)
+        }
+
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
             confirmationQueue.activePresentation
         }
@@ -504,6 +514,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {
         guard !processAlive else {
+            guard surfaces[id] != nil else { return }
             confirmationQueue.enqueueClose(paneID: id) { [weak self] response in
                 guard response == .allow, let self else { return }
                 finishSurfaceClosure(

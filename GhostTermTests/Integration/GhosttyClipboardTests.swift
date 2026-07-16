@@ -895,7 +895,7 @@ private enum ClipboardTestError: Error {
     case timeout
 }
 
-private struct WindowCloseConfig {
+struct WindowCloseConfig {
     let directoryURL: URL
     let url: URL
 
