@@ -22,7 +22,7 @@
 1. Add failing tests for equal-width calculation: all tabs divide available width, additional tabs shrink existing cells, and no minimum width introduces overflow.
 2. Remove the horizontal scroll container and constrain the collection view directly beside the fixed new-tab button.
 3. Draw inactive tabs transparent and active tabs as a neutral gray capsule with subtle border; add inactive hover fill and multi-selection outline.
-4. Center the title, show a trailing shortcut label, and replace it with close on hover. Keep broadcast as a small conditional orange indicator without permanent leading space.
+4. Center the title, keep a trailing shortcut label, and show close on the left only while hovering. Keep broadcast as a small conditional orange indicator without permanent leading space.
 5. Replace the textured `+` with a fixed circular outline/hover button.
 6. Run focused presentation tests, format, lint, and build.
 
