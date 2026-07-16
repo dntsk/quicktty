@@ -479,6 +479,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
         cancelFocusLossHide()
         beginAnimationRequest(.hidden)
+        quakeWindow.setPresentationLevel(.popUpMenu)
         animate(to: hiddenFrame, visibility: .hidden)
     }
 

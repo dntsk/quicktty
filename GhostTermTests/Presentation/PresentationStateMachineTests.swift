@@ -323,7 +323,7 @@ struct PresentationStateMachineTests {
     }
 
     @Test
-    func cancellingDeferredShowPreventsItsAnimationAndHideUsesEaseIn() throws {
+    func cancellingDeferredShowPreventsItsAnimationAndHideRaisesLevelBeforeAnimating() throws {
         let window = FakeQuakeWindow()
         let animator = ManualQuakeAnimator()
         let scheduler = ManualPresentationScheduler()
@@ -341,6 +341,8 @@ struct PresentationStateMachineTests {
         try controller.requestVisibility(.hidden)
 
         #expect(deferrer.requests[0].cancellation.isCancelled)
+        #expect(window.events.last == "level.popUpMenu")
+        #expect(!window.events.contains("out"))
         deferrer.runActiveRequests()
         #expect(animator.requests.count == 1)
         #expect(

@@ -23,8 +23,9 @@ targets:
       - path: GhostTerm
         excludes:
           - Resources
-    resources:
       - path: GhostTerm/Resources
+        buildPhase: resources
+        group: Resources
     dependencies:
       - sdk: Carbon.framework
       - framework: Vendor/ghostty/macos/GhosttyKit.xcframework

@@ -4,6 +4,7 @@
 # Terminal options below are passed directly to Ghostty.
 font-family = JetBrains Mono
 font-size = 13
+theme = Monokai Remastered
 
 # GhostTerm window and Quake options.
 ghostterm-presentation-mode = normal
