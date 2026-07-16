@@ -20,12 +20,10 @@ final class ConfigFileWatcher {
             let source = DispatchSource.makeFileSystemObjectSource(
                 fileDescriptor: descriptor,
                 eventMask: [.write, .delete, .rename, .attrib, .extend],
-                queue: .global(qos: .utility)
+                queue: .main
             )
             source.setEventHandler {
-                Task { @MainActor in
-                    handler()
-                }
+                handler()
             }
             source.setCancelHandler {
                 _ = Darwin.close(descriptor)
