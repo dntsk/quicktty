@@ -92,6 +92,40 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func normalWindowContentInstallationPreservesFrame() throws {
+        let normal = NormalWindowController()
+        let frame = NSRect(x: 136, y: 189, width: 1_169, height: 698)
+        let content = NSViewController()
+        content.view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        normal.setPresentationFrame(frame)
+
+        try normal.installContentViewController(content)
+        #expect(normal.presentationFrame == frame)
+
+        try normal.installContentViewController(nil)
+        #expect(normal.presentationFrame == frame)
+    }
+
+    @Test
+    func initialNormalPresentationPreservesRestoredFrameAfterContentInstallation() throws {
+        let restoredFrame = NSRect(x: 136, y: 189, width: 1_169, height: 698)
+        let content = NSViewController()
+        content.view = NSView(frame: .zero)
+        let normal = NormalWindowController()
+        let quake = FakeQuakeContainer()
+
+        _ = try PresentationController(
+            contentViewController: content,
+            normalWindowController: normal,
+            quakeWindowController: quake,
+            savedNormalFrame: restoredFrame,
+            persistSuccessfulMode: { _ in }
+        )
+
+        #expect(normal.presentationFrame == restoredFrame)
+    }
+
+    @Test
     func liveResizePersistsNormalizedHeightOnceAndIgnoresProgrammaticFrames() throws {
         let window = QuakeWindow()
         let animator = ManualQuakeAnimator()

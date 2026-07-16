@@ -53,7 +53,9 @@ final class NormalWindowController: NSWindowController, PresentationWindowContai
             contentViewController.view.removeFromSuperview()
             contentViewController.removeFromParent()
         }
+        let frame = window.frame
         window.contentViewController = contentViewController
+        window.setFrame(frame, display: false)
     }
 
     func showPresentationWindow() throws {
