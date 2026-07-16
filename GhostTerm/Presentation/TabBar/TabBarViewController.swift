@@ -63,6 +63,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private let newTabButton: NSButton = CircularOutlineButton()
     private var tabs: [TerminalTab] = []
     private var destinations: [WorkspaceDestination] = []
+    private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
 
     override func loadView() {
@@ -98,6 +99,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         )
         newTabButton.symbolConfiguration = .init(pointSize: 11, weight: .medium)
         newTabButton.contentTintColor = .secondaryLabelColor
+        newTabButton.isBordered = false
+        newTabButton.focusRingType = .none
         newTabButton.target = self
         newTabButton.action = #selector(createNewTab)
         newTabButton.identifier = NSUserInterfaceItemIdentifier("new-tab-button")
@@ -115,8 +118,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
                 equalTo: newTabButton.leadingAnchor, constant: -4),
             newTabButton.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -4),
             newTabButton.centerYAnchor.constraint(equalTo: rootView.centerYAnchor),
-            newTabButton.widthAnchor.constraint(equalToConstant: 24),
-            newTabButton.heightAnchor.constraint(equalToConstant: 24),
+            newTabButton.widthAnchor.constraint(equalToConstant: 28),
+            newTabButton.heightAnchor.constraint(equalToConstant: 28),
         ])
         view = rootView
     }
@@ -124,6 +127,13 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     override func viewDidLayout() {
         super.viewDidLayout()
         updateLayoutMetrics()
+    }
+
+    func applyChromePalette(_ palette: GhosttyChromePalette) {
+        chromePalette = palette
+        guard isViewLoaded else { return }
+        collectionView.reloadData()
+        newTabButton.needsDisplay = true
     }
 
     func apply(
@@ -171,6 +181,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             isActive: selection.activeTabID == tab.id,
             isSelected: selection.selectedTabIDs.contains(tab.id),
             isBroadcasting: tab.isBroadcasting,
+            chromePalette: chromePalette,
             selectHandler: { [weak self] gesture in
                 self?.select(tab.id, gesture: gesture)
             },
@@ -330,6 +341,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         var newTabButtonIsCircularForTesting: Bool {
             newTabButton is CircularOutlineButton
         }
+
+        var newTabButtonSizeForTesting: NSSize {
+            NSSize(width: 28, height: 28)
+        }
     #endif
 
     @objc private func moveToNewWorkspace() {
@@ -354,7 +369,6 @@ private final class CircularOutlineButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
         let path = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
         if isHovered {
             NSColor.labelColor.withAlphaComponent(0.08).setFill()
@@ -363,6 +377,23 @@ private final class CircularOutlineButton: NSButton {
         NSColor.separatorColor.withAlphaComponent(0.8).setStroke()
         path.lineWidth = 1
         path.stroke()
+
+        guard let image else { return }
+        let imageSize = image.size
+        let imageRect = NSRect(
+            x: bounds.midX - imageSize.width / 2,
+            y: bounds.midY - imageSize.height / 2,
+            width: imageSize.width,
+            height: imageSize.height
+        )
+        image.draw(
+            in: imageRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: nil
+        )
     }
 
     override func updateTrackingAreas() {

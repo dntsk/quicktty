@@ -7,6 +7,22 @@ import Testing
 @MainActor
 struct WorkspacePresentationTests {
     @Test
+    func chromePaletteClassifiesDarkAndLightBackgrounds() {
+        #expect(
+            GhosttyChromePalette(
+                background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+                foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+            ).usesDarkAppearance
+        )
+        #expect(
+            !GhosttyChromePalette(
+                background: GhosttyRGB(red: 0xEE, green: 0xEE, blue: 0xEE),
+                foreground: GhosttyRGB(red: 0x11, green: 0x11, blue: 0x11)
+            ).usesDarkAppearance
+        )
+    }
+
+    @Test
     func workspaceSelectorKeepsStoreOrderAndActiveSelection() throws {
         var store = WorkspaceStore()
         let backendID = try store.createWorkspace(named: "Backend")
@@ -49,6 +65,24 @@ struct WorkspacePresentationTests {
         #expect(controller.workspaceSelector.displayedWorkspaceNames == ["Default"])
         #expect(terminal.superview?.identifier?.rawValue == "terminal-content")
         #expect(controller.view.subviews.count == 3)
+    }
+
+    @Test
+    func workspaceChromeAndTerminalFallbackUsePaletteAndLocalAppearance() {
+        let palette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+            foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+        )
+        let controller = WorkspaceViewController()
+
+        controller.applyChromePalette(palette)
+
+        #expect(controller.chromePaletteForTesting == palette)
+        #expect(controller.chromeAppearanceNameForTesting == .darkAqua)
+        #expect(
+            controller.chromeBackgroundColorForTesting == NSColor(ghosttyRGB: palette.background))
+        #expect(
+            controller.terminalFallbackColorForTesting == NSColor(ghosttyRGB: palette.background))
     }
 
     @Test
@@ -150,5 +184,8 @@ struct WorkspacePresentationTests {
         #expect(button.accessibilityLabel() == "New Tab")
         #expect(button.toolTip == "New Tab (Command+T)")
         #expect(controller.newTabButtonIsCircularForTesting)
+        #expect(!button.isBordered)
+        #expect(button.focusRingType == .none)
+        #expect(controller.newTabButtonSizeForTesting == NSSize(width: 28, height: 28))
     }
 }

@@ -12,34 +12,33 @@ final class WorkspaceViewController: NSViewController {
 
     let workspaceSelector = WorkspaceSelector()
     let tabBarViewController = TabBarViewController()
+    private let chromeView = NSView()
+    private let separatorView = NSView()
     private let terminalContentView = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No tabs in this workspace")
+    private var chromePalette = GhosttyChromePalette.fallback
     private weak var displayedTerminalView: NSView?
 
     override func loadView() {
         let rootView = NSView()
+        rootView.wantsLayer = true
 
-        let chrome = NSVisualEffectView()
-        chrome.material = .headerView
-        chrome.blendingMode = .withinWindow
-        chrome.state = .active
-        chrome.translatesAutoresizingMaskIntoConstraints = false
+        chromeView.wantsLayer = true
+        chromeView.translatesAutoresizingMaskIntoConstraints = false
 
         workspaceSelector.translatesAutoresizingMaskIntoConstraints = false
-        chrome.addSubview(workspaceSelector)
+        chromeView.addSubview(workspaceSelector)
 
         addChild(tabBarViewController)
         let tabBarView = tabBarViewController.view
         tabBarView.translatesAutoresizingMaskIntoConstraints = false
-        chrome.addSubview(tabBarView)
+        chromeView.addSubview(tabBarView)
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
+        separatorView.wantsLayer = true
+        separatorView.translatesAutoresizingMaskIntoConstraints = false
 
         terminalContentView.identifier = NSUserInterfaceItemIdentifier("terminal-content")
         terminalContentView.wantsLayer = true
-        terminalContentView.layer?.backgroundColor = NSColor.black.cgColor
         terminalContentView.translatesAutoresizingMaskIntoConstraints = false
 
         emptyLabel.textColor = .secondaryLabelColor
@@ -48,27 +47,28 @@ final class WorkspaceViewController: NSViewController {
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         terminalContentView.addSubview(emptyLabel)
 
-        rootView.addSubview(chrome)
-        rootView.addSubview(separator)
+        rootView.addSubview(chromeView)
+        rootView.addSubview(separatorView)
         rootView.addSubview(terminalContentView)
         NSLayoutConstraint.activate([
-            chrome.topAnchor.constraint(equalTo: rootView.topAnchor),
-            chrome.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-            chrome.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            chrome.heightAnchor.constraint(equalToConstant: 38),
-            tabBarView.leadingAnchor.constraint(equalTo: chrome.leadingAnchor, constant: 6),
+            chromeView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            chromeView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            chromeView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            chromeView.heightAnchor.constraint(equalToConstant: 38),
+            tabBarView.leadingAnchor.constraint(equalTo: chromeView.leadingAnchor, constant: 6),
             tabBarView.trailingAnchor.constraint(
                 equalTo: workspaceSelector.leadingAnchor, constant: -8),
             workspaceSelector.trailingAnchor.constraint(
-                equalTo: chrome.trailingAnchor, constant: -10),
-            workspaceSelector.centerYAnchor.constraint(equalTo: chrome.centerYAnchor),
+                equalTo: chromeView.trailingAnchor, constant: -10),
+            workspaceSelector.centerYAnchor.constraint(equalTo: chromeView.centerYAnchor),
             workspaceSelector.widthAnchor.constraint(equalToConstant: 148),
-            tabBarView.topAnchor.constraint(equalTo: chrome.topAnchor, constant: 2),
-            tabBarView.bottomAnchor.constraint(equalTo: chrome.bottomAnchor, constant: -2),
-            separator.topAnchor.constraint(equalTo: chrome.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            terminalContentView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            tabBarView.topAnchor.constraint(equalTo: chromeView.topAnchor, constant: 2),
+            tabBarView.bottomAnchor.constraint(equalTo: chromeView.bottomAnchor, constant: -2),
+            separatorView.topAnchor.constraint(equalTo: chromeView.bottomAnchor),
+            separatorView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            separatorView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            separatorView.heightAnchor.constraint(equalToConstant: 1),
+            terminalContentView.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
             terminalContentView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             terminalContentView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             terminalContentView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
@@ -76,6 +76,7 @@ final class WorkspaceViewController: NSViewController {
             emptyLabel.centerYAnchor.constraint(equalTo: terminalContentView.centerYAnchor),
         ])
         view = rootView
+        applyChromePalette(chromePalette)
 
         workspaceSelector.onSelection = { [weak self] workspaceID in
             self?.onActivateWorkspace?(workspaceID)
@@ -100,6 +101,25 @@ final class WorkspaceViewController: NSViewController {
         }
     }
 
+    func applyChromePalette(_ palette: GhosttyChromePalette) {
+        chromePalette = palette
+        loadViewIfNeeded()
+
+        let backgroundColor = NSColor(ghosttyRGB: palette.background)
+        chromeView.layer?.backgroundColor = backgroundColor.cgColor
+        terminalContentView.layer?.backgroundColor = backgroundColor.cgColor
+        separatorView.layer?.backgroundColor =
+            NSColor(ghosttyRGB: palette.foreground)
+            .withAlphaComponent(0.15)
+            .cgColor
+
+        let appearanceName: NSAppearance.Name = palette.usesDarkAppearance ? .darkAqua : .aqua
+        let appearance = NSAppearance(named: appearanceName)
+        view.appearance = appearance
+        chromeView.appearance = appearance
+        tabBarViewController.applyChromePalette(palette)
+    }
+
     func apply(_ store: WorkspaceStore) {
         loadViewIfNeeded()
         workspaceSelector.apply(
@@ -122,6 +142,26 @@ final class WorkspaceViewController: NSViewController {
         )
     }
 
+    #if DEBUG
+        var chromePaletteForTesting: GhosttyChromePalette {
+            chromePalette
+        }
+
+        var chromeAppearanceNameForTesting: NSAppearance.Name? {
+            chromeView.effectiveAppearance.name
+        }
+
+        var chromeBackgroundColorForTesting: NSColor? {
+            guard let color = chromeView.layer?.backgroundColor else { return nil }
+            return NSColor(cgColor: color)
+        }
+
+        var terminalFallbackColorForTesting: NSColor? {
+            guard let color = terminalContentView.layer?.backgroundColor else { return nil }
+            return NSColor(cgColor: color)
+        }
+    #endif
+
     func displayTerminal(_ terminalView: NSView?) {
         loadViewIfNeeded()
         guard displayedTerminalView !== terminalView else { return }
@@ -143,5 +183,16 @@ final class WorkspaceViewController: NSViewController {
             terminalView.trailingAnchor.constraint(equalTo: terminalContentView.trailingAnchor),
             terminalView.bottomAnchor.constraint(equalTo: terminalContentView.bottomAnchor),
         ])
+    }
+}
+
+extension NSColor {
+    convenience init(ghosttyRGB color: GhosttyRGB) {
+        self.init(
+            red: CGFloat(color.red) / 255,
+            green: CGFloat(color.green) / 255,
+            blue: CGFloat(color.blue) / 255,
+            alpha: 1
+        )
     }
 }

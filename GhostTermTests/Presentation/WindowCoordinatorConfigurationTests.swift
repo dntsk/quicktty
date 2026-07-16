@@ -24,6 +24,46 @@ struct WindowCoordinatorConfigurationTests {
     }
 
     @Test
+    func appliesBridgePaletteInitiallyAndAfterReloadConfiguration() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let initialURL = directory.appending(path: "initial")
+        let replacementURL = directory.appending(path: "replacement")
+        try Data("background = 112233\nforeground = ddeeff\n".utf8).write(to: initialURL)
+        try Data("background = 445566\nforeground = aabbcc\n".utf8).write(to: replacementURL)
+
+        let bridge = try GhosttyBridge(configURL: initialURL)
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            hotKeyController: RecordingHotKeyController()
+        )
+        let expectedReplacement = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x44, green: 0x55, blue: 0x66),
+            foreground: GhosttyRGB(red: 0xAA, green: 0xBB, blue: 0xCC)
+        )
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.chromePaletteForTesting
+                == GhosttyChromePalette(
+                    background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+                    foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+                )
+        )
+
+        try bridge.reloadConfig(at: replacementURL)
+        coordinator.applyConfiguration(GhostTermConfig())
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.chromePaletteForTesting
+                == expectedReplacement)
+    }
+
+    @Test
     func normalWindowFrameUsesSavedFrameWhileQuakeIsActive() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

@@ -88,6 +88,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         )
         super.init()
 
+        workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         normalWindowController.window?.delegate = self
         hotKeyRelay.action = { [weak self] in
             self?.presentationController.toggleQuakeVisibility()
@@ -181,6 +182,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func start() throws {
+        workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         try createShellTab()
     }
 
@@ -238,6 +240,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func applyConfiguration(_ config: GhostTermConfig) {
+        workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         activeHotKey = config.globalToggle
         let geometry =
             QuakeWindowGeometry(

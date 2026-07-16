@@ -158,6 +158,7 @@ final class GhosttyBridge {
     #endif
 
     private(set) var diagnostics: [String]
+    private(set) var chromePalette: GhosttyChromePalette
 
     var isReady: Bool {
         application != nil
@@ -187,6 +188,7 @@ final class GhosttyBridge {
         application = nil
         callbackContextOwnership = retainedCallbackContext
         diagnostics = configuration.diagnostics
+        chromePalette = configuration.chromePalette
 
         #if DEBUG
             ghosttyCallbackContextOwnershipCount.withLock { count in
@@ -305,6 +307,7 @@ final class GhosttyBridge {
         }
 
         diagnostics = []
+        chromePalette = replacement.chromePalette
         configuration?.release()
         configuration = replacement
     }

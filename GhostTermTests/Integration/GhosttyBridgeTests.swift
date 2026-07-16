@@ -80,6 +80,47 @@ struct GhosttyBridgeTests {
     }
 
     @Test
+    func configurationExtractsChromePaletteFromFinalizedHandle() throws {
+        let fixture = try TemporaryConfig(
+            contents: "background = 112233\nforeground = ddeeff\n"
+        )
+        defer { fixture.remove() }
+
+        let configuration = try GhosttyConfiguration(configURL: fixture.url)
+
+        #expect(
+            configuration.chromePalette
+                == GhosttyChromePalette(
+                    background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+                    foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+                )
+        )
+    }
+
+    @Test
+    func reloadReplacesChromePaletteTransactionally() throws {
+        let initial = try TemporaryConfig(contents: "background = 112233\nforeground = ddeeff\n")
+        let replacement = try TemporaryConfig(
+            contents: "background = 445566\nforeground = aabbcc\n")
+        defer {
+            initial.remove()
+            replacement.remove()
+        }
+        let bridge = try GhosttyBridge(configURL: initial.url)
+        defer { bridge.shutdown() }
+
+        try bridge.reloadConfig(at: replacement.url)
+
+        #expect(
+            bridge.chromePalette
+                == GhosttyChromePalette(
+                    background: GhosttyRGB(red: 0x44, green: 0x55, blue: 0x66),
+                    foreground: GhosttyRGB(red: 0xAA, green: 0xBB, blue: 0xCC)
+                )
+        )
+    }
+
+    @Test
     func invalidReloadIsRejectedAndNextValidReloadQueuesConfigChanged() async throws {
         let initial = try TemporaryConfig(contents: "background-opacity = 0.5\n")
         let malformed = try TemporaryConfig(contents: "not-a-ghostty-option = true\n")

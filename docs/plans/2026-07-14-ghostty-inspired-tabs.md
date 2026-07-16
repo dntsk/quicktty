@@ -4,7 +4,7 @@
 
 **Goal:** Restyle GhostTerm tabs to match the supplied Ghostty visual references without copying Ghostty code, and add Command+1…9 tab switching.
 
-**Architecture:** Keep the existing first-party AppKit collection view and selection model. Replace title-sized scrolling cells with a non-scrolling equal-width layout, implement first-party drawing/hover states, and route reserved Command-number shortcuts through AppKit menu actions to `WindowCoordinator`.
+**Architecture:** Keep the existing first-party AppKit collection view and selection model. Replace title-sized scrolling cells with a non-scrolling equal-width layout, implement first-party drawing/hover states, and route reserved Command-number shortcuts through AppKit menu actions to `WindowCoordinator`. Chrome colors are extracted from the finalized public Ghostty configuration and applied only to the workspace subtree, so tabs match the terminal theme without a global appearance override.
 
 **Tech Stack:** Swift 6, AppKit, Swift Testing, XcodeGen, apple/swift-format.
 

@@ -8,6 +8,7 @@ final class GhosttyConfiguration {
         case file(URL)
     }
 
+    let chromePalette: GhosttyChromePalette
     let diagnostics: [String]
     let source: Source
 
@@ -30,6 +31,7 @@ final class GhosttyConfiguration {
         ghostty_config_finalize(handle)
 
         self.handle = handle
+        chromePalette = Self.chromePalette(from: handle)
         diagnostics = Self.loadDiagnostics(from: handle)
     }
 
@@ -50,6 +52,41 @@ final class GhosttyConfiguration {
         guard let handle else { return }
         self.handle = nil
         ghostty_config_free(handle)
+    }
+
+    private static func chromePalette(from handle: ghostty_config_t) -> GhosttyChromePalette {
+        GhosttyChromePalette(
+            background: configuredColor(
+                named: "background",
+                from: handle,
+                fallback: GhosttyChromePalette.fallback.background
+            ),
+            foreground: configuredColor(
+                named: "foreground",
+                from: handle,
+                fallback: GhosttyChromePalette.fallback.foreground
+            )
+        )
+    }
+
+    private static func configuredColor(
+        named name: String,
+        from handle: ghostty_config_t,
+        fallback: GhosttyRGB
+    ) -> GhosttyRGB {
+        var color = ghostty_config_color_s()
+        let wasRead = withUnsafeMutablePointer(to: &color) { pointer in
+            name.withCString { key in
+                ghostty_config_get(
+                    handle,
+                    UnsafeMutableRawPointer(pointer),
+                    key,
+                    UInt(name.lengthOfBytes(using: .utf8))
+                )
+            }
+        }
+        guard wasRead else { return fallback }
+        return GhosttyRGB(red: color.r, green: color.g, blue: color.b)
     }
 
     private static func loadDiagnostics(from handle: ghostty_config_t) -> [String] {

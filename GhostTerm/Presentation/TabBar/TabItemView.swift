@@ -107,6 +107,7 @@ final class TabItemView: NSCollectionViewItem {
         isActive: Bool,
         isSelected: Bool,
         isBroadcasting: Bool,
+        chromePalette: GhosttyChromePalette,
         selectHandler: @escaping (TabSelectionModel.Gesture) -> Void,
         closeHandler: @escaping () -> Void,
         menuProvider: @escaping () -> NSMenu
@@ -116,6 +117,7 @@ final class TabItemView: NSCollectionViewItem {
         self.isBroadcasting = isBroadcasting
         backgroundView.isActive = isActive
         backgroundView.isSelected = isSelected
+        backgroundView.chromePalette = chromePalette
         backgroundView.selectHandler = selectHandler
         backgroundView.menuProvider = menuProvider
         self.closeHandler = closeHandler
@@ -184,6 +186,9 @@ private final class TabItemBackgroundView: NSView {
     var isSelected = false {
         didSet { needsDisplay = true }
     }
+    var chromePalette = GhosttyChromePalette.fallback {
+        didSet { needsDisplay = true }
+    }
     private(set) var isHovered = false {
         didSet {
             guard oldValue != isHovered else { return }
@@ -205,9 +210,19 @@ private final class TabItemBackgroundView: NSView {
             roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
 
         if isActive {
-            NSColor.labelColor.withAlphaComponent(0.12).setFill()
+            NSColor(
+                ghosttyRGB: chromePalette.background.blended(
+                    with: chromePalette.foreground,
+                    fraction: 0.16
+                )
+            ).setFill()
             path.fill()
-            NSColor.separatorColor.withAlphaComponent(0.55).setStroke()
+            NSColor(
+                ghosttyRGB: chromePalette.background.blended(
+                    with: chromePalette.foreground,
+                    fraction: 0.20
+                )
+            ).setStroke()
             path.lineWidth = 0.75
             path.stroke()
             return
