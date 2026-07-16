@@ -88,6 +88,10 @@ final class GhosttyConfirmationQueue {
             }
         }
 
+        if appendCloseCompletion(for: paneID, completion: completion) {
+            return
+        }
+
         let insertionIndex =
             pending.firstIndex { item in
                 if case .clipboard = item.presentation { return true }

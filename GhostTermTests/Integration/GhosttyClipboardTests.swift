@@ -770,6 +770,43 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func reentrantCloseDuringClipboardCancellationCoalescesPresentationAndCompletions() throws {
+        let recorder = ConfirmationQueueRecorder()
+        var queue: GhosttyConfirmationQueue!
+        let paneID = PaneID()
+        let request = makeConfirmationRequest(paneID: paneID, text: "clipboard")
+        queue = GhosttyConfirmationQueue { presentation, completion in
+            recorder.presentations.append(presentation)
+            recorder.completions.append(completion)
+            return nil
+        }
+
+        queue.enqueueClipboard(request) { response in
+            recorder.responses.append((request.id, response))
+            if response == .deny {
+                queue.enqueueClose(paneID: paneID) { response in
+                    recorder.closeResponses.append(response)
+                }
+            }
+        }
+        queue.enqueueClose(paneID: paneID) { response in
+            recorder.closeResponses.append(response)
+        }
+
+        #expect(recorder.responses.count == 1)
+        #expect(recorder.responses[0].0 == request.id)
+        #expect(recorder.responses[0].1 == .deny)
+        #expect(recorder.presentations == [.clipboard(request), .close(paneID)])
+        #expect(queue.pendingCount == 0)
+        let closeCompletion = try #require(recorder.completions.last)
+        closeCompletion(.deny)
+        closeCompletion(.allow)
+
+        #expect(recorder.closeResponses == [.deny, .deny])
+        #expect(queue.activePresentation == nil)
+    }
+
+    @Test
     func duplicatePendingCloseCoalescesPresentationAndResolvesAllCompletions() throws {
         let recorder = ConfirmationQueueRecorder()
         let queue = GhosttyConfirmationQueue { presentation, completion in
