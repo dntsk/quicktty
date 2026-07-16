@@ -899,6 +899,227 @@ extension GhosttyBridgeTests {
         #expect(try Data(contentsOf: fixture.resultURL) == Data("a猫".utf8))
     }
     @Test
+    func broadcastReplaysPrintableKeyToTwoSurfacesWithoutReinterpretingTheActiveResponder()
+        throws
+    {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let target = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        target.frame = source.frame
+        window.contentView?.addSubview(target)
+        window.makeFirstResponder(source)
+        bridge.inputTargetProvider = { _ in
+            [target.paneID, source.paneID, target.paneID]
+        }
+        let event = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            keyCode: 0
+        )
+        let surfaces = [source, target]
+        let routeCount = bridge.inputObservationsForTesting.count
+        let inputCounts = surfaces.map(\.inputObservationsForTesting.count)
+        let interpretedTextCounts = surfaces.map(\.interpretedTextObservationsForTesting.count)
+
+        source.keyDown(with: event)
+
+        #expect(bridge.inputObservationsForTesting.count == routeCount + 2)
+        #expect(
+            bridge.inputObservationsForTesting.suffix(2).map(\.paneID) == [
+                source.paneID,
+                target.paneID,
+            ]
+        )
+        for (surface, inputCount) in zip(surfaces, inputCounts) {
+            #expect(surface.inputObservationsForTesting.count == inputCount + 1)
+            #expect(surface.inputObservationsForTesting.last?.text == "a")
+        }
+        #expect(source.interpretedTextObservationsForTesting.count == interpretedTextCounts[0] + 1)
+        #expect(target.interpretedTextObservationsForTesting.count == interpretedTextCounts[1])
+    }
+
+    @Test
+    func broadcastReplaysPrintableKeyToThreeSurfacesWithoutActiveDuplicates() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        for target in [second, third] {
+            target.frame = source.frame
+            window.contentView?.addSubview(target)
+        }
+        window.makeFirstResponder(source)
+        bridge.inputTargetProvider = { _ in
+            [second.paneID, third.paneID, source.paneID, second.paneID]
+        }
+        let event = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            keyCode: 0
+        )
+        let surfaces = [source, second, third]
+        let routeCount = bridge.inputObservationsForTesting.count
+        let inputCounts = surfaces.map(\.inputObservationsForTesting.count)
+        let interpretedTextCounts = surfaces.map(\.interpretedTextObservationsForTesting.count)
+
+        source.keyDown(with: event)
+
+        #expect(bridge.inputObservationsForTesting.count == routeCount + 3)
+        #expect(
+            bridge.inputObservationsForTesting.suffix(3).map(\.paneID) == [
+                source.paneID,
+                second.paneID,
+                third.paneID,
+            ]
+        )
+        for (surface, inputCount) in zip(surfaces, inputCounts) {
+            #expect(surface.inputObservationsForTesting.count == inputCount + 1)
+            #expect(surface.inputObservationsForTesting.last?.text == "a")
+        }
+        #expect(source.interpretedTextObservationsForTesting.count == interpretedTextCounts[0] + 1)
+        #expect(second.interpretedTextObservationsForTesting.count == interpretedTextCounts[1])
+        #expect(third.interpretedTextObservationsForTesting.count == interpretedTextCounts[2])
+    }
+
+    @Test
+    func broadcastReplaysBackspaceAndDeleteToEverySurface() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        for target in [second, third] {
+            target.frame = source.frame
+            window.contentView?.addSubview(target)
+        }
+        window.makeFirstResponder(source)
+        bridge.inputTargetProvider = { _ in
+            [second.paneID, third.paneID, source.paneID]
+        }
+        let backspace = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "\u{8}",
+            charactersIgnoringModifiers: "\u{8}",
+            keyCode: 51
+        )
+        let delete = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: String(UnicodeScalar(NSDeleteFunctionKey)!),
+            charactersIgnoringModifiers: String(UnicodeScalar(NSDeleteFunctionKey)!),
+            keyCode: 117,
+            timestamp: 2
+        )
+        let surfaces = [source, second, third]
+
+        for event in [backspace, delete] {
+            let inputCounts = surfaces.map(\.inputObservationsForTesting.count)
+
+            source.keyDown(with: event)
+
+            #expect(
+                bridge.inputObservationsForTesting.suffix(3).map(\.paneID) == [
+                    source.paneID,
+                    second.paneID,
+                    third.paneID,
+                ]
+            )
+            for (surface, inputCount) in zip(surfaces, inputCounts) {
+                let observation = try #require(surface.inputObservationsForTesting.last)
+                #expect(surface.inputObservationsForTesting.count == inputCount + 1)
+                #expect(observation.action == .press)
+                #expect(observation.keyCode == UInt32(event.keyCode))
+                #expect(observation.text == nil)
+            }
+        }
+    }
+
+    @Test
+    func broadcastReplaysKeyUpAndFlagsChangedExactlyOnceToEverySurface() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in
+            [third.paneID, source.paneID, second.paneID, third.paneID]
+        }
+        let keyUp = try makeKeyboardEvent(
+            type: .keyUp,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            keyCode: 0
+        )
+        let rightShiftFlags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.shift.rawValue | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+        let flagsChanged = try makeKeyboardEvent(
+            type: .flagsChanged,
+            modifierFlags: rightShiftFlags,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            keyCode: 0x3C,
+            timestamp: 2
+        )
+        let surfaces = [source, second, third]
+        let inputCounts = surfaces.map(\.inputObservationsForTesting.count)
+        let routeCount = bridge.inputObservationsForTesting.count
+
+        source.keyUp(with: keyUp)
+        source.flagsChanged(with: flagsChanged)
+
+        #expect(bridge.inputObservationsForTesting.count == routeCount + 6)
+        #expect(
+            bridge.inputObservationsForTesting.suffix(6).map(\.paneID) == [
+                source.paneID,
+                third.paneID,
+                second.paneID,
+                source.paneID,
+                third.paneID,
+                second.paneID,
+            ]
+        )
+        for (surface, inputCount) in zip(surfaces, inputCounts) {
+            let observations = surface.inputObservationsForTesting
+            #expect(observations.count == inputCount + 2)
+            #expect(observations[observations.count - 2].action == .release)
+            #expect(observations.last?.action == .press)
+            #expect(observations.last?.modifiers.contains(.shiftRight) == true)
+        }
+    }
+
+    @Test
     func broadcastRoutesSameKeyboardEventToEveryDistinctTargetAndDefaultsToSourceOnly() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

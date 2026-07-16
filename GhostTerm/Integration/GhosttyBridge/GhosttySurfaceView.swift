@@ -102,6 +102,28 @@ enum GhosttySurfaceBindingAction: Sendable {
     }
 }
 
+@MainActor
+struct GhosttySurfaceInputCapture {
+    let wasProcessed: Bool
+    let replay: GhosttySurfaceInputReplay?
+}
+
+@MainActor
+enum GhosttySurfaceInputReplay {
+    enum KeyText {
+        case sourceInterpreted([String])
+        case targetFallback
+    }
+
+    case keyDown(
+        action: GhosttyInputAction,
+        text: KeyText,
+        composing: Bool
+    )
+    case keyUp
+    case flagsChanged
+}
+
 enum GhosttySurfaceCallbackEvent: Sendable {
     case clipboardRead(token: UInt, location: GhosttyClipboardLocation)
     case clipboardConfirmation(GhosttyClipboardConfirmationRequest)
@@ -147,6 +169,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     #if DEBUG
         private var inputObservations: [GhosttySurfaceInputObservation] = []
+        private var interpretedTextObservations: [String] = []
         private var preeditObservations: [GhosttySurfacePreeditObservation] = []
         private var imeGeometryObservations: [GhosttySurfaceIMEGeometryObservation] = []
         private var mouseButtonObservations: [GhosttySurfaceMouseButtonObservation] = []
@@ -384,6 +407,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         var inputObservationsForTesting: [GhosttySurfaceInputObservation] {
             inputObservations
+        }
+
+        var interpretedTextObservationsForTesting: [String] {
+            interpretedTextObservations
         }
 
         var preeditObservationsForTesting: [GhosttySurfacePreeditObservation] {
@@ -854,15 +881,44 @@ extension GhosttySurfaceView {
 
 extension GhosttySurfaceView {
     func processInputEvent(_ event: NSEvent) -> Bool {
+        captureInputEvent(event).wasProcessed
+    }
+
+    func captureInputEvent(_ event: NSEvent) -> GhosttySurfaceInputCapture {
         switch event.type {
         case .keyDown:
-            processKeyDown(event)
+            captureKeyDown(event)
         case .keyUp:
-            keyAction(.release, event: event)
+            GhosttySurfaceInputCapture(
+                wasProcessed: keyAction(.release, event: event),
+                replay: .keyUp
+            )
         case .flagsChanged:
-            processFlagsChanged(event)
+            GhosttySurfaceInputCapture(
+                wasProcessed: processFlagsChanged(event),
+                replay: .flagsChanged
+            )
         default:
-            false
+            GhosttySurfaceInputCapture(wasProcessed: false, replay: nil)
+        }
+    }
+
+    func replayInputEvent(
+        _ event: NSEvent,
+        replay: GhosttySurfaceInputReplay
+    ) -> Bool {
+        switch replay {
+        case .keyDown(let action, let text, let composing):
+            return replayKeyDown(
+                event,
+                action: action,
+                text: text,
+                composing: composing
+            )
+        case .keyUp:
+            return keyAction(.release, event: event)
+        case .flagsChanged:
+            return processFlagsChanged(event)
         }
     }
 
@@ -983,37 +1039,9 @@ extension GhosttySurfaceView {
         NSApp.sendEvent(currentEvent)
     }
 
-    private func processKeyDown(_ event: NSEvent) -> Bool {
-        guard let surface else { return false }
-
-        let reportedTranslationModifiers = GhosttyInput.modifierFlags(
-            from: ghostty_surface_key_translation_mods(
-                surface,
-                GhosttyInput.modifiers(from: event.modifierFlags).cValue
-            )
-        )
-        let translationModifiers = GhosttyInput.translationModifiers(
-            original: event.modifierFlags,
-            reported: reportedTranslationModifiers
-        )
-
-        let translationEvent: NSEvent
-        if translationModifiers == event.modifierFlags {
-            translationEvent = event
-        } else {
-            translationEvent =
-                NSEvent.keyEvent(
-                    with: event.type,
-                    location: event.locationInWindow,
-                    modifierFlags: translationModifiers,
-                    timestamp: event.timestamp,
-                    windowNumber: event.windowNumber,
-                    context: nil,
-                    characters: event.characters(byApplyingModifiers: translationModifiers) ?? "",
-                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-                    isARepeat: event.isARepeat,
-                    keyCode: event.keyCode
-                ) ?? event
+    private func captureKeyDown(_ event: NSEvent) -> GhosttySurfaceInputCapture {
+        guard let translationEvent = translationEvent(for: event) else {
+            return GhosttySurfaceInputCapture(wasProcessed: false, replay: nil)
         }
 
         let action: GhosttyInputAction = event.isARepeat ? .repeat : .press
@@ -1029,7 +1057,7 @@ extension GhosttySurfaceView {
         if !hadMarkedText,
             keyboardLayoutBefore != GhosttyInput.currentKeyboardLayoutID
         {
-            return true
+            return GhosttySurfaceInputCapture(wasProcessed: true, replay: nil)
         }
 
         syncPreedit(clearIfNeeded: hadMarkedText)
@@ -1037,30 +1065,119 @@ extension GhosttySurfaceView {
         if let accumulatedText = keyTextAccumulator,
             !accumulatedText.isEmpty
         {
-            var result = false
-            for text in accumulatedText {
-                result = keyAction(
-                    action,
-                    event: event,
-                    translationEvent: translationEvent,
-                    text: text
+            let result = sendKeyTexts(
+                accumulatedText,
+                action: action,
+                event: event,
+                translationEvent: translationEvent
+            )
+            return GhosttySurfaceInputCapture(
+                wasProcessed: result,
+                replay: .keyDown(
+                    action: action,
+                    text: .sourceInterpreted(accumulatedText),
+                    composing: false
                 )
-                if callbackContextOwnership?.takeUnretainedValue()
-                    .hasTerminalClosePending == true
-                {
-                    break
-                }
-            }
-            return result
+            )
         }
 
-        return keyAction(
+        let composing = markedText.length > 0 || hadMarkedText
+        let result = keyAction(
             action,
             event: event,
             translationEvent: translationEvent,
             text: controlSlashText(for: event) ?? translationEvent.ghosttyCharacters,
-            composing: markedText.length > 0 || hadMarkedText
+            composing: composing
         )
+        return GhosttySurfaceInputCapture(
+            wasProcessed: result,
+            replay: .keyDown(
+                action: action,
+                text: .targetFallback,
+                composing: composing
+            )
+        )
+    }
+
+    private func replayKeyDown(
+        _ event: NSEvent,
+        action: GhosttyInputAction,
+        text: GhosttySurfaceInputReplay.KeyText,
+        composing: Bool
+    ) -> Bool {
+        guard let translationEvent = translationEvent(for: event) else { return false }
+
+        switch text {
+        case .sourceInterpreted(let texts):
+            // Marked text belongs to AppKit's current responder, so only committed text is replayed.
+            return sendKeyTexts(
+                texts,
+                action: action,
+                event: event,
+                translationEvent: translationEvent,
+                composing: composing
+            )
+        case .targetFallback:
+            return keyAction(
+                action,
+                event: event,
+                translationEvent: translationEvent,
+                text: controlSlashText(for: event) ?? translationEvent.ghosttyCharacters,
+                composing: composing
+            )
+        }
+    }
+
+    private func translationEvent(for event: NSEvent) -> NSEvent? {
+        guard let surface else { return nil }
+
+        let reportedTranslationModifiers = GhosttyInput.modifierFlags(
+            from: ghostty_surface_key_translation_mods(
+                surface,
+                GhosttyInput.modifiers(from: event.modifierFlags).cValue
+            )
+        )
+        let translationModifiers = GhosttyInput.translationModifiers(
+            original: event.modifierFlags,
+            reported: reportedTranslationModifiers
+        )
+        guard translationModifiers != event.modifierFlags else { return event }
+
+        return NSEvent.keyEvent(
+            with: event.type,
+            location: event.locationInWindow,
+            modifierFlags: translationModifiers,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: event.characters(byApplyingModifiers: translationModifiers) ?? "",
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        ) ?? event
+    }
+
+    private func sendKeyTexts(
+        _ texts: [String],
+        action: GhosttyInputAction,
+        event: NSEvent,
+        translationEvent: NSEvent,
+        composing: Bool = false
+    ) -> Bool {
+        var result = false
+        for text in texts {
+            result = keyAction(
+                action,
+                event: event,
+                translationEvent: translationEvent,
+                text: text,
+                composing: composing
+            )
+            if callbackContextOwnership?.takeUnretainedValue().hasTerminalClosePending == true {
+                break
+            }
+        }
+        return result
     }
 
     private func processFlagsChanged(_ event: NSEvent) -> Bool {
@@ -1271,6 +1388,10 @@ extension GhosttySurfaceView {
         default:
             return
         }
+
+        #if DEBUG
+            interpretedTextObservations.append(text)
+        #endif
 
         unmarkText()
 

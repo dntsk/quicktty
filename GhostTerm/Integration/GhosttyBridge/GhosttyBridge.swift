@@ -527,8 +527,38 @@ final class GhosttyBridge {
 
     private func routeInput(_ event: NSEvent, from paneID: PaneID) {
         let targetPaneIDs = inputTargetPaneIDs(from: paneID)
-        for targetPaneID in targetPaneIDs {
-            let wasProcessed = surfaces[targetPaneID]?.processInputEvent(event) ?? false
+        guard let source = surfaces[paneID] else {
+            #if DEBUG
+                inputObservations.append(
+                    GhosttyBridgeInputObservation(
+                        paneID: paneID,
+                        eventIdentifier: ObjectIdentifier(event),
+                        wasProcessed: false
+                    )
+                )
+            #endif
+            return
+        }
+
+        let capture = source.captureInputEvent(event)
+
+        #if DEBUG
+            inputObservations.append(
+                GhosttyBridgeInputObservation(
+                    paneID: paneID,
+                    eventIdentifier: ObjectIdentifier(event),
+                    wasProcessed: capture.wasProcessed
+                )
+            )
+        #endif
+
+        guard let replay = capture.replay else { return }
+        for targetPaneID in targetPaneIDs where targetPaneID != paneID {
+            let wasProcessed =
+                surfaces[targetPaneID]?.replayInputEvent(
+                    event,
+                    replay: replay
+                ) ?? false
 
             #if DEBUG
                 inputObservations.append(
