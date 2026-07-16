@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class WorkspaceViewController: NSViewController {
-    static let chromeHeight: CGFloat = 34
+    static let chromeHeight: CGFloat = 28
 
     var onActivateWorkspace: ((WorkspaceID) -> Void)?
     var onActivateTab: ((TabID) -> Void)?
@@ -14,7 +14,6 @@ final class WorkspaceViewController: NSViewController {
     let workspaceSelector = WorkspaceSelector()
     let tabBarViewController = TabBarViewController()
     private let chromeView = NSView()
-    private let separatorView = NSView()
     private let terminalContentView = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No tabs in this workspace")
     private var chromePalette = GhosttyChromePalette.fallback
@@ -35,9 +34,6 @@ final class WorkspaceViewController: NSViewController {
         tabBarView.translatesAutoresizingMaskIntoConstraints = false
         chromeView.addSubview(tabBarView)
 
-        separatorView.wantsLayer = true
-        separatorView.translatesAutoresizingMaskIntoConstraints = false
-
         terminalContentView.identifier = NSUserInterfaceItemIdentifier("terminal-content")
         terminalContentView.wantsLayer = true
         terminalContentView.translatesAutoresizingMaskIntoConstraints = false
@@ -49,7 +45,6 @@ final class WorkspaceViewController: NSViewController {
         terminalContentView.addSubview(emptyLabel)
 
         rootView.addSubview(chromeView)
-        rootView.addSubview(separatorView)
         rootView.addSubview(terminalContentView)
         NSLayoutConstraint.activate([
             chromeView.topAnchor.constraint(equalTo: rootView.topAnchor),
@@ -65,11 +60,7 @@ final class WorkspaceViewController: NSViewController {
             workspaceSelector.widthAnchor.constraint(equalToConstant: 148),
             tabBarView.topAnchor.constraint(equalTo: chromeView.topAnchor),
             tabBarView.bottomAnchor.constraint(equalTo: chromeView.bottomAnchor),
-            separatorView.topAnchor.constraint(equalTo: chromeView.bottomAnchor),
-            separatorView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-            separatorView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            separatorView.heightAnchor.constraint(equalToConstant: 1),
-            terminalContentView.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
+            terminalContentView.topAnchor.constraint(equalTo: chromeView.bottomAnchor),
             terminalContentView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             terminalContentView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             terminalContentView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
@@ -106,10 +97,6 @@ final class WorkspaceViewController: NSViewController {
         let backgroundColor = NSColor(ghosttyRGB: palette.background)
         chromeView.layer?.backgroundColor = backgroundColor.cgColor
         terminalContentView.layer?.backgroundColor = backgroundColor.cgColor
-        separatorView.layer?.backgroundColor =
-            NSColor(ghosttyRGB: palette.foreground)
-            .withAlphaComponent(0.15)
-            .cgColor
 
         let appearanceName: NSAppearance.Name = palette.usesDarkAppearance ? .darkAqua : .aqua
         let appearance = NSAppearance(named: appearanceName)

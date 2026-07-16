@@ -51,7 +51,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let name: String
     }
 
-    static let itemHeight: CGFloat = 34
+    static let itemHeight: CGFloat = 28
 
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
