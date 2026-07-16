@@ -1,0 +1,56 @@
+name: GhostTerm
+options:
+  deploymentTarget:
+    macOS: "15.0"
+  minimumXcodeGenVersion: 2.45.4
+settings:
+  base:
+    ARCHS: arm64
+    ENABLE_APP_SANDBOX: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    GENERATE_INFOPLIST_FILE: YES
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -Wno-incomplete-umbrella"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    SWIFT_VERSION: "6.0"
+targets:
+  GhostTerm:
+    type: application
+    platform: macOS
+    sources:
+      - path: GhostTerm
+    dependencies:
+      - sdk: Carbon.framework
+      - framework: Vendor/ghostty/macos/GhosttyKit.xcframework
+        embed: false
+    settings:
+      base:
+        OTHER_LDFLAGS: "$(inherited) -lstdc++"
+        PRODUCT_BUNDLE_IDENTIFIER: com.dntsk.GhostTerm
+        PRODUCT_NAME: GhostTerm
+  GhostTermTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: GhostTermTests
+    dependencies:
+      - target: GhostTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dntsk.GhostTermTests
+        PRODUCT_NAME: GhostTermTests
+schemes:
+  GhostTerm:
+    build:
+      targets:
+        GhostTerm: all
+        GhostTermTests:
+          - test
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - GhostTermTests
