@@ -70,7 +70,10 @@ struct ConfigDocumentTests {
 
     @Test
     func quakeHeightFormattingAndUpdatePreserveInlineCommentAndCRLF() {
+        #expect(ConfigDocument.formattedQuakeHeight(0.29) == "29%")
+        #expect(ConfigDocument.formattedQuakeHeight(0.07) == "7%")
         #expect(ConfigDocument.formattedQuakeHeight(0.75) == "75%")
+        #expect(ConfigDocument.formattedQuakeHeight(0.731234) == "73.1234%")
         #expect(ConfigDocument.formattedQuakeHeight(0.73125) == "73.125%")
 
         var document = ConfigDocument(

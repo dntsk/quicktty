@@ -149,9 +149,16 @@ struct ConfigDocument: Equatable, Sendable {
     static func formattedQuakeHeight(_ fraction: Double) -> String {
         precondition(fraction.isFinite && fraction > 0 && fraction <= 1)
 
-        var percentage = String(fraction * 100)
-        if percentage.hasSuffix(".0") {
-            percentage.removeLast(2)
+        var percentage = String(
+            format: "%.4f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            fraction * 100
+        )
+        while percentage.last == "0" {
+            percentage.removeLast()
+        }
+        if percentage.last == "." {
+            percentage.removeLast()
         }
         return "\(percentage)%"
     }
