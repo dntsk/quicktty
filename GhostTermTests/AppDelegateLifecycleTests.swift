@@ -157,7 +157,51 @@ struct AppDelegateLifecycleTests {
 
         #expect(fileMenu.items.count == 1)
         #expect(fileMenu.item(withTitle: "New Tab") === existingItem)
-        #expect(existingItem.target === existingTarget)
+        #expect(existingItem.action == #selector(NewTabMenuActionTarget.createNewTab))
+        #expect(existingItem.keyEquivalent == "t")
+        #expect(existingItem.keyEquivalentModifierMask == [.command])
+        #expect(existingItem.target === installedTarget)
+        #expect(NSApp.sendAction(existingItem.action!, to: existingItem.target, from: existingItem))
+        #expect(installedTarget.invocationCount == 1)
+        #expect(existingTarget.invocationCount == 0)
+    }
+
+    @Test
+    func newTabMenuInstallerNormalizesAndDeduplicatesCanonicalItems() {
+        let target = NewTabMenuActionTarget()
+        let mainMenu = NSMenu()
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let commandTItem = NSMenuItem(title: "Foreign Tab", action: nil, keyEquivalent: "T")
+        commandTItem.keyEquivalentModifierMask = [.command]
+        let titledItem = NSMenuItem(title: "New Tab", action: nil, keyEquivalent: "n")
+        let modifiedItem = NSMenuItem(title: "Reopen Tab", action: nil, keyEquivalent: "t")
+        modifiedItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(commandTItem)
+        fileMenu.addItem(titledItem)
+        fileMenu.addItem(modifiedItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: target,
+            action: #selector(NewTabMenuActionTarget.createNewTab)
+        )
+        AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: target,
+            action: #selector(NewTabMenuActionTarget.createNewTab)
+        )
+
+        #expect(fileMenu.items.count == 2)
+        #expect(fileMenu.items.filter { $0.title == "New Tab" }.count == 1)
+        #expect(commandTItem.title == "New Tab")
+        #expect(commandTItem.action == #selector(NewTabMenuActionTarget.createNewTab))
+        #expect(commandTItem.keyEquivalent == "t")
+        #expect(commandTItem.keyEquivalentModifierMask == [.command])
+        #expect(commandTItem.target === target)
+        #expect(fileMenu.items.contains { $0 === modifiedItem })
     }
 
     @Test

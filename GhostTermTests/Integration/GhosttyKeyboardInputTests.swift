@@ -219,17 +219,29 @@ extension GhosttyBridgeTests {
             charactersIgnoringModifiers: "t",
             keyCode: 17
         )
+        let commandCapsLockT = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: "T",
+            charactersIgnoringModifiers: "T",
+            keyCode: 17,
+            timestamp: 2
+        )
         let commandShiftT = try makeKeyboardEvent(
             type: .keyDown,
             modifierFlags: [.command, .shift],
             characters: "T",
             charactersIgnoringModifiers: "t",
             keyCode: 17,
-            timestamp: 2
+            timestamp: 3
         )
 
         let initialRouteCount = bridge.inputObservationsForTesting.count
         #expect(!surface.performKeyEquivalent(with: commandT))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockT))
         #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
         #expect(surface.inputObservationsForTesting.isEmpty)
 

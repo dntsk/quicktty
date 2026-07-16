@@ -874,8 +874,9 @@ extension GhosttySurfaceView {
     }
 
     private func isPlainCommandT(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers == "t"
-            && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command]
+        event.charactersIgnoringModifiers?.lowercased() == "t"
+            && event.modifierFlags.contains(.command)
+            && event.modifierFlags.isDisjoint(with: [.shift, .control, .option])
     }
 
     override func doCommand(by _: Selector) {

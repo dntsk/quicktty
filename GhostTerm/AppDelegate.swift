@@ -150,13 +150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fileMenu = newFileMenu
         }
 
-        guard
-            !fileMenu.items.contains(where: { item in
-                isCanonicalNewTabMenuItem(item) || (item.action == action && item.target === target)
-            })
-        else { return mainMenu }
+        let canonicalItems = fileMenu.items.filter(isCanonicalNewTabMenuItem)
+        guard let canonicalItem = canonicalItems.first else {
+            fileMenu.addItem(makeNewTabMenuItem(target: target, action: action))
+            return mainMenu
+        }
 
-        fileMenu.addItem(makeNewTabMenuItem(target: target, action: action))
+        canonicalItem.title = "New Tab"
+        canonicalItem.action = action
+        canonicalItem.keyEquivalent = "t"
+        canonicalItem.keyEquivalentModifierMask = [.command]
+        canonicalItem.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            fileMenu.removeItem(duplicate)
+        }
         return mainMenu
     }
 
