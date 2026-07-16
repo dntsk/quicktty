@@ -97,28 +97,6 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
-    func newTabButtonCreatesTabThroughWorkspaceCoordinatorRouting() throws {
-        let bridge = try GhosttyBridge()
-        defer { bridge.shutdown() }
-        let coordinator = WindowCoordinator(
-            ghosttyBridge: bridge,
-            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
-        )
-        try coordinator.start()
-
-        coordinator.workspaceViewControllerForTesting.tabBarViewController.newTabButtonForTesting
-            .performClick(nil)
-
-        let activeWorkspace = try #require(
-            coordinator.workspaceStoreForTesting.workspace(
-                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
-            )
-        )
-        #expect(activeWorkspace.tabs.count == 2)
-        #expect(bridge.activeSurfaceCount == 2)
-    }
-
-    @Test
     func createShellTabRollsBackNewSurfaceWhenDestinationWorkspaceIsMissing() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

@@ -53,14 +53,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
-    var onNewTab: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID]) -> Void)?
 
     private let collectionView = NSCollectionView()
     private let collectionViewLayout = NSCollectionViewFlowLayout()
-    private let newTabButton: NSButton = CircularOutlineButton()
     private var tabs: [TerminalTab] = []
     private var destinations: [WorkspaceDestination] = []
     private var chromePalette = GhosttyChromePalette.fallback
@@ -93,33 +91,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
 
-        newTabButton.image = NSImage(
-            systemSymbolName: "plus",
-            accessibilityDescription: "New Tab"
-        )
-        newTabButton.symbolConfiguration = .init(pointSize: 11, weight: .medium)
-        newTabButton.contentTintColor = .secondaryLabelColor
-        newTabButton.isBordered = false
-        newTabButton.focusRingType = .none
-        newTabButton.target = self
-        newTabButton.action = #selector(createNewTab)
-        newTabButton.identifier = NSUserInterfaceItemIdentifier("new-tab-button")
-        newTabButton.setAccessibilityLabel("New Tab")
-        newTabButton.toolTip = "New Tab (Command+T)"
-        newTabButton.translatesAutoresizingMaskIntoConstraints = false
-
         rootView.addSubview(collectionView)
-        rootView.addSubview(newTabButton)
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: rootView.topAnchor),
             collectionView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
-            collectionView.trailingAnchor.constraint(
-                equalTo: newTabButton.leadingAnchor, constant: -4),
-            newTabButton.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -4),
-            newTabButton.centerYAnchor.constraint(equalTo: rootView.centerYAnchor),
-            newTabButton.widthAnchor.constraint(equalToConstant: 28),
-            newTabButton.heightAnchor.constraint(equalToConstant: 28),
+            collectionView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
         ])
         view = rootView
     }
@@ -133,7 +110,6 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         chromePalette = palette
         guard isViewLoaded else { return }
         collectionView.reloadData()
-        newTabButton.needsDisplay = true
     }
 
     func apply(
@@ -246,10 +222,6 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         return true
     }
 
-    @objc private func createNewTab() {
-        onNewTab?()
-    }
-
     private func select(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
         let previousActiveID = selection.activeTabID
         selection.select(tabID, gesture: gesture)
@@ -329,24 +301,6 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             && lhs.right == rhs.right
     }
 
-    #if DEBUG
-        var newTabButtonForTesting: NSButton {
-            newTabButton
-        }
-
-        var usesScrollViewForTesting: Bool {
-            collectionView.superview is NSScrollView
-        }
-
-        var newTabButtonIsCircularForTesting: Bool {
-            newTabButton is CircularOutlineButton
-        }
-
-        var newTabButtonSizeForTesting: NSSize {
-            NSSize(width: 28, height: 28)
-        }
-    #endif
-
     @objc private func moveToNewWorkspace() {
         let selectedIDs = selection.selectedTabIDsInOrder
         guard !selectedIDs.isEmpty else { return }
@@ -358,65 +312,6 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let selectedIDs = selection.selectedTabIDsInOrder
         guard !selectedIDs.isEmpty else { return }
         onMoveToWorkspace?(selectedIDs, WorkspaceID(rawValue: rawID as UUID))
-    }
-}
-
-@MainActor
-private final class CircularOutlineButton: NSButton {
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false {
-        didSet { needsDisplay = true }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
-        if isHovered {
-            NSColor.labelColor.withAlphaComponent(0.08).setFill()
-            path.fill()
-        }
-        NSColor.separatorColor.withAlphaComponent(0.8).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-
-        guard let image else { return }
-        let imageSize = image.size
-        let imageRect = NSRect(
-            x: bounds.midX - imageSize.width / 2,
-            y: bounds.midY - imageSize.height / 2,
-            width: imageSize.width,
-            height: imageSize.height
-        )
-        image.draw(
-            in: imageRect,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1,
-            respectFlipped: true,
-            hints: nil
-        )
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited],
-            owner: self,
-            userInfo: nil
-        )
-        self.trackingArea = trackingArea
-        addTrackingArea(trackingArea)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
     }
 }
 

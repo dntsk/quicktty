@@ -86,31 +86,13 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func newTabButtonIsAccessibleAndInvokesCallbackOnceWithoutTabs() {
-        let controller = WorkspaceViewController()
-        var newTabCount = 0
-        controller.onNewTab = { newTabCount += 1 }
+    func tabBarHasNoNewTabControl() {
+        let workspaceController = WorkspaceViewController()
+        workspaceController.apply(WorkspaceStore())
 
-        controller.apply(WorkspaceStore())
-        let button = controller.tabBarViewController.newTabButtonForTesting
-        button.performClick(nil)
-
-        #expect(button.identifier?.rawValue == "new-tab-button")
-        #expect(button.accessibilityLabel() == "New Tab")
-        #expect(button.toolTip == "New Tab (Command+T)")
-        #expect(newTabCount == 1)
-    }
-
-    @Test
-    func workspaceControllerForwardsNewTabAction() {
-        let controller = WorkspaceViewController()
-        var newTabCount = 0
-        controller.onNewTab = { newTabCount += 1 }
-
-        controller.apply(WorkspaceStore())
-        controller.tabBarViewController.newTabButtonForTesting.performClick(nil)
-
-        #expect(newTabCount == 1)
+        #expect(
+            !containsNewTabControl(in: workspaceController.tabBarViewController.view)
+        )
     }
 
     @Test(arguments: [1, 2, 5, 24])
@@ -122,10 +104,7 @@ struct WorkspacePresentationTests {
         )
 
         #expect(metrics.itemWidth >= 0)
-        #expect(metrics.occupiedWidth <= availableWidth)
-        #expect(
-            metrics.itemWidth * CGFloat(tabCount) + metrics.spacing * CGFloat(tabCount - 1)
-                + metrics.horizontalInset * 2 <= availableWidth)
+        #expect(metrics.occupiedWidth == availableWidth)
     }
 
     @Test
@@ -174,18 +153,25 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func tabBarHasNoScrollViewAndUsesCircularAccessibleNewTabButton() {
-        let workspaceController = WorkspaceViewController()
-        workspaceController.apply(WorkspaceStore())
-        let controller = workspaceController.tabBarViewController
-        let button = controller.newTabButtonForTesting
+    func tabBarCollectionFillsRootWidthWithoutScrollView() {
+        let tabBar = TabBarViewController()
+        tabBar.view.frame = NSRect(x: 0, y: 0, width: 500, height: 34)
+        tabBar.view.layoutSubtreeIfNeeded()
 
-        #expect(!controller.usesScrollViewForTesting)
-        #expect(button.accessibilityLabel() == "New Tab")
-        #expect(button.toolTip == "New Tab (Command+T)")
-        #expect(controller.newTabButtonIsCircularForTesting)
-        #expect(!button.isBordered)
-        #expect(button.focusRingType == .none)
-        #expect(controller.newTabButtonSizeForTesting == NSSize(width: 28, height: 28))
+        let collectionViews = tabBar.view.subviews.compactMap { $0 as? NSCollectionView }
+
+        #expect(collectionViews.count == 1)
+        #expect(collectionViews[0].frame.minX == tabBar.view.bounds.minX)
+        #expect(collectionViews[0].frame.maxX == tabBar.view.bounds.maxX)
+        #expect(!(collectionViews[0].superview is NSScrollView))
+    }
+
+    private func containsNewTabControl(in view: NSView) -> Bool {
+        if view.identifier?.rawValue == "new-tab-button"
+            || (view as? NSButton)?.accessibilityLabel() == "New Tab"
+        {
+            return true
+        }
+        return view.subviews.contains { containsNewTabControl(in: $0) }
     }
 }

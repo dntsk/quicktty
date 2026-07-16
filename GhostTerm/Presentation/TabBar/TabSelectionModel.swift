@@ -23,13 +23,20 @@ struct TabSelectionModel: Equatable, Sendable {
     }
 
     mutating func synchronize(tabIDs: [TabID], activeTabID: TabID?) {
+        let previousActiveTabID = self.activeTabID
         orderedTabIDs = tabIDs
         selectedTabIDs.formIntersection(tabIDs)
         self.activeTabID = activeTabID.flatMap { tabIDs.contains($0) ? $0 : nil }
         if let anchorTabID, !tabIDs.contains(anchorTabID) {
             self.anchorTabID = nil
         }
-        if selectedTabIDs.isEmpty, let activeTabID = self.activeTabID {
+        if let activeTabID = self.activeTabID,
+            activeTabID != previousActiveTabID,
+            !selectedTabIDs.contains(activeTabID)
+        {
+            selectedTabIDs = [activeTabID]
+            anchorTabID = activeTabID
+        } else if selectedTabIDs.isEmpty, let activeTabID = self.activeTabID {
             selectedTabIDs = [activeTabID]
             anchorTabID = activeTabID
         }

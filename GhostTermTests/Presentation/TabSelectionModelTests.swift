@@ -61,6 +61,55 @@ struct TabSelectionModelTests {
     }
 
     @Test
+    func synchronizeSelectsOnlyNewlyAppendedActiveTab() {
+        let ids = [tabID(1), tabID(2)]
+        let newTabID = tabID(3)
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[0])
+
+        model.synchronize(tabIDs: ids + [newTabID], activeTabID: newTabID)
+
+        #expect(model.activeTabID == newTabID)
+        #expect(model.selectedTabIDs == [newTabID])
+        #expect(model.selectedTabIDsInOrder == [newTabID])
+    }
+
+    @Test
+    func synchronizeSelectsOnlyExternallyActivatedUnselectedTab() {
+        let ids = [tabID(1), tabID(2), tabID(3)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[0])
+        model.select(ids[1], gesture: .commandClick)
+
+        model.synchronize(tabIDs: ids, activeTabID: ids[2])
+
+        #expect(model.activeTabID == ids[2])
+        #expect(model.selectedTabIDs == [ids[2]])
+    }
+
+    @Test
+    func synchronizePreservesMultiSelectionWhenExternalActiveTabIsSelected() {
+        let ids = [tabID(1), tabID(2), tabID(3)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[0])
+        model.select(ids[1], gesture: .commandClick)
+
+        model.synchronize(tabIDs: ids, activeTabID: ids[0])
+
+        #expect(model.activeTabID == ids[0])
+        #expect(model.selectedTabIDsInOrder == [ids[0], ids[1]])
+    }
+
+    @Test
+    func synchronizePreservesSelectionWhenActiveTabIsUnchanged() {
+        let ids = [tabID(1), tabID(2), tabID(3)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[0])
+        model.select(ids[1], gesture: .commandClick)
+
+        model.synchronize(tabIDs: ids, activeTabID: ids[1])
+
+        #expect(model.activeTabID == ids[1])
+        #expect(model.selectedTabIDsInOrder == [ids[0], ids[1]])
+    }
+
+    @Test
     func reorderMovesSelectedTabsTogetherAndPreservesTheirOrder() {
         let ids = [tabID(1), tabID(2), tabID(3), tabID(4)]
         var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[1])

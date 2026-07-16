@@ -112,7 +112,7 @@ git add GhostTerm/WindowCoordinator.swift GhostTerm/Integration/GhosttyBridge Gh
 git commit -m "feat: manage terminal surfaces per tab"
 ```
 
-### Task 4: Add New Tab UI actions
+### Task 4: Add New Tab keyboard and menu actions
 
 **Files:**
 - Modify: `GhostTerm/Presentation/WorkspaceViewController.swift`
@@ -124,7 +124,7 @@ git commit -m "feat: manage terminal surfaces per tab"
 
 **Step 1: Write failing routing tests**
 
-Test that the tab bar exposes an accessible `+` button, clicking it invokes New Tab once, and the File menu contains New Tab with `Command+T` routed to the same coordinator method. Test creation in the active workspace and focus of the new surface.
+Test that File contains New Tab with `Command+T` routed to the coordinator method. New Tab is available only through the File menu and `Command+T`; the tab bar has no `+` control. Test creation in the active workspace and focus of the new surface.
 
 **Step 2: Run focused tests to verify failure**
 
@@ -132,7 +132,7 @@ Expected: FAIL because no New Tab UI action exists.
 
 **Step 3: Implement minimal UI**
 
-Place a compact `+` button after the horizontal tab collection and before flexible space. Add `onNewTab` through `TabBarViewController` and `WorkspaceViewController`. Install a File → New Tab item with `Command+T` in `AppDelegate`; route both paths to `WindowCoordinator.createNewTab()`. Keep the action available for empty workspaces and both presentation modes.
+Keep the tab bar free of a New Tab control. Install a File → New Tab item with `Command+T` in `AppDelegate` and route it to `WindowCoordinator.createNewTab()`. Keep the action available for empty workspaces and both presentation modes.
 
 **Step 4: Run focused tests, format, lint, and build**
 
