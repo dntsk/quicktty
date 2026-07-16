@@ -116,15 +116,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
 
-    static func makeNewTabMenuItem(target: AppDelegate) -> NSMenuItem {
-        let item = NSMenuItem(
-            title: "New Tab",
-            action: newTabMenuItemAction,
-            keyEquivalent: "t"
-        )
+    static func makeNewTabMenuItem(
+        target: AnyObject,
+        action: Selector = newTabMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "New Tab", action: action, keyEquivalent: "t")
         item.keyEquivalentModifierMask = [.command]
         item.target = target
         return item
+    }
+
+    @discardableResult
+    static func installNewTabMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = newTabMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let fileMenu: NSMenu
+        if let fileItem = mainMenu.item(withTitle: "File") {
+            if let existingFileMenu = fileItem.submenu {
+                fileMenu = existingFileMenu
+            } else {
+                let newFileMenu = NSMenu(title: "File")
+                fileItem.submenu = newFileMenu
+                fileMenu = newFileMenu
+            }
+        } else {
+            let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+            let newFileMenu = NSMenu(title: "File")
+            fileItem.submenu = newFileMenu
+            mainMenu.addItem(fileItem)
+            fileMenu = newFileMenu
+        }
+
+        guard
+            !fileMenu.items.contains(where: { item in
+                isCanonicalNewTabMenuItem(item) || (item.action == action && item.target === target)
+            })
+        else { return mainMenu }
+
+        fileMenu.addItem(makeNewTabMenuItem(target: target, action: action))
+        return mainMenu
+    }
+
+    private static func isCanonicalNewTabMenuItem(_ item: NSMenuItem) -> Bool {
+        item.title == "New Tab"
+            || (item.keyEquivalent.lowercased() == "t"
+                && item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+                    == [.command])
     }
 
     @objc private func createNewTab() {
@@ -185,38 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installNewTabMenuItem() {
-        let mainMenu: NSMenu
-        if let existingMainMenu = NSApp.mainMenu {
-            mainMenu = existingMainMenu
-        } else {
-            let newMainMenu = NSMenu()
-            NSApp.mainMenu = newMainMenu
-            mainMenu = newMainMenu
+        let mainMenu = Self.installNewTabMenuItem(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
         }
-
-        let fileMenu: NSMenu
-        if let fileItem = mainMenu.item(withTitle: "File") {
-            if let existingFileMenu = fileItem.submenu {
-                fileMenu = existingFileMenu
-            } else {
-                let newFileMenu = NSMenu(title: "File")
-                fileItem.submenu = newFileMenu
-                fileMenu = newFileMenu
-            }
-        } else {
-            let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-            let newFileMenu = NSMenu(title: "File")
-            fileItem.submenu = newFileMenu
-            mainMenu.addItem(fileItem)
-            fileMenu = newFileMenu
-        }
-
-        guard
-            !fileMenu.items.contains(where: {
-                $0.action == Self.newTabMenuItemAction && $0.target === self
-            })
-        else { return }
-        fileMenu.addItem(Self.makeNewTabMenuItem(target: self))
     }
 
     private func installPresentationMenuItem() {

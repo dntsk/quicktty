@@ -438,6 +438,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             normalWindowController.window
         }
 
+        var activeWindowForTesting: NSWindow? {
+            activeWindow
+        }
+
         var workspaceViewControllerForTesting: WorkspaceViewController {
             workspaceViewController
         }

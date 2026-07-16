@@ -37,6 +37,8 @@ struct WindowCoordinatorTabLifecycleTests {
                 Set(coordinator.surfaceIDsForTesting)
                     == Set([firstSurface.paneID, secondSurface.paneID])
             )
+            #expect(secondSurface.isActive)
+            #expect(coordinator.activeWindowForTesting?.firstResponder === secondSurface)
 
             coordinator.activateTabForTesting(firstTabID)
             #expect(coordinator.activeSurfaceForTesting === firstSurface)
@@ -46,6 +48,26 @@ struct WindowCoordinatorTabLifecycleTests {
             coordinator.activateTabForTesting(secondTabID)
             #expect(coordinator.activeSurfaceForTesting === secondSurface)
         }
+    }
+
+    @Test
+    func createNewTabActivatesAndFocusesNewSurfaceInQuakeMode() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: .quake,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+
+        coordinator.createNewTab()
+
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        #expect(secondSurface.paneID != firstSurface.paneID)
+        #expect(secondSurface.isActive)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === secondSurface)
     }
 
     @Test
