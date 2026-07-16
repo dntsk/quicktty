@@ -417,6 +417,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         func isPlainCommandDigitForTesting(_ event: NSEvent) -> Bool {
             isPlainCommandDigit(event)
         }
+
+        func isSplitPaneShortcutForTesting(_ event: NSEvent) -> Bool {
+            isSplitPaneShortcut(event)
+        }
     #endif
 
     private func startObservingWindow(_ window: NSWindow?) {
@@ -831,7 +835,8 @@ extension GhosttySurfaceView {
             let surface
         else { return false }
 
-        guard !isPlainCommandT(event), !isPlainCommandDigit(event) else {
+        guard !isPlainCommandT(event), !isPlainCommandDigit(event), !isSplitPaneShortcut(event)
+        else {
             lastPerformKeyEvent = nil
             return false
         }
@@ -890,6 +895,12 @@ extension GhosttySurfaceView {
     private func isPlainCommandDigit(_ event: NSEvent) -> Bool {
         guard let character = event.charactersIgnoringModifiers?.first else { return false }
         return "123456789".contains(character) && isPlainCommandShortcut(event)
+    }
+
+    private func isSplitPaneShortcut(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers?.lowercased() == "d"
+            && event.modifierFlags.contains(.command)
+            && event.modifierFlags.isDisjoint(with: [.control, .option])
     }
 
     private func isPlainCommandShortcut(_ event: NSEvent) -> Bool {

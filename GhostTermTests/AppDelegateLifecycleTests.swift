@@ -22,6 +22,20 @@ private final class TabSelectionMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class SplitPaneMenuActionTarget: NSObject {
+    private(set) var splitRightInvocationCount = 0
+    private(set) var splitDownInvocationCount = 0
+
+    @objc func splitRight() {
+        splitRightInvocationCount += 1
+    }
+
+    @objc func splitDown() {
+        splitDownInvocationCount += 1
+    }
+}
+
+@MainActor
 struct AppDelegateLifecycleTests {
     @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
@@ -247,6 +261,109 @@ struct AppDelegateLifecycleTests {
         )
 
         #expect(fileMenu.items.count == 2)
+    }
+
+    @Test
+    func splitPaneMenuInstallerCreatesExactShortcutsAfterNewTabAndDispatchesActions() throws {
+        let newTabTarget = NewTabMenuActionTarget()
+        let splitTarget = SplitPaneMenuActionTarget()
+        let mainMenu = AppDelegate.installNewTabMenuItem(
+            in: nil,
+            target: newTabTarget,
+            action: #selector(NewTabMenuActionTarget.createNewTab)
+        )
+
+        let installedMainMenu = AppDelegate.installSplitPaneMenuItems(
+            in: mainMenu,
+            target: splitTarget,
+            splitRightAction: #selector(SplitPaneMenuActionTarget.splitRight),
+            splitDownAction: #selector(SplitPaneMenuActionTarget.splitDown)
+        )
+        let fileMenu = try #require(installedMainMenu.item(withTitle: "File")?.submenu)
+        let newTabIndex = fileMenu.indexOfItem(withTitle: "New Tab")
+        let splitRight = try #require(fileMenu.item(withTitle: "Split Right"))
+        let splitDown = try #require(fileMenu.item(withTitle: "Split Down"))
+
+        #expect(newTabIndex >= 0)
+        #expect(fileMenu.items.count == 3)
+        #expect(fileMenu.items[newTabIndex + 1] === splitRight)
+        #expect(fileMenu.items[newTabIndex + 2] === splitDown)
+        #expect(splitRight.keyEquivalent == "d")
+        #expect(splitRight.keyEquivalentModifierMask == [.command])
+        #expect(splitDown.keyEquivalent == "d")
+        #expect(splitDown.keyEquivalentModifierMask == [.command, .shift])
+        #expect(NSApp.sendAction(splitRight.action!, to: splitRight.target, from: splitRight))
+        #expect(NSApp.sendAction(splitDown.action!, to: splitDown.target, from: splitDown))
+        #expect(splitTarget.splitRightInvocationCount == 1)
+        #expect(splitTarget.splitDownInvocationCount == 1)
+    }
+
+    @Test
+    func splitPaneMenuInstallerNormalizesDuplicatesAndPreservesModifiedForeignItems() throws {
+        let target = SplitPaneMenuActionTarget()
+        let mainMenu = NSMenu()
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let commandTItem = NSMenuItem(title: "New Tab", action: nil, keyEquivalent: "t")
+        commandTItem.keyEquivalentModifierMask = [.command]
+        let commandDItem = NSMenuItem(title: "Foreign Right", action: nil, keyEquivalent: "D")
+        commandDItem.keyEquivalentModifierMask = [.command]
+        let titledRightItem = NSMenuItem(title: "Split Right", action: nil, keyEquivalent: "x")
+        let commandShiftDItem = NSMenuItem(title: "Foreign Down", action: nil, keyEquivalent: "D")
+        commandShiftDItem.keyEquivalentModifierMask = [.command, .shift]
+        let titledDownItem = NSMenuItem(title: "Split Down", action: nil, keyEquivalent: "x")
+        let commandOptionDItem = NSMenuItem(
+            title: "Foreign Option", action: nil, keyEquivalent: "d")
+        commandOptionDItem.keyEquivalentModifierMask = [.command, .option]
+        let commandControlDItem = NSMenuItem(
+            title: "Foreign Control", action: nil, keyEquivalent: "d")
+        commandControlDItem.keyEquivalentModifierMask = [.command, .control]
+        [
+            commandTItem,
+            commandDItem,
+            titledRightItem,
+            commandShiftDItem,
+            titledDownItem,
+            commandOptionDItem,
+            commandControlDItem,
+        ].forEach(fileMenu.addItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: NewTabMenuActionTarget(),
+            action: #selector(NewTabMenuActionTarget.createNewTab)
+        )
+        AppDelegate.installSplitPaneMenuItems(
+            in: mainMenu,
+            target: target,
+            splitRightAction: #selector(SplitPaneMenuActionTarget.splitRight),
+            splitDownAction: #selector(SplitPaneMenuActionTarget.splitDown)
+        )
+        AppDelegate.installSplitPaneMenuItems(
+            in: mainMenu,
+            target: target,
+            splitRightAction: #selector(SplitPaneMenuActionTarget.splitRight),
+            splitDownAction: #selector(SplitPaneMenuActionTarget.splitDown)
+        )
+
+        let newTabIndex = fileMenu.indexOfItem(withTitle: "New Tab")
+        let splitRight = try #require(fileMenu.item(withTitle: "Split Right"))
+        let splitDown = try #require(fileMenu.item(withTitle: "Split Down"))
+        #expect(fileMenu.items.count == 5)
+        #expect(fileMenu.items.filter { $0.title == "Split Right" }.count == 1)
+        #expect(fileMenu.items.filter { $0.title == "Split Down" }.count == 1)
+        #expect(fileMenu.items[newTabIndex + 1] === splitRight)
+        #expect(fileMenu.items[newTabIndex + 2] === splitDown)
+        #expect(splitRight === commandDItem)
+        #expect(splitDown === commandShiftDItem)
+        #expect(splitRight.action == #selector(SplitPaneMenuActionTarget.splitRight))
+        #expect(splitDown.action == #selector(SplitPaneMenuActionTarget.splitDown))
+        #expect(splitRight.target === target)
+        #expect(splitDown.target === target)
+        #expect(fileMenu.items.contains { $0 === commandOptionDItem })
+        #expect(fileMenu.items.contains { $0 === commandControlDItem })
     }
 
     @Test

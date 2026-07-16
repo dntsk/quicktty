@@ -250,6 +250,110 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func splitPaneShortcutsReturnToAppKitBeforeBindingsWhileModifiedAndPlainDRemainAvailable()
+        throws
+    {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+KeyD=ignore\n"
+                + "keybind = cmd+shift+KeyD=ignore\n"
+                + "keybind = cmd+opt+KeyD=ignore\n"
+                + "keybind = cmd+ctrl+KeyD=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2
+        )
+        let commandCapsLockD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: "D",
+            charactersIgnoringModifiers: "D",
+            keyCode: 2,
+            timestamp: 2
+        )
+        let commandShiftD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "D",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 3
+        )
+        let commandShiftCapsLockD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift, .capsLock],
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 4
+        )
+        let commandOptionD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 5
+        )
+        let commandControlD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .control],
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 6
+        )
+        let plainD = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "d",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 7
+        )
+        let shiftD = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.shift],
+            characters: "D",
+            charactersIgnoringModifiers: "d",
+            keyCode: 2,
+            timestamp: 8
+        )
+
+        #expect(surface.isSplitPaneShortcutForTesting(commandD))
+        #expect(surface.isSplitPaneShortcutForTesting(commandCapsLockD))
+        #expect(surface.isSplitPaneShortcutForTesting(commandShiftD))
+        #expect(surface.isSplitPaneShortcutForTesting(commandShiftCapsLockD))
+        #expect(!surface.isSplitPaneShortcutForTesting(commandOptionD))
+        #expect(!surface.isSplitPaneShortcutForTesting(commandControlD))
+        #expect(!surface.isSplitPaneShortcutForTesting(plainD))
+        #expect(!surface.isSplitPaneShortcutForTesting(shiftD))
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandD))
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockD))
+        #expect(!surface.performKeyEquivalent(with: commandShiftD))
+        #expect(!surface.performKeyEquivalent(with: commandShiftCapsLockD))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(surface.performKeyEquivalent(with: commandOptionD))
+        #expect(surface.performKeyEquivalent(with: commandControlD))
+        #expect(!surface.performKeyEquivalent(with: plainD))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 2)
+    }
+
+    @Test
     func commandDigitsReturnToAppKitBeforeGhosttyBindingsWhileModifiedDigitsRemainBindable() throws
     {
         let config = try KeyboardShortcutConfig(

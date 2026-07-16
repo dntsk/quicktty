@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             windowCoordinator.applyConfiguration(config)
             try windowCoordinator.start()
             installNewTabMenuItem()
+            installSplitPaneMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
 
@@ -131,6 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
+    static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
+    static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
 
     static func makeNewTabMenuItem(
@@ -150,22 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         action: Selector = newTabMenuItemAction
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
-        let fileMenu: NSMenu
-        if let fileItem = mainMenu.item(withTitle: "File") {
-            if let existingFileMenu = fileItem.submenu {
-                fileMenu = existingFileMenu
-            } else {
-                let newFileMenu = NSMenu(title: "File")
-                fileItem.submenu = newFileMenu
-                fileMenu = newFileMenu
-            }
-        } else {
-            let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-            let newFileMenu = NSMenu(title: "File")
-            fileItem.submenu = newFileMenu
-            mainMenu.addItem(fileItem)
-            fileMenu = newFileMenu
-        }
+        let fileMenu = fileMenu(in: mainMenu)
 
         let canonicalItems = fileMenu.items.filter(isCanonicalNewTabMenuItem)
         guard let canonicalItem = canonicalItems.first else {
@@ -189,6 +177,114 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || (item.keyEquivalent.lowercased() == "t"
                 && item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
                     == [.command])
+    }
+
+    static func makeSplitPaneMenuItem(
+        title: String,
+        modifierMask: NSEvent.ModifierFlags,
+        target: AnyObject,
+        action: Selector
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "d")
+        item.keyEquivalentModifierMask = modifierMask
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installSplitPaneMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        splitRightAction: Selector = splitRightMenuItemAction,
+        splitDownAction: Selector = splitDownMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let fileMenu = fileMenu(in: mainMenu)
+        let splitRight = canonicalSplitPaneMenuItem(
+            in: fileMenu,
+            title: "Split Right",
+            modifierMask: [.command],
+            target: target,
+            action: splitRightAction
+        )
+        let splitDown = canonicalSplitPaneMenuItem(
+            in: fileMenu,
+            title: "Split Down",
+            modifierMask: [.command, .shift],
+            target: target,
+            action: splitDownAction
+        )
+
+        if fileMenu.items.contains(where: { $0 === splitRight }) {
+            fileMenu.removeItem(splitRight)
+        }
+        if fileMenu.items.contains(where: { $0 === splitDown }) {
+            fileMenu.removeItem(splitDown)
+        }
+        let newTabIndex = fileMenu.indexOfItem(withTitle: "New Tab")
+        guard newTabIndex >= 0 else {
+            fileMenu.addItem(splitRight)
+            fileMenu.addItem(splitDown)
+            return mainMenu
+        }
+
+        fileMenu.insertItem(splitRight, at: newTabIndex + 1)
+        fileMenu.insertItem(splitDown, at: newTabIndex + 2)
+        return mainMenu
+    }
+
+    private static func canonicalSplitPaneMenuItem(
+        in menu: NSMenu,
+        title: String,
+        modifierMask: NSEvent.ModifierFlags,
+        target: AnyObject,
+        action: Selector
+    ) -> NSMenuItem {
+        let canonicalItems = menu.items.filter {
+            $0.title == title
+                || ($0.keyEquivalent.lowercased() == "d"
+                    && normalizedShortcutModifiers(for: $0) == modifierMask)
+        }
+        let canonicalItem =
+            canonicalItems.first
+            ?? makeSplitPaneMenuItem(
+                title: title,
+                modifierMask: modifierMask,
+                target: target,
+                action: action
+            )
+        canonicalItem.title = title
+        canonicalItem.action = action
+        canonicalItem.keyEquivalent = "d"
+        canonicalItem.keyEquivalentModifierMask = modifierMask
+        canonicalItem.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            menu.removeItem(duplicate)
+        }
+        return canonicalItem
+    }
+
+    private static func fileMenu(in mainMenu: NSMenu) -> NSMenu {
+        if let fileItem = mainMenu.item(withTitle: "File") {
+            if let existingFileMenu = fileItem.submenu {
+                return existingFileMenu
+            }
+            let newFileMenu = NSMenu(title: "File")
+            fileItem.submenu = newFileMenu
+            return newFileMenu
+        }
+
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let newFileMenu = NSMenu(title: "File")
+        fileItem.submenu = newFileMenu
+        mainMenu.addItem(fileItem)
+        return newFileMenu
+    }
+
+    private static func normalizedShortcutModifiers(for item: NSMenuItem) -> NSEvent.ModifierFlags {
+        item.keyEquivalentModifierMask
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(.capsLock)
     }
 
     static func makeTabSelectionMenuItem(
@@ -261,6 +357,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowCoordinator?.createNewTab()
     }
 
+    @objc private func splitRight() {
+        do {
+            try windowCoordinator?.splitActivePane(axis: .horizontal)
+        } catch {
+            logConfigurationError(error)
+        }
+    }
+
+    @objc private func splitDown() {
+        do {
+            try windowCoordinator?.splitActivePane(axis: .vertical)
+        } catch {
+            logConfigurationError(error)
+        }
+    }
+
     @objc private func activateTab(_ sender: NSMenuItem) {
         guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
         windowCoordinator?.activateTab(at: index)
@@ -331,6 +443,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installNewTabMenuItem() {
         let mainMenu = Self.installNewTabMenuItem(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installSplitPaneMenuItems() {
+        let mainMenu = Self.installSplitPaneMenuItems(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
