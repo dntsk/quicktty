@@ -205,7 +205,7 @@ private final class TabItemBackgroundView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let rect = bounds.insetBy(dx: 2, dy: 3)
+        let rect = bounds.insetBy(dx: 2, dy: 0)
         let path = NSBezierPath(
             roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
 

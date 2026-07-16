@@ -155,11 +155,11 @@ struct WorkspacePresentationTests {
     @Test
     func compactTabChromeUsesExactHeights() {
         #expect(WorkspaceViewController.chromeHeight == 34)
-        #expect(TabBarViewController.itemHeight == 30)
+        #expect(TabBarViewController.itemHeight == 34)
     }
 
     @Test
-    func tabBarCollectionFillsRootWidthWithoutScrollView() {
+    func tabBarCollectionFillsRootWidthWithoutScrollView() throws {
         let tabBar = TabBarViewController()
         tabBar.view.frame = NSRect(
             x: 0,
@@ -174,7 +174,14 @@ struct WorkspacePresentationTests {
         #expect(collectionViews.count == 1)
         #expect(collectionViews[0].frame.minX == tabBar.view.bounds.minX)
         #expect(collectionViews[0].frame.maxX == tabBar.view.bounds.maxX)
+        #expect(collectionViews[0].frame.minY == tabBar.view.bounds.minY)
+        #expect(collectionViews[0].frame.maxY == tabBar.view.bounds.maxY)
         #expect(!(collectionViews[0].superview is NSScrollView))
+
+        let layout = try #require(
+            collectionViews[0].collectionViewLayout as? NSCollectionViewFlowLayout)
+        #expect(layout.sectionInset.top == 0)
+        #expect(layout.sectionInset.bottom == 0)
     }
 
     private func containsNewTabControl(in view: NSView) -> Bool {
