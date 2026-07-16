@@ -7,6 +7,34 @@ import Testing
 
 extension GhosttyBridgeTests {
     @Test
+    func mouseAndScrollRemainDirectWhenKeyboardProviderTargetsOtherSurfaces() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let other = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in [source.paneID, other.paneID] }
+
+        source.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                surface: source,
+                buttonNumber: 0
+            )
+        )
+        source.scrollWheel(with: try makeScrollEvent(x: 0, y: 1, precise: false, momentum: []))
+
+        #expect(source.mouseButtonObservationsForTesting.count == 1)
+        #expect(source.mouseScrollObservationsForTesting.count == 1)
+        #expect(other.mouseButtonObservationsForTesting.isEmpty)
+        #expect(other.mouseScrollObservationsForTesting.isEmpty)
+        #expect(bridge.inputObservationsForTesting.isEmpty)
+    }
+
+    @Test
     func mouseTypesMatchPinnedABIAndExactButtonMapping() {
         #expect(GhosttyInput.mouseABIMatchesPinnedHeader)
         #expect(GhosttyMouseAction.release.cValue.rawValue == 0)

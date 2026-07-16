@@ -261,6 +261,32 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func paneExitDisablesBroadcastingAndLeavesSiblingLive() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        try coordinator.start()
+        let exitingSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let siblingSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.setActiveTabBroadcastingForTesting(true)
+
+        exitingSurface.scheduleRuntimeCloseForTesting(processAlive: false)
+        await Task.yield()
+
+        let store = coordinator.workspaceStoreForTesting
+        let activeWorkspace = try #require(store.workspace(id: store.activeWorkspaceID))
+        let activeTabID = try #require(activeWorkspace.activeTabID)
+        let activeTab = try #require(store.tab(id: activeTabID))
+        #expect(!activeTab.isBroadcasting)
+        #expect(activeTab.root.leaves == [siblingSurface.paneID])
+        #expect(bridge.activeSurfaceIDs == [siblingSurface.paneID])
+    }
+
+    @Test
     func splitActivePaneCreatesNestedLiveSurfacesWithInheritedShellContext() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

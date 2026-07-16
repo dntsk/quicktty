@@ -102,6 +102,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
             self?.surfaceDidBecomeFirstResponder(id: paneID)
         }
+        ghosttyBridge.inputTargetProvider = { [weak self] sourcePaneID in
+            guard let self else { return [sourcePaneID] }
+            return TerminalInputRouter.targetPaneIDs(
+                in: workspaceStore,
+                sourcePaneID: sourcePaneID
+            ).filter { surfaces[$0] != nil }
+        }
         ghosttyBridge.clipboardConfirmationHandler = { [weak self] event in
             switch event {
             case .request(let request, let response):
@@ -120,6 +127,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     isolated deinit {
         try? hotKeyController.unregister()
         ghosttyBridge.surfaceFocusHandler = nil
+        ghosttyBridge.inputTargetProvider = { [$0] }
         ghosttyBridge.clipboardConfirmationHandler = nil
         if normalWindowController.window?.delegate === self {
             normalWindowController.window?.delegate = nil
@@ -739,6 +747,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaceDidRequestClose(id: id, processAlive: processAlive)
         }
 
+        func setActiveTabBroadcastingForTesting(_ isBroadcasting: Bool) throws {
+            let workspaceID = workspaceStore.activeWorkspaceID
+            guard let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID else { return }
+            try workspaceStore.setBroadcasting(isBroadcasting, for: tabID, in: workspaceID)
+        }
+
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
             confirmationQueue.activePresentation
         }
@@ -962,6 +976,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         var candidate = workspaceStore
+        if workspace.id == candidate.activeWorkspaceID,
+            workspace.activeTabID == tab.id,
+            tab.isBroadcasting
+        {
+            try? candidate.setBroadcasting(false, for: tab.id, in: workspace.id)
+        }
         guard
             (try? splitCoordinator.apply(
                 .closePane(

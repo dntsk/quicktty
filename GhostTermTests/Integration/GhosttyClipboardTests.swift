@@ -300,6 +300,72 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func broadcastPasteUsesEachSurfaceBindingAndKeepsUnsafeConfirmationCallbacks() async throws {
+        let store = InMemoryClipboardStore()
+        store.contents[.standard] = [
+            GhosttyClipboardContent(mime: "text/plain", data: "unsafe\nclipboard")
+        ]
+        let (confirmations, confirmationContinuation) = AsyncStream.makeStream(
+            of: GhosttyClipboardConfirmationEvent.self
+        )
+        defer { confirmationContinuation.finish() }
+        let bridge = try GhosttyBridge(clipboardClient: store.client)
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in
+            [source.paneID, second.paneID, second.paneID, third.paneID]
+        }
+        bridge.clipboardConfirmationHandler = { event in
+            confirmationContinuation.yield(event)
+        }
+
+        source.paste(nil)
+
+        let firstRequest = try await firstClipboardRequest(
+            from: confirmations,
+            timeout: .seconds(10)
+        )
+        let secondRequest = try await firstClipboardRequest(
+            from: confirmations,
+            timeout: .seconds(10)
+        )
+        let thirdRequest = try await firstClipboardRequest(
+            from: confirmations,
+            timeout: .seconds(10)
+        )
+        let requests = [firstRequest, secondRequest, thirdRequest]
+        #expect(
+            Set(requests.map(\.request.paneID))
+                == Set([source.paneID, second.paneID, third.paneID]))
+        #expect(requests.allSatisfy { $0.request.kind == .paste })
+        #expect(source.pendingClipboardReadCountForTesting == 1)
+        #expect(second.pendingClipboardReadCountForTesting == 1)
+        #expect(third.pendingClipboardReadCountForTesting == 1)
+        for request in requests {
+            request.response(.deny)
+        }
+
+        source.copy(nil)
+        source.selectAll(nil)
+        for surface in [second, third] {
+            #expect(
+                surface.clipboardObservationsForTesting.filter {
+                    if case .binding = $0 { return true }
+                    return false
+                } == [.binding(action: "paste_from_clipboard", result: true)]
+            )
+        }
+    }
+
+    @Test
     func realSelectAllThenCopyWritesParsedTerminalContents() async throws {
         let fixture = try ClipboardPTYFixture(
             configContents: "copy-on-select = false\n"

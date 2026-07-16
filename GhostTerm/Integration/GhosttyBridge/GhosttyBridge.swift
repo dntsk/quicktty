@@ -152,6 +152,7 @@ final class GhosttyBridge {
     typealias RuntimeActionDeliveryCompletion = @MainActor @Sendable (Bool) -> Void
     typealias SurfaceCloseHandler = GhosttySurfaceCloseHandler
     typealias SurfaceFocusHandler = @MainActor (PaneID) -> Void
+    typealias InputTargetProvider = @MainActor (PaneID) -> [PaneID]
 
     private static let runtimeBootstrapResult =
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
@@ -166,6 +167,7 @@ final class GhosttyBridge {
 
     var clipboardConfirmationHandler: GhosttyClipboardConfirmationHandler?
     var surfaceFocusHandler: SurfaceFocusHandler?
+    var inputTargetProvider: InputTargetProvider = { [$0] }
 
     #if DEBUG
         private var inputObservations: [GhosttyBridgeInputObservation] = []
@@ -281,6 +283,9 @@ final class GhosttyBridge {
                 },
                 focusRoute: { [weak self] paneID in
                     self?.routeSurfaceFocus(from: paneID)
+                },
+                clipboardBindingActionRoute: { [weak self] paneID, action in
+                    self?.routeClipboardBindingAction(action, from: paneID)
                 },
                 clipboardClient: clipboardClient,
                 callbackRoute: { [weak self] paneID, event in
@@ -521,17 +526,41 @@ final class GhosttyBridge {
     }
 
     private func routeInput(_ event: NSEvent, from paneID: PaneID) {
-        let wasProcessed = surfaces[paneID]?.processInputEvent(event) ?? false
+        let targetPaneIDs = inputTargetPaneIDs(from: paneID)
+        for targetPaneID in targetPaneIDs {
+            let wasProcessed = surfaces[targetPaneID]?.processInputEvent(event) ?? false
 
-        #if DEBUG
-            inputObservations.append(
-                GhosttyBridgeInputObservation(
-                    paneID: paneID,
-                    eventIdentifier: ObjectIdentifier(event),
-                    wasProcessed: wasProcessed
+            #if DEBUG
+                inputObservations.append(
+                    GhosttyBridgeInputObservation(
+                        paneID: targetPaneID,
+                        eventIdentifier: ObjectIdentifier(event),
+                        wasProcessed: wasProcessed
+                    )
                 )
-            )
-        #endif
+            #endif
+        }
+    }
+
+    private func routeClipboardBindingAction(
+        _ action: GhosttySurfaceBindingAction,
+        from paneID: PaneID
+    ) {
+        let targetPaneIDs = inputTargetPaneIDs(from: paneID)
+        for targetPaneID in targetPaneIDs {
+            surfaces[targetPaneID]?.performDirectClipboardBindingAction(action)
+        }
+    }
+
+    private func inputTargetPaneIDs(from sourcePaneID: PaneID) -> [PaneID] {
+        var seen = Set<PaneID>()
+        var targetPaneIDs = inputTargetProvider(sourcePaneID).filter {
+            seen.insert($0).inserted
+        }
+        if seen.insert(sourcePaneID).inserted {
+            targetPaneIDs.insert(sourcePaneID, at: 0)
+        }
+        return targetPaneIDs
     }
 
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {

@@ -824,6 +824,61 @@ extension GhosttyBridgeTests {
         #expect(closeEvent == KeyboardSurfaceCloseEvent(paneID: paneID, processAlive: false))
         #expect(try Data(contentsOf: fixture.resultURL) == Data("a猫".utf8))
     }
+    @Test
+    func broadcastRoutesSameKeyboardEventToEveryDistinctTargetAndDefaultsToSourceOnly() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in
+            [source.paneID, second.paneID, second.paneID, third.paneID]
+        }
+        let event = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            keyCode: 0
+        )
+
+        source.keyDown(with: event)
+
+        #expect(
+            bridge.inputObservationsForTesting.suffix(3).map(\.paneID) == [
+                source.paneID,
+                second.paneID,
+                third.paneID,
+            ])
+        for surface in [source, second, third] {
+            let observation = try #require(surface.inputObservationsForTesting.last)
+            #expect(observation.eventIdentifier == ObjectIdentifier(event))
+            #expect(observation.translationEventIdentifier == ObjectIdentifier(event))
+        }
+
+        bridge.inputTargetProvider = { [$0] }
+        let sourceInputCount = source.inputObservationsForTesting.count
+        let secondInputCount = second.inputObservationsForTesting.count
+        let thirdInputCount = third.inputObservationsForTesting.count
+        let sourceOnlyEvent = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "b",
+            charactersIgnoringModifiers: "b",
+            keyCode: 11,
+            timestamp: 2
+        )
+
+        source.keyDown(with: sourceOnlyEvent)
+
+        #expect(source.inputObservationsForTesting.count == sourceInputCount + 1)
+        #expect(second.inputObservationsForTesting.count == secondInputCount)
+        #expect(third.inputObservationsForTesting.count == thirdInputCount)
+    }
 }
 
 private struct KeyboardShortcutConfig {

@@ -82,9 +82,25 @@ import Synchronization
 typealias GhosttySurfaceCloseHandler = @MainActor @Sendable (PaneID, Bool) -> Void
 typealias GhosttySurfaceInputRoute = @MainActor (PaneID, NSEvent) -> Void
 typealias GhosttySurfaceFocusRoute = @MainActor (PaneID) -> Void
+typealias GhosttySurfaceClipboardBindingActionRoute =
+    @MainActor (PaneID, GhosttySurfaceBindingAction) -> Void
 typealias GhosttySurfaceCallbackRoute =
     @MainActor @Sendable (PaneID, GhosttySurfaceCallbackEvent) -> Void
 typealias GhosttyClipboardInvalidationRoute = @MainActor (PaneID) -> Void
+
+enum GhosttySurfaceBindingAction: Sendable {
+    case paste
+    case pasteSelection
+
+    var name: String {
+        switch self {
+        case .paste:
+            "paste_from_clipboard"
+        case .pasteSelection:
+            "paste_from_selection"
+        }
+    }
+}
 
 enum GhosttySurfaceCallbackEvent: Sendable {
     case clipboardRead(token: UInt, location: GhosttyClipboardLocation)
@@ -115,6 +131,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private let inputRoute: GhosttySurfaceInputRoute
     private let focusRoute: GhosttySurfaceFocusRoute
     private let applicationIsActive: @MainActor () -> Bool
+    private let clipboardBindingActionRoute: GhosttySurfaceClipboardBindingActionRoute
     private let clipboardClient: GhosttyClipboardClient
     private let clipboardInvalidationRoute: GhosttyClipboardInvalidationRoute
     private var surface: ghostty_surface_t?
@@ -173,6 +190,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         applicationIsActive: @escaping @MainActor () -> Bool,
         inputRoute: @escaping GhosttySurfaceInputRoute,
         focusRoute: @escaping GhosttySurfaceFocusRoute,
+        clipboardBindingActionRoute: @escaping GhosttySurfaceClipboardBindingActionRoute,
         clipboardClient: GhosttyClipboardClient,
         callbackRoute: @escaping GhosttySurfaceCallbackRoute,
         clipboardInvalidationRoute: @escaping GhosttyClipboardInvalidationRoute
@@ -181,6 +199,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         self.inputRoute = inputRoute
         self.focusRoute = focusRoute
         self.applicationIsActive = applicationIsActive
+        self.clipboardBindingActionRoute = clipboardBindingActionRoute
         self.clipboardClient = clipboardClient
         self.clipboardInvalidationRoute = clipboardInvalidationRoute
         currentWorkingDirectory = configuration.workingDirectory
@@ -1287,15 +1306,19 @@ extension GhosttySurfaceView {
     }
 
     @IBAction func paste(_ sender: Any?) {
-        performClipboardBindingAction("paste_from_clipboard")
+        clipboardBindingActionRoute(paneID, .paste)
     }
 
     @IBAction func pasteSelection(_ sender: Any?) {
-        performClipboardBindingAction("paste_from_selection")
+        clipboardBindingActionRoute(paneID, .pasteSelection)
     }
 
     @IBAction override func selectAll(_ sender: Any?) {
         performClipboardBindingAction("select_all")
+    }
+
+    func performDirectClipboardBindingAction(_ action: GhosttySurfaceBindingAction) {
+        performClipboardBindingAction(action.name)
     }
 
     func processCallbackEvent(
