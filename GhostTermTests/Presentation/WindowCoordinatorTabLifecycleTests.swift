@@ -196,6 +196,13 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.surfaceIDsForTesting.isEmpty)
         #expect(coordinator.workspaceStoreForTesting.workspaces.allSatisfy { $0.tabs.isEmpty })
         #expect(errors.count == 1)
+        let error = try #require(errors.first as? GhosttyBridgeError)
+        guard case .surfaceCreationFailed(let failedPaneID) = error else {
+            Issue.record("Expected a surface creation failure, got \(error)")
+            return
+        }
+        #expect(failedPaneID != exitedSurface.paneID)
+        #expect(window.isVisible)
         #expect(coordinator.windowForTesting === window)
         #expect(window.delegate === coordinator)
     }

@@ -19,11 +19,11 @@ final class GhosttyConfirmationQueue {
     private struct Item {
         let id: UUID
         let presentation: GhosttyConfirmationPresentation
-        let completion: Completion
+        var completions: [Completion]
     }
 
     private struct ActiveItem {
-        let item: Item
+        var item: Item
         var dismiss: Dismiss?
     }
 
@@ -56,7 +56,7 @@ final class GhosttyConfirmationQueue {
             Item(
                 id: UUID(),
                 presentation: .clipboard(request),
-                completion: completion
+                completions: [completion]
             )
         )
         presentNextIfNeeded()
@@ -66,7 +66,9 @@ final class GhosttyConfirmationQueue {
         paneID: PaneID,
         completion: @escaping Completion
     ) {
-        guard !hasCloseRequest(for: paneID) else { return }
+        if appendCloseCompletion(for: paneID, completion: completion) {
+            return
+        }
 
         cancelClipboardRequests(for: paneID)
         if let active, case .clipboard = active.item.presentation {
@@ -79,7 +81,7 @@ final class GhosttyConfirmationQueue {
                     Item(
                         id: UUID(),
                         presentation: active.item.presentation,
-                        completion: active.item.completion
+                        completions: active.item.completions
                     ),
                     at: 0
                 )
@@ -95,7 +97,7 @@ final class GhosttyConfirmationQueue {
             Item(
                 id: UUID(),
                 presentation: .close(paneID),
-                completion: completion
+                completions: [completion]
             ),
             at: insertionIndex
         )
@@ -130,10 +132,39 @@ final class GhosttyConfirmationQueue {
         self.pending.removeAll()
 
         active?.dismiss?()
-        active?.item.completion(.deny)
-        for item in pending {
-            item.completion(.deny)
+        if let active {
+            for completion in active.item.completions {
+                completion(.deny)
+            }
         }
+        for item in pending {
+            for completion in item.completions {
+                completion(.deny)
+            }
+        }
+    }
+
+    private func appendCloseCompletion(
+        for paneID: PaneID,
+        completion: @escaping Completion
+    ) -> Bool {
+        if var active, case .close(let activePaneID) = active.item.presentation,
+            activePaneID == paneID
+        {
+            active.item.completions.append(completion)
+            self.active = active
+            return true
+        }
+        guard
+            let index = pending.firstIndex(where: { item in
+                guard case .close(let queuedPaneID) = item.presentation else { return false }
+                return queuedPaneID == paneID
+            })
+        else {
+            return false
+        }
+        pending[index].completions.append(completion)
+        return true
     }
 
     private func hasCloseRequest(for paneID: PaneID) -> Bool {
@@ -154,7 +185,9 @@ final class GhosttyConfirmationQueue {
         {
             self.active = nil
             active.dismiss?()
-            active.item.completion(.deny)
+            for completion in active.item.completions {
+                completion(.deny)
+            }
         }
 
         var kept: [Item] = []
@@ -165,7 +198,9 @@ final class GhosttyConfirmationQueue {
                 kept.append(item)
                 continue
             }
-            item.completion(.deny)
+            for completion in item.completions {
+                completion(.deny)
+            }
         }
         pending = kept
     }
@@ -186,7 +221,10 @@ final class GhosttyConfirmationQueue {
     private func resolve(id: UUID, response: GhosttyClipboardConfirmationResponse) {
         guard let active, active.item.id == id else { return }
         self.active = nil
-        active.item.completion(response)
+        let completions = active.item.completions
+        for completion in completions {
+            completion(response)
+        }
         presentNextIfNeeded()
     }
 }

@@ -743,6 +743,68 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func duplicateActiveCloseCoalescesPresentationAndResolvesAllCompletions() throws {
+        let recorder = ConfirmationQueueRecorder()
+        let queue = GhosttyConfirmationQueue { presentation, completion in
+            recorder.presentations.append(presentation)
+            recorder.completions.append(completion)
+            return nil
+        }
+        let paneID = PaneID()
+
+        queue.enqueueClose(paneID: paneID) { response in
+            recorder.closeResponses.append(response)
+        }
+        queue.enqueueClose(paneID: paneID) { response in
+            recorder.closeResponses.append(response)
+        }
+
+        #expect(recorder.presentations == [.close(paneID)])
+        #expect(queue.pendingCount == 0)
+        let completion = try #require(recorder.completions.first)
+        completion(.allow)
+        completion(.deny)
+
+        #expect(recorder.closeResponses == [.allow, .allow])
+        #expect(queue.activePresentation == nil)
+    }
+
+    @Test
+    func duplicatePendingCloseCoalescesPresentationAndResolvesAllCompletions() throws {
+        let recorder = ConfirmationQueueRecorder()
+        let queue = GhosttyConfirmationQueue { presentation, completion in
+            recorder.presentations.append(presentation)
+            recorder.completions.append(completion)
+            return nil
+        }
+        let activePaneID = PaneID()
+        let pendingPaneID = PaneID()
+
+        queue.enqueueClose(paneID: activePaneID) { response in
+            recorder.closeResponses.append(response)
+        }
+        queue.enqueueClose(paneID: pendingPaneID) { response in
+            recorder.closeResponses.append(response)
+        }
+        queue.enqueueClose(paneID: pendingPaneID) { response in
+            recorder.closeResponses.append(response)
+        }
+
+        #expect(recorder.presentations == [.close(activePaneID)])
+        #expect(queue.pendingCount == 1)
+        let activeCompletion = try #require(recorder.completions.first)
+        activeCompletion(.deny)
+        #expect(recorder.presentations == [.close(activePaneID), .close(pendingPaneID)])
+
+        let pendingCompletion = try #require(recorder.completions.last)
+        pendingCompletion(.deny)
+        pendingCompletion(.allow)
+
+        #expect(recorder.closeResponses == [.deny, .deny, .deny])
+        #expect(queue.activePresentation == nil)
+    }
+
+    @Test
     func multipleCloseRequestsRemainFIFOAheadOfClipboardRequests() throws {
         let recorder = ConfirmationQueueRecorder()
         let queue = GhosttyConfirmationQueue { presentation, completion in
@@ -800,7 +862,7 @@ extension GhosttyBridgeTests {
         let secondClipboardCompletion = try #require(recorder.completions.last)
         secondClipboardCompletion(.deny)
 
-        #expect(recorder.closeResponses == [.deny, .deny, .deny])
+        #expect(recorder.closeResponses == [.deny, .deny, .deny, .deny])
         #expect(recorder.responses.map(\.0) == [firstClipboard.id, secondClipboard.id])
         #expect(queue.activePresentation == nil)
         #expect(queue.pendingCount == 0)
