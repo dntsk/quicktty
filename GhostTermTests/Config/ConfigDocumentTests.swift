@@ -9,8 +9,8 @@ struct ConfigDocumentTests {
         let config = GhostTermConfig()
 
         #expect(config.presentationMode == .normal)
-        #expect(config.globalToggle == HotKeyDescriptor(command: true, key: .f12))
-        #expect(config.globalToggle.stringValue == "cmd+f12")
+        #expect(config.globalToggle == HotKeyDescriptor(key: .f12))
+        #expect(config.globalToggle.stringValue == "f12")
         #expect(config.quakeHeight == 0.75)
         #expect(config.quakeAnimationDuration == 0.18)
         #expect(config.quakePadding == 0)
@@ -23,9 +23,7 @@ struct ConfigDocumentTests {
 
         #expect(descriptor == HotKeyDescriptor(command: true, key: .f12))
         #expect(try HotKeyDescriptor(parsing: descriptor.stringValue) == descriptor)
-        #expect(throws: HotKeyDescriptor.ParseError.missingModifier) {
-            try HotKeyDescriptor(parsing: "f12")
-        }
+        #expect(try HotKeyDescriptor(parsing: "f12") == HotKeyDescriptor(key: .f12))
         #expect(throws: HotKeyDescriptor.ParseError.duplicateModifier(.command)) {
             try HotKeyDescriptor(parsing: "cmd+cmd+f12")
         }

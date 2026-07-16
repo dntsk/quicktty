@@ -92,7 +92,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !ApplicationEnvironment.isRunningHostedTests
+        Self.shouldTerminateAfterLastWindowClosed(
+            isRunningHostedTests: ApplicationEnvironment.isRunningHostedTests,
+            presentationMode: windowCoordinator?.presentationMode
+        )
+    }
+
+    static func shouldTerminateAfterLastWindowClosed(
+        isRunningHostedTests: Bool,
+        presentationMode: PresentationMode?
+    ) -> Bool {
+        guard !isRunningHostedTests else { return false }
+        return presentationMode != .quake
     }
 
     @objc private func togglePresentationMode() {

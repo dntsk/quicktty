@@ -6,6 +6,23 @@ import Testing
 @MainActor
 struct WindowCoordinatorConfigurationTests {
     @Test
+    func defaultConfigurationRegistersPlainF12InQuakeMode() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let hotKeyController = RecordingHotKeyController()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            hotKeyController: hotKeyController
+        )
+        var config = GhostTermConfig()
+        config.presentationMode = .quake
+
+        coordinator.applyConfiguration(config)
+
+        #expect(hotKeyController.registeredDescriptors == [HotKeyDescriptor(key: .f12)])
+    }
+
+    @Test
     func configTransitionsPresentationAndRegistersOnlyQuakeHotKey() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

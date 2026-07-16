@@ -7,6 +7,14 @@ import Testing
 @MainActor
 struct HotKeyDescriptorCarbonTests {
     @Test
+    func conversionUsesCarbonFunctionKeyWithoutModifiers() {
+        let carbonHotKey = GlobalHotKeyController.carbonHotKey(for: HotKeyDescriptor(key: .f12))
+
+        #expect(carbonHotKey.keyCode == UInt32(kVK_F12))
+        #expect(carbonHotKey.modifiers == 0)
+    }
+
+    @Test
     func conversionUsesCarbonFunctionKeyAndModifierFlags() {
         let descriptor = HotKeyDescriptor(
             command: true,

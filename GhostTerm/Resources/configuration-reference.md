@@ -10,7 +10,7 @@
 
 ### `ghostterm-global-toggle`
 
-Глобальная комбинация показа и скрытия Quake-окна. Формат: модификаторы `cmd`, `opt`, `ctrl`, `shift`, затем функциональная клавиша `f1`…`f20`, через `+`. Значение по умолчанию — `cmd+f12`.
+Глобальная комбинация показа и скрытия Quake-окна. Формат: функциональная клавиша `f1`…`f20` с необязательными модификаторами `cmd`, `opt`, `ctrl`, `shift` через `+`. Значение по умолчанию — `f12`.
 
 ### `ghostterm-quake-height`
 
@@ -35,7 +35,7 @@ theme = catppuccin-mocha
 font-size = 14
 
 ghostterm-presentation-mode = quake
-ghostterm-global-toggle = cmd+f12
+ghostterm-global-toggle = f12
 ghostterm-quake-height = 75%
 ghostterm-quake-animation-duration = 0.18
 ghostterm-quake-padding = 0

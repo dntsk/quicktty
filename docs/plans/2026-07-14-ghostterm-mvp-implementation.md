@@ -523,7 +523,7 @@ make test
 
 - `ghostterm-presentation-mode = normal`;
 - default mode `normal`;
-- default hotkey `cmd+f12`;
+- default hotkey `f12`;
 - default Quake height `75%`;
 - hide-on-focus-loss default `true`;
 - animation duration и padding;
@@ -771,7 +771,7 @@ Manual: `exit`, failing command, close running `ssh`, renderer retry.
 
 **Step 2: Написать hotkey parser tests**
 
-Проверить `cmd+f12`, invalid combinations и round trip config. Default — `cmd+f12`.
+Проверить `f12`, modifier combinations и round trip config. Default — `f12`.
 
 **Step 3: Подключить Carbon**
 

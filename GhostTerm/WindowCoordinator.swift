@@ -17,7 +17,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var workspaceStore = WorkspaceStore()
     private var createWorkspaceController: CreateWorkspaceController?
     private var defaultSurface: GhosttySurfaceView?
-    private var activeHotKey = HotKeyDescriptor(command: true, key: .f12)
+    private var activeHotKey = HotKeyDescriptor(key: .f12)
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
         [weak self] presentation, completion in
         guard let self else {

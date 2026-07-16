@@ -34,7 +34,6 @@ struct HotKeyDescriptor: Codable, Equatable, Hashable, Sendable {
     enum ParseError: Error, Equatable, Sendable {
         case empty
         case emptyComponent(position: Int)
-        case missingModifier
         case missingKey
         case duplicateModifier(Modifier)
         case unsupportedModifier(String)
@@ -71,8 +70,6 @@ struct HotKeyDescriptor: Codable, Equatable, Hashable, Sendable {
         for (index, component) in components.enumerated() where component.isEmpty {
             throw ParseError.emptyComponent(position: index + 1)
         }
-        guard components.count >= 2 else { throw ParseError.missingModifier }
-
         let keyToken = components[components.count - 1]
         if Modifier(rawValue: keyToken) != nil {
             throw ParseError.missingKey
@@ -93,8 +90,6 @@ struct HotKeyDescriptor: Codable, Equatable, Hashable, Sendable {
                 throw ParseError.duplicateModifier(modifier)
             }
         }
-        guard !modifiers.isEmpty else { throw ParseError.missingModifier }
-
         self.init(
             command: modifiers.contains(.command),
             option: modifiers.contains(.option),
@@ -122,8 +117,6 @@ extension HotKeyDescriptor.ParseError: LocalizedError {
             "Hot key is empty."
         case .emptyComponent(let position):
             "Hot key component \(position) is empty."
-        case .missingModifier:
-            "Hot key must contain at least one modifier."
         case .missingKey:
             "Hot key does not contain a key."
         case .duplicateModifier(let modifier):

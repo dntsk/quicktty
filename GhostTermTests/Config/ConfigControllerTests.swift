@@ -208,7 +208,7 @@ private struct ConfigFixture {
         """
         font-family = Mono
         ghostterm-presentation-mode = normal
-        ghostterm-global-toggle = cmd+f12
+        ghostterm-global-toggle = f12
         ghostterm-quake-height = 75%
         ghostterm-quake-animation-duration = 0.18
         ghostterm-quake-padding = 0

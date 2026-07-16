@@ -12,7 +12,7 @@ struct GhostTermConfig: Equatable, Sendable {
     }
 
     var presentationMode: PresentationMode = .normal
-    var globalToggle = HotKeyDescriptor(command: true, key: .f12)
+    var globalToggle = HotKeyDescriptor(key: .f12)
     var quakeHeight: Double = 0.75
     var quakeAnimationDuration: TimeInterval = 0.18
     var quakePadding: CGFloat = 0

@@ -115,11 +115,11 @@ final class PresentationController {
         let normalFrame = normalWindowController.presentationFrame
         let previousSavedFrame = savedNormalFrame
         let normalWasVisible = normalWindowController.isPresentationVisible
-        normalWindowController.hidePresentationWindow()
 
         do {
             try reparentContent(from: normalWindowController, to: quakeWindowController)
             try quakeWindowController.showPresentationWindow()
+            normalWindowController.hidePresentationWindow()
             savedNormalFrame = normalFrame
         } catch {
             quakeWindowController.deactivateForModeTransition()
@@ -137,7 +137,6 @@ final class PresentationController {
     private func transitionFromQuakeToNormal() throws {
         let quakeVisibility = quakeWindowController.requestedVisibility
         let normalFrame = normalWindowController.presentationFrame
-        quakeWindowController.deactivateForModeTransition()
         if let savedNormalFrame {
             normalWindowController.setPresentationFrame(savedNormalFrame)
         }
@@ -145,6 +144,7 @@ final class PresentationController {
         do {
             try reparentContent(from: quakeWindowController, to: normalWindowController)
             try normalWindowController.showPresentationWindow()
+            quakeWindowController.deactivateForModeTransition()
         } catch {
             normalWindowController.hidePresentationWindow()
             normalWindowController.setPresentationFrame(normalFrame)

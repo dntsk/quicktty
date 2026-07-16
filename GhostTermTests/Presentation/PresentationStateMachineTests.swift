@@ -102,13 +102,42 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func transitionDoesNotHideSourceBeforeDestinationShows() throws {
+        let content = NSViewController()
+        content.view = NSView()
+        let events = PresentationTransitionEvents()
+        let normal = FakePresentationContainer(events: events)
+        let quake = FakeQuakeContainer(events: events)
+        let controller = try PresentationController(
+            contentViewController: content,
+            normalWindowController: normal,
+            quakeWindowController: quake,
+            persistSuccessfulMode: { _ in }
+        )
+
+        events.reset()
+        try controller.transition(to: .quake)
+        let quakeShow = try #require(events.values.firstIndex(of: "quake.show"))
+        let normalHide = try #require(events.values.firstIndex(of: "normal.hide"))
+        #expect(quakeShow < normalHide)
+
+        events.reset()
+        try controller.transition(to: .normal)
+        let normalShow = try #require(events.values.firstIndex(of: "normal.show"))
+        let quakeDeactivate = try #require(events.values.firstIndex(of: "quake.deactivate"))
+        #expect(normalShow < quakeDeactivate)
+    }
+
+    @Test
     func failedTransitionRollsBackOwnershipVisibilityAndPersistence() throws {
         let content = NSViewController()
         content.view = NSView()
+        let events = PresentationTransitionEvents()
         let normal = FakePresentationContainer(
-            frame: NSRect(x: 20, y: 30, width: 800, height: 500)
+            frame: NSRect(x: 20, y: 30, width: 800, height: 500),
+            events: events
         )
-        let quake = FakeQuakeContainer()
+        let quake = FakeQuakeContainer(events: events)
         var persistedModes: [PresentationMode] = []
         let controller = try PresentationController(
             contentViewController: content,
@@ -116,6 +145,7 @@ struct PresentationStateMachineTests {
             quakeWindowController: quake,
             persistSuccessfulMode: { persistedModes.append($0) }
         )
+        events.reset()
         quake.failNextInstall = true
 
         #expect(throws: FakePresentationError.installFailed) {
@@ -128,6 +158,7 @@ struct PresentationStateMachineTests {
         #expect(quake.installedContentViewController == nil)
         #expect(normal.isPresentationVisible)
         #expect(!quake.isPresentationVisible)
+        #expect(!events.values.contains("normal.hide"))
         #expect(persistedModes.isEmpty)
     }
 
@@ -259,15 +290,30 @@ private enum FakePresentationError: Error {
 }
 
 @MainActor
+private final class PresentationTransitionEvents {
+    private(set) var values: [String] = []
+
+    func record(_ event: String) {
+        values.append(event)
+    }
+
+    func reset() {
+        values.removeAll()
+    }
+}
+
+@MainActor
 private final class FakePresentationContainer: PresentationWindowContainer {
     private(set) var presentationFrame: NSRect
     private(set) var isPresentationVisible = false
     private(set) var installedContentViewController: NSViewController?
+    private let events: PresentationTransitionEvents?
     var failNextInstall = false
     var failNextShow = false
 
-    init(frame: NSRect = .zero) {
+    init(frame: NSRect = .zero, events: PresentationTransitionEvents? = nil) {
         presentationFrame = frame
+        self.events = events
     }
 
     func setPresentationFrame(_ frame: NSRect) {
@@ -288,10 +334,12 @@ private final class FakePresentationContainer: PresentationWindowContainer {
             throw FakePresentationError.showFailed
         }
         isPresentationVisible = true
+        events?.record("normal.show")
     }
 
     func hidePresentationWindow() {
         isPresentationVisible = false
+        events?.record("normal.hide")
     }
 }
 
@@ -302,8 +350,13 @@ private final class FakeQuakeContainer: QuakePresentationWindowContainer {
     private(set) var installedContentViewController: NSViewController?
     private(set) var requestedVisibility: QuakeVisibility = .hidden
     private(set) var visibilityRequestCount = 0
+    private let events: PresentationTransitionEvents?
     var failNextInstall = false
     var failNextShow = false
+
+    init(events: PresentationTransitionEvents? = nil) {
+        self.events = events
+    }
 
     func setPresentationFrame(_ frame: NSRect) {
         presentationFrame = frame
@@ -323,6 +376,7 @@ private final class FakeQuakeContainer: QuakePresentationWindowContainer {
             throw FakePresentationError.showFailed
         }
         try requestVisibility(.shown)
+        events?.record("quake.show")
     }
 
     func hidePresentationWindow() {
@@ -339,6 +393,7 @@ private final class FakeQuakeContainer: QuakePresentationWindowContainer {
     func deactivateForModeTransition() {
         requestedVisibility = .hidden
         isPresentationVisible = false
+        events?.record("quake.deactivate")
     }
 
     func focusDidResignKey() {}
