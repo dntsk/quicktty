@@ -450,7 +450,9 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         if priorApplication == nil {
             priorApplication = priorApplicationProvider()
         }
-        quakeWindow.setPresentationFrame(hiddenFrame)
+        if !quakeWindow.isPresentationVisible {
+            quakeWindow.setPresentationFrame(hiddenFrame)
+        }
         quakeWindow.setPresentationLevel(.popUpMenu)
         quakeWindow.orderFrontForPresentation()
         let generation = animationGeneration

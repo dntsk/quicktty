@@ -358,6 +358,38 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func reversingHideKeepsIntermediateFrameAndIgnoresOldCompletion() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler
+        )
+        let visibleTarget = NSRect(x: 0, y: 215, width: 1_200, height: 585)
+        let intermediateFrame = NSRect(x: 0, y: 500, width: 1_200, height: 585)
+
+        try controller.requestVisibility(.shown)
+        animator.completeRequest(at: 0)
+        try controller.requestVisibility(.hidden)
+        window.setPresentationFrame(intermediateFrame)
+        let frameSetsBeforeReversal = window.presentationFrames
+
+        try controller.requestVisibility(.shown)
+
+        #expect(animator.requests.count == 3)
+        #expect(animator.requests[1].cancellation.isCancelled)
+        #expect(animator.requests[2].frame == visibleTarget)
+        #expect(window.presentationFrames == frameSetsBeforeReversal)
+
+        animator.completeRequest(at: 1)
+        #expect(window.isPresentationVisible)
+        #expect(!window.events.contains("out"))
+        #expect(controller.requestedVisibility == .shown)
+    }
+
+    @Test
     func focusLossDelayCancelsAndHonorsInjectedSuppression() throws {
         let window = FakeQuakeWindow()
         let animator = ManualQuakeAnimator()
@@ -569,9 +601,11 @@ private final class FakeQuakeWindow: QuakeWindowRepresenting {
     var hasAttachedSheet = false
     private(set) var focusCount = 0
     private(set) var events: [String] = []
+    private(set) var presentationFrames: [NSRect] = []
 
     func setPresentationFrame(_ frame: NSRect) {
         presentationFrame = frame
+        presentationFrames.append(frame)
         events.append("frame")
     }
 
