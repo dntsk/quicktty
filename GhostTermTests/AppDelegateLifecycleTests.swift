@@ -65,7 +65,7 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
-    func newTabMenuInstallerCreatesFileMenuWhenMainMenuIsAbsent() {
+    func newTabMenuInstallerCreatesFileMenuWhenMainMenuIsAbsent() throws {
         let target = NewTabMenuActionTarget()
         let mainMenu = AppDelegate.installNewTabMenuItem(
             in: nil,
@@ -73,18 +73,39 @@ struct AppDelegateLifecycleTests {
             action: #selector(NewTabMenuActionTarget.createNewTab)
         )
         let fileMenu = mainMenu.item(withTitle: "File")?.submenu
-        let item = fileMenu?.item(withTitle: "New Tab")
+        let item = try #require(fileMenu?.item(withTitle: "New Tab"))
 
         #expect(fileMenu != nil)
         #expect(fileMenu?.items.count == 1)
-        #expect(item?.title == "New Tab")
-        #expect(item?.action == #selector(NewTabMenuActionTarget.createNewTab))
-        #expect(item?.keyEquivalent == "t")
-        #expect(item?.keyEquivalentModifierMask == [.command])
-        #expect(item?.target === target)
+        #expect(item.title == "New Tab")
+        #expect(item.action == #selector(NewTabMenuActionTarget.createNewTab))
+        #expect(item.keyEquivalent == "t")
+        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(item.target === target)
 
-        target.perform(#selector(NewTabMenuActionTarget.createNewTab), with: item)
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
         #expect(target.invocationCount == 1)
+    }
+
+    @Test
+    func newTabMenuInstallerAttachesSubmenuToExistingFileItem() {
+        let target = NewTabMenuActionTarget()
+        let mainMenu = NSMenu()
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        mainMenu.addItem(fileItem)
+
+        let installedMainMenu = AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: target,
+            action: #selector(NewTabMenuActionTarget.createNewTab)
+        )
+        let fileMenu = fileItem.submenu
+
+        #expect(installedMainMenu === mainMenu)
+        #expect(mainMenu.item(withTitle: "File") === fileItem)
+        #expect(fileMenu != nil)
+        #expect(fileMenu?.items.count == 1)
+        #expect(fileMenu?.item(withTitle: "New Tab") != nil)
     }
 
     @Test
