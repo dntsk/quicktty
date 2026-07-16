@@ -151,7 +151,9 @@ final class ConfigController {
         } catch {
             throw ConfigControllerError.sourceReadFailed(String(describing: error))
         }
-        try apply(ConfigDocument(data: source))
+        let document = ConfigDocument(data: source)
+        guard document != activeDocument else { return }
+        try apply(document)
     }
 
     func updatePresentationMode(_ mode: PresentationMode) throws {

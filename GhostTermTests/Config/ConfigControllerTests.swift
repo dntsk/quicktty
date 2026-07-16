@@ -158,6 +158,38 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func watcherIgnoresEchoedQuakeHeightWriteAndReloadsExternalChanges() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        let source = ManualConfigEventSource()
+        let scheduler = ManualConfigScheduler()
+        var reloadCount = 0
+        var updates: [GhostTermConfig] = []
+        let controller = fixture.makeController(
+            watcherScheduler: scheduler.schedule,
+            watcherEventSource: source.eventSource,
+            reloadGhostty: { _ in reloadCount += 1 },
+            onUpdate: { updates.append($0) }
+        )
+        try controller.start()
+
+        try controller.updateQuakeHeight(0.73125)
+        source.emitLatest()
+        scheduler.runAllIncludingCanceled()
+
+        #expect(reloadCount == 2)
+        #expect(updates.map(\.quakeHeight) == [0.75, 0.73125])
+
+        try Data("ghostterm-quake-height = 80%\n".utf8).write(to: fixture.configURL)
+        source.emitLatest()
+        scheduler.runAllIncludingCanceled()
+
+        #expect(reloadCount == 3)
+        #expect(updates.map(\.quakeHeight) == [0.75, 0.73125, 0.8])
+        controller.stop()
+    }
+
+    @Test
     func quakeHeightUpdateRollsBackAppliedStateWhenBridgeReloadFails() throws {
         enum Failure: Error { case rejected }
         let fixture = try ConfigFixture()
@@ -303,6 +335,8 @@ private struct ConfigFixture {
     }
 
     func makeController(
+        watcherScheduler: ConfigFileWatcher.Scheduler? = nil,
+        watcherEventSource: ConfigFileWatcher.EventSource = .production,
         reloadGhostty: @escaping ConfigController.ReloadGhostty,
         onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in }
     ) -> ConfigController {
@@ -310,6 +344,8 @@ private struct ConfigFixture {
             configURL: configURL,
             effectiveGhosttyURL: effectiveURL,
             starterData: starterData,
+            watcherScheduler: watcherScheduler,
+            watcherEventSource: watcherEventSource,
             reloadGhostty: reloadGhostty,
             onUpdate: onUpdate
         )
