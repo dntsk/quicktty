@@ -26,6 +26,9 @@ targets:
       - path: GhostTerm/Resources
         buildPhase: resources
         group: Resources
+      - path: Vendor/ghostty/macos/Sources/Features/Splits/SplitView.swift
+      - path: Vendor/ghostty/macos/Sources/Features/Splits/SplitView.Divider.swift
+      - path: Vendor/ghostty/macos/Sources/Helpers/Backport.swift
     dependencies:
       - sdk: Carbon.framework
       - framework: Vendor/ghostty/macos/GhosttyKit.xcframework

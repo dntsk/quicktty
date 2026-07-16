@@ -55,12 +55,17 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func workspaceControllerHostsTerminalDirectlyBelowChromeWithoutSeparator() throws {
+    func workspaceControllerHostsSplitTreeDirectlyBelowChromeWithoutSeparator() throws {
         let controller = WorkspaceViewController()
-        let terminal = NSView()
 
         controller.apply(WorkspaceStore())
-        controller.displayTerminal(terminal)
+        controller.displayTerminal(
+            root: .pane(PaneID()),
+            surfaces: [:],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
 
         let terminalContent = try #require(
             controller.view.subviews.first { $0.identifier?.rawValue == "terminal-content" })
@@ -78,7 +83,7 @@ struct WorkspacePresentationTests {
         }
 
         #expect(controller.workspaceSelector.displayedWorkspaceNames == ["Default"])
-        #expect(terminal.superview === terminalContent)
+        #expect(controller.splitHostingControllerIdentifierForTesting != nil)
         #expect(controller.view.subviews.count == 2)
         #expect(terminalIsAdjacentToChrome)
     }

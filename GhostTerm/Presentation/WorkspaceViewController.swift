@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class WorkspaceViewController: NSViewController {
@@ -17,7 +18,8 @@ final class WorkspaceViewController: NSViewController {
     private let terminalContentView = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No tabs in this workspace")
     private var chromePalette = GhosttyChromePalette.fallback
-    private weak var displayedTerminalView: NSView?
+    private var splitHostingController: NSHostingController<GhosttySplitTreeView>?
+    private var splitHostingConstraints: [NSLayoutConstraint] = []
 
     override func loadView() {
         let rootView = NSView()
@@ -145,29 +147,65 @@ final class WorkspaceViewController: NSViewController {
             guard let color = terminalContentView.layer?.backgroundColor else { return nil }
             return NSColor(cgColor: color)
         }
+
+        var splitHostingControllerIdentifierForTesting: ObjectIdentifier? {
+            splitHostingController.map(ObjectIdentifier.init)
+        }
+
+        var emptyWorkspaceLabelIsVisibleForTesting: Bool {
+            !emptyLabel.isHidden
+        }
     #endif
 
-    func displayTerminal(_ terminalView: NSView?) {
+    func displayTerminal(
+        root: SplitNode?,
+        surfaces: [PaneID: GhosttySurfaceView],
+        palette: GhosttyChromePalette,
+        onResize: @escaping (UUID, Double) -> Void,
+        onEqualize: @escaping (UUID) -> Void
+    ) {
         loadViewIfNeeded()
-        guard displayedTerminalView !== terminalView else { return }
-
-        displayedTerminalView?.removeFromSuperview()
-        displayedTerminalView = terminalView
-        guard let terminalView else {
+        guard let root else {
+            removeSplitHost()
             emptyLabel.isHidden = false
             return
         }
 
         emptyLabel.isHidden = true
-        terminalView.removeFromSuperview()
-        terminalView.translatesAutoresizingMaskIntoConstraints = false
-        terminalContentView.addSubview(terminalView)
-        NSLayoutConstraint.activate([
-            terminalView.topAnchor.constraint(equalTo: terminalContentView.topAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: terminalContentView.leadingAnchor),
-            terminalView.trailingAnchor.constraint(equalTo: terminalContentView.trailingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: terminalContentView.bottomAnchor),
-        ])
+        let splitTreeView = GhosttySplitTreeView(
+            root: root,
+            surfaces: surfaces,
+            palette: palette,
+            onResize: onResize,
+            onEqualize: onEqualize
+        )
+        if let splitHostingController {
+            splitHostingController.rootView = splitTreeView
+            return
+        }
+
+        let splitHostingController = NSHostingController(rootView: splitTreeView)
+        addChild(splitHostingController)
+        let splitHostingView = splitHostingController.view
+        splitHostingView.translatesAutoresizingMaskIntoConstraints = false
+        terminalContentView.addSubview(splitHostingView)
+        splitHostingConstraints = [
+            splitHostingView.topAnchor.constraint(equalTo: terminalContentView.topAnchor),
+            splitHostingView.leadingAnchor.constraint(equalTo: terminalContentView.leadingAnchor),
+            splitHostingView.trailingAnchor.constraint(equalTo: terminalContentView.trailingAnchor),
+            splitHostingView.bottomAnchor.constraint(equalTo: terminalContentView.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(splitHostingConstraints)
+        self.splitHostingController = splitHostingController
+    }
+
+    private func removeSplitHost() {
+        guard let splitHostingController else { return }
+        NSLayoutConstraint.deactivate(splitHostingConstraints)
+        splitHostingConstraints = []
+        splitHostingController.view.removeFromSuperview()
+        splitHostingController.removeFromParent()
+        self.splitHostingController = nil
     }
 }
 

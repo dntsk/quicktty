@@ -4,7 +4,13 @@
 
 GhostTerm использует Ghostty v1.3.1, закреплённый на commit `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`.
 
-Статическая embedding-библиотека Ghostty включается в приложение, но каталог `Vendor/ghostty` не поставляется в DMG. Кроме того, GhostTerm адаптирует узкие части AppKit keyboard/IME и mouse/scroll-поведения из следующих файлов той же закреплённой ревизии:
+Статическая embedding-библиотека Ghostty включается в приложение, но каталог `Vendor/ghostty` не поставляется в DMG. GhostTerm также напрямую компилирует без изменений следующие закреплённые MIT-исходники для split layout, divider и pointer behavior:
+
+- `macos/Sources/Features/Splits/SplitView.swift`;
+- `macos/Sources/Features/Splits/SplitView.Divider.swift`;
+- `macos/Sources/Helpers/Backport.swift`.
+
+Кроме того, GhostTerm адаптирует узкие части AppKit keyboard/IME и mouse/scroll-поведения из следующих файлов той же закреплённой ревизии:
 
 - `include/ghostty.h:43-57,59-98,972-1000,1100-1127` — clipboard и mouse/scroll ABI;
 - `macos/Sources/Ghostty/NSEvent+Extension.swift:3-76`;

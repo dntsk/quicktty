@@ -314,8 +314,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
         workspaceViewController.apply(workspaceStore)
+        let activeTab = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?
+            .activeTabID
+            .flatMap { workspaceStore.tab(id: $0) }
         let surface = activePaneID.flatMap { surfaces[$0] }
-        workspaceViewController.displayTerminal(surface)
+        workspaceViewController.displayTerminal(
+            root: activeTab?.root,
+            surfaces: surfaces,
+            palette: ghosttyBridge.chromePalette,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
         if focusTerminal, let surface {
             activeWindow?.makeFirstResponder(surface)
         }
