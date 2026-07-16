@@ -83,11 +83,18 @@ struct PresentationStateMachineTests {
     }
 
     @Test
-    func quakeWindowIsBorderlessResizableAndHasMinimumHeight() {
+    func quakeWindowHasNonactivatingStyleAndActiveSpaceCollectionBehavior() {
         let window = QuakeWindow()
 
         #expect(window.styleMask.contains(.borderless))
         #expect(window.styleMask.contains(.resizable))
+        #expect(window.styleMask.contains(.nonactivatingPanel))
+        #expect(window.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(window.collectionBehavior.contains(.fullScreenAuxiliary))
+        #expect(window.collectionBehavior.contains(.ignoresCycle))
+        #expect(!window.collectionBehavior.contains(.moveToActiveSpace))
+        #expect(window.canBecomeKey)
+        #expect(window.canBecomeMain)
         #expect(window.contentMinSize.height == QuakeWindow.minimumContentHeight)
     }
 

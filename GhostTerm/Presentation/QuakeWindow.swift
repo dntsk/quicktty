@@ -7,7 +7,7 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
     init(contentRect: NSRect = .zero) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless, .resizable],
+            styleMask: [.borderless, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -15,7 +15,7 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
         level = .floating
         contentMinSize = NSSize(width: 0, height: Self.minimumContentHeight)
         minSize = NSSize(width: 0, height: Self.minimumContentHeight)
-        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         animationBehavior = .none
         isFloatingPanel = true
         becomesKeyOnlyIfNeeded = false
@@ -62,8 +62,8 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
     }
 
     func focusForPresentation() {
-        NSApp.activate(ignoringOtherApps: true)
         makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func orderOutForPresentation() {
