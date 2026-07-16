@@ -543,6 +543,22 @@ struct StateStoreTests {
     }
 
     @Test
+    func restoredTinyFrameExpandsToMinimumAndRemainsOnscreen() throws {
+        let saved = try #require(NormalWindowFrame(x: 100, y: 120, width: 10, height: 10))
+        let screen = NSRect(x: 0, y: 0, width: 1_200, height: 900)
+
+        let restored = try #require(
+            WindowCoordinator.restoredWindowFrame(
+                from: saved,
+                visibleScreenFrames: [screen]
+            )
+        )
+
+        #expect(restored.size == NormalWindowController.minimumFrameSize)
+        #expect(screen.contains(restored))
+    }
+
+    @Test
     func restoredFrameFullyInsideVisibleScreenIsUnchanged() throws {
         let saved = try #require(NormalWindowFrame(x: 100, y: 120, width: 800, height: 500))
         let screen = NSRect(x: 0, y: 0, width: 1_200, height: 900)
@@ -553,6 +569,19 @@ struct StateStoreTests {
         )
 
         #expect(restored == WindowCoordinator.windowFrame(from: saved))
+    }
+
+    @Test
+    func restoredFrameCapsMinimumToVerySmallVisibleScreen() throws {
+        let saved = try #require(NormalWindowFrame(x: 10, y: 10, width: 10, height: 10))
+        let screen = NSRect(x: 0, y: 0, width: 600, height: 400)
+
+        let restored = WindowCoordinator.restoredWindowFrame(
+            from: saved,
+            visibleScreenFrames: [screen]
+        )
+
+        #expect(restored == screen)
     }
 
     @Test

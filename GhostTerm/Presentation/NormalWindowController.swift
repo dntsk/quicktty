@@ -2,17 +2,30 @@ import AppKit
 
 @MainActor
 final class NormalWindowController: NSWindowController, PresentationWindowContainer {
+    static let defaultContentSize = NSSize(width: 1_100, height: 700)
+    static let minimumContentSize = NSSize(width: 720, height: 440)
+    static let styleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+
+    static var minimumFrameSize: NSSize {
+        NSWindow.frameRect(
+            forContentRect: NSRect(origin: .zero, size: minimumContentSize),
+            styleMask: styleMask
+        ).size
+    }
+
     init(
-        contentRect: NSRect = NSRect(x: 0, y: 0, width: 960, height: 640),
+        contentRect: NSRect = NSRect(origin: .zero, size: defaultContentSize),
         title: String = "GhostTerm"
     ) {
         let window = NSWindow(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: Self.styleMask,
             backing: .buffered,
             defer: false
         )
         window.title = title
+        window.contentMinSize = Self.minimumContentSize
+        window.minSize = Self.minimumFrameSize
         window.center()
         window.isReleasedWhenClosed = false
         super.init(window: window)

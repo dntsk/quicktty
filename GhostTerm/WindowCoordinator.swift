@@ -148,8 +148,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         guard let selectedScreen else { return nil }
-        let width = min(savedRect.width, selectedScreen.width)
-        let height = min(savedRect.height, selectedScreen.height)
+        let minimumFrameSize = NormalWindowController.minimumFrameSize
+        let width = min(max(savedRect.width, minimumFrameSize.width), selectedScreen.width)
+        let height = min(max(savedRect.height, minimumFrameSize.height), selectedScreen.height)
         let x = min(
             max(savedRect.minX, selectedScreen.minX),
             selectedScreen.maxX - width
