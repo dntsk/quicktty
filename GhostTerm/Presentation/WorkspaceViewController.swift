@@ -2,6 +2,8 @@ import AppKit
 
 @MainActor
 final class WorkspaceViewController: NSViewController {
+    static let chromeHeight: CGFloat = 34
+
     var onActivateWorkspace: ((WorkspaceID) -> Void)?
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
@@ -53,7 +55,7 @@ final class WorkspaceViewController: NSViewController {
             chromeView.topAnchor.constraint(equalTo: rootView.topAnchor),
             chromeView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             chromeView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            chromeView.heightAnchor.constraint(equalToConstant: 38),
+            chromeView.heightAnchor.constraint(equalToConstant: Self.chromeHeight),
             tabBarView.leadingAnchor.constraint(equalTo: chromeView.leadingAnchor, constant: 6),
             tabBarView.trailingAnchor.constraint(
                 equalTo: workspaceSelector.leadingAnchor, constant: -8),

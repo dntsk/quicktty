@@ -51,6 +51,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let name: String
     }
 
+    static let itemHeight: CGFloat = 30
+
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
@@ -180,7 +182,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             availableWidth: collectionView.bounds.width,
             tabCount: tabs.count
         )
-        return NSSize(width: metrics.itemWidth, height: 34)
+        return NSSize(width: metrics.itemWidth, height: Self.itemHeight)
     }
 
     func collectionView(

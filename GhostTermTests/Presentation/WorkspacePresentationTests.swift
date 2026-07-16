@@ -153,9 +153,20 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func compactTabChromeUsesExactHeights() {
+        #expect(WorkspaceViewController.chromeHeight == 34)
+        #expect(TabBarViewController.itemHeight == 30)
+    }
+
+    @Test
     func tabBarCollectionFillsRootWidthWithoutScrollView() {
         let tabBar = TabBarViewController()
-        tabBar.view.frame = NSRect(x: 0, y: 0, width: 500, height: 34)
+        tabBar.view.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: 500,
+            height: TabBarViewController.itemHeight
+        )
         tabBar.view.layoutSubtreeIfNeeded()
 
         let collectionViews = tabBar.view.subviews.compactMap { $0 as? NSCollectionView }
