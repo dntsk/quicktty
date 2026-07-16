@@ -1,0 +1,244 @@
+import Foundation
+import Testing
+
+@testable import GhostTerm
+
+@Suite(.serialized)
+@MainActor
+struct ConfigControllerTests {
+    @Test
+    func loadCreatesStarterAndAtomicEffectiveFileBesideSource() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        var reloadURLs: [URL] = []
+        var updates: [GhostTermConfig] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { reloadURLs.append($0) },
+            onUpdate: { updates.append($0) }
+        )
+
+        try controller.load()
+
+        #expect(try Data(contentsOf: fixture.configURL) == fixture.starterData)
+        #expect(reloadURLs == [fixture.effectiveURL])
+        #expect(updates == [GhostTermConfig()])
+        #expect(
+            try Data(contentsOf: fixture.effectiveURL)
+                == Data("font-family = Mono\n".utf8)
+        )
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                at: fixture.directoryURL,
+                includingPropertiesForKeys: nil
+            ).contains { $0.lastPathComponent.contains(".tmp-") } == false
+        )
+    }
+
+    @Test
+    func invalidReloadRetainsLastValidConfigAndDoesNotCallBridge() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        var reloadCount = 0
+        let controller = fixture.makeController(reloadGhostty: { _ in reloadCount += 1 })
+        try controller.load()
+        let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
+        try Data("ghostterm-quake-height = impossible\n".utf8).write(to: fixture.configURL)
+
+        #expect(throws: ConfigControllerError.self) {
+            try controller.reload()
+        }
+
+        #expect(controller.activeConfig == GhostTermConfig())
+        #expect(reloadCount == 1)
+        #expect(try Data(contentsOf: fixture.effectiveURL) == effectiveBefore)
+    }
+
+    @Test
+    func bridgeFailureRollsBackActiveConfigAndEffectiveBytes() throws {
+        enum Failure: Error { case rejected }
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        let failureSwitch = ReloadFailureSwitch()
+        var updates: [GhostTermConfig] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in
+                if failureSwitch.shouldFail { throw Failure.rejected }
+            },
+            onUpdate: { updates.append($0) }
+        )
+        try controller.load()
+        let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
+        try Data(
+            "font-family = Changed\nghostterm-presentation-mode = quake\n".utf8
+        ).write(to: fixture.configURL)
+        failureSwitch.shouldFail = true
+
+        #expect(throws: ConfigControllerError.self) {
+            try controller.reload()
+        }
+
+        #expect(controller.activeConfig.presentationMode == .normal)
+        #expect(try Data(contentsOf: fixture.effectiveURL) == effectiveBefore)
+        #expect(updates.map(\.presentationMode) == [.normal])
+    }
+
+    @Test
+    func presentationUpdatePatchesOnlyEffectiveDuplicateThenReloads() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        let source = Data(
+            """
+            ghostterm-presentation-mode = normal
+            # preserved
+            ghostterm-presentation-mode  =  normal  # effective
+            font-size = 14
+            """.utf8
+        )
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try source.write(to: fixture.configURL)
+        var reloadCount = 0
+        let controller = fixture.makeController(reloadGhostty: { _ in reloadCount += 1 })
+        try controller.load()
+
+        try controller.updatePresentationMode(.quake)
+
+        #expect(
+            try Data(contentsOf: fixture.configURL)
+                == Data(
+                    """
+                    ghostterm-presentation-mode = normal
+                    # preserved
+                    ghostterm-presentation-mode  =  quake  # effective
+                    font-size = 14
+                    """.utf8
+                )
+        )
+        #expect(controller.activeConfig.presentationMode == .quake)
+        #expect(reloadCount == 2)
+    }
+
+    @Test
+    func watcherUsesInjectedSourceURLAndCoalescesWithoutSleeping() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: fixture.configURL)
+        let source = ManualConfigEventSource()
+        let scheduler = ManualConfigScheduler()
+        var changeCount = 0
+        let watcher = ConfigFileWatcher(
+            url: fixture.configURL,
+            scheduler: scheduler.schedule,
+            eventSource: source.eventSource,
+            onChange: { changeCount += 1 }
+        )
+        try watcher.start()
+
+        source.emitLatest()
+        source.emitLatest()
+        source.emitLatest()
+        scheduler.runAllIncludingCanceled()
+
+        #expect(source.startedURLs.allSatisfy { $0 == fixture.configURL })
+        #expect(changeCount == 1)
+        #expect(scheduler.cancellationCount == 2)
+        watcher.stop()
+    }
+}
+
+@MainActor
+private final class ReloadFailureSwitch {
+    var shouldFail = false
+}
+
+@MainActor
+private final class ManualConfigEventSource {
+    private var handlers: [@MainActor @Sendable () -> Void] = []
+    private(set) var startedURLs: [URL] = []
+
+    var eventSource: ConfigFileWatcher.EventSource {
+        ConfigFileWatcher.EventSource { [self] url, handler in
+            startedURLs.append(url)
+            handlers.append(handler)
+            return {}
+        }
+    }
+
+    func emitLatest() {
+        handlers.last?()
+    }
+}
+
+@MainActor
+private final class ManualConfigScheduler {
+    private var callbacks: [@MainActor () -> Void] = []
+    private var canceled: [Bool] = []
+    private(set) var cancellationCount = 0
+
+    func schedule(_ action: @escaping @MainActor () -> Void) -> @MainActor () -> Void {
+        let index = callbacks.count
+        callbacks.append(action)
+        canceled.append(false)
+        return { [weak self] in
+            guard let self, !canceled[index] else { return }
+            canceled[index] = true
+            cancellationCount += 1
+        }
+    }
+
+    func runAllIncludingCanceled() {
+        for callback in callbacks {
+            callback()
+        }
+    }
+}
+
+@MainActor
+private struct ConfigFixture {
+    let directoryURL: URL
+    let configURL: URL
+    let effectiveURL: URL
+    let starterData = Data(
+        """
+        font-family = Mono
+        ghostterm-presentation-mode = normal
+        ghostterm-global-toggle = cmd+f12
+        ghostterm-quake-height = 75%
+        ghostterm-quake-animation-duration = 0.18
+        ghostterm-quake-padding = 0
+        ghostterm-hide-on-focus-loss = true
+        """.utf8
+    )
+
+    init() throws {
+        directoryURL = FileManager.default.temporaryDirectory.appending(
+            path: "GhostTerm-ConfigTests-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        configURL = directoryURL.appending(path: "config")
+        effectiveURL = directoryURL.appending(path: ".ghostty-effective-config")
+    }
+
+    func makeController(
+        reloadGhostty: @escaping ConfigController.ReloadGhostty,
+        onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in }
+    ) -> ConfigController {
+        ConfigController(
+            configURL: configURL,
+            effectiveGhosttyURL: effectiveURL,
+            starterData: starterData,
+            reloadGhostty: reloadGhostty,
+            onUpdate: onUpdate
+        )
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
