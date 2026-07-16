@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.logConfigurationError(error)
                     }
                 },
+                persistNormalWindowFrame: { [weak self] frame in
+                    self?.normalWindowFrameDidChange(frame)
+                },
                 onError: { [weak self] error in
                     self?.logConfigurationError(error)
                 }
@@ -77,7 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configController?.stop()
         if var applicationState, let stateStore {
             if let normalWindowFrame = windowCoordinator?.normalWindowFrame {
-                applicationState.normalWindowFrame = normalWindowFrame
+                applicationState = Self.applicationState(
+                    applicationState,
+                    updatingNormalWindowFrame: normalWindowFrame
+                )
             }
             self.applicationState = applicationState
             stateStore.scheduleSave(applicationState)
@@ -104,6 +110,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRunningHostedTests: ApplicationEnvironment.isRunningHostedTests,
             presentationMode: windowCoordinator?.presentationMode
         )
+    }
+
+    static func applicationState(
+        _ applicationState: ApplicationState,
+        updatingNormalWindowFrame normalWindowFrame: NormalWindowFrame
+    ) -> ApplicationState {
+        var updatedState = applicationState
+        updatedState.normalWindowFrame = normalWindowFrame
+        return updatedState
     }
 
     static func shouldTerminateAfterLastWindowClosed(
@@ -180,6 +195,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePresentationMode() {
         windowCoordinator?.togglePresentationMode()
+    }
+
+    private func normalWindowFrameDidChange(_ normalWindowFrame: NormalWindowFrame) {
+        guard let applicationState, let stateStore else { return }
+        let updatedState = Self.applicationState(
+            applicationState,
+            updatingNormalWindowFrame: normalWindowFrame
+        )
+        self.applicationState = updatedState
+        stateStore.scheduleSave(updatedState)
     }
 
     private func loadApplicationState() -> ApplicationState {

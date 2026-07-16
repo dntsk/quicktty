@@ -4,6 +4,7 @@ import AppKit
 final class WindowCoordinator: NSObject, NSWindowDelegate {
     typealias ModePersistence = @MainActor (PresentationMode) -> Void
     typealias QuakeHeightPersistence = @MainActor (Double) -> Void
+    typealias NormalWindowFramePersistence = @MainActor (NormalWindowFrame) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
 
     private let ghosttyBridge: GhosttyBridge
@@ -13,6 +14,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let hotKeyController: any HotKeyControlling
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
+    private let persistNormalWindowFrame: NormalWindowFramePersistence
     private let onError: ErrorHandler
     private let workspaceViewController = WorkspaceViewController()
     private var workspaceStore: WorkspaceStore
@@ -44,6 +46,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         persistPresentationMode: @escaping ModePersistence = { _ in },
         persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
+        persistNormalWindowFrame: @escaping NormalWindowFramePersistence = { _ in },
         onError: @escaping ErrorHandler = { _ in },
         hotKeyController: (any HotKeyControlling)? = nil,
         visibleScreenFrames: @escaping @MainActor () -> [NSRect] = {
@@ -72,6 +75,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.surfaceConfiguration = surfaceConfiguration
         workspaceStore = initialWorkspaceStore
         self.confirmationPresenter = confirmationPresenter
+        self.persistNormalWindowFrame = persistNormalWindowFrame
         self.onError = onError
         presentationController = try! PresentationController(
             contentViewController: workspaceViewController,
@@ -112,7 +116,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     var normalWindowFrame: NormalWindowFrame? {
-        normalWindowController.window.flatMap { Self.normalWindowFrame(from: $0.frame) }
+        Self.normalWindowFrame(from: presentationController.normalFrameForPersistence)
     }
 
     private var activeWindow: NSWindow? {
@@ -480,6 +484,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
     #endif
 
+    func windowDidEndLiveResize(_ notification: Notification) {
+        persistNormalWindowFrameIfNeeded(from: notification)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        persistNormalWindowFrameIfNeeded(from: notification)
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === normalWindowController.window else { return true }
         let activeSurfaceIDs = ghosttyBridge.activeSurfaceIDs
@@ -515,6 +527,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         confirmationQueue.invalidateAll()
         closeActiveSurfaces()
+    }
+
+    private func persistNormalWindowFrameIfNeeded(from notification: Notification) {
+        guard
+            let window = notification.object as? NSWindow,
+            window === normalWindowController.window,
+            let frame = Self.normalWindowFrame(from: window.frame)
+        else { return }
+
+        persistNormalWindowFrame(frame)
     }
 
     private func closeActiveSurfaces() {

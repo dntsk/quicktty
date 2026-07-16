@@ -171,6 +171,55 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func initialQuakeRestoresHiddenNormalFrameForLaterNormalTransition() throws {
+        let content = NSViewController()
+        content.view = NSView()
+        let restoredFrame = NSRect(x: 40, y: 50, width: 900, height: 600)
+        let normal = FakePresentationContainer()
+        let quake = FakeQuakeContainer()
+        let controller = try PresentationController(
+            contentViewController: content,
+            normalWindowController: normal,
+            quakeWindowController: quake,
+            initialMode: .quake,
+            savedNormalFrame: restoredFrame,
+            persistSuccessfulMode: { _ in }
+        )
+
+        #expect(normal.presentationFrame == restoredFrame)
+        #expect(!normal.isPresentationVisible)
+        #expect(quake.installedContentViewController === content)
+
+        try controller.transition(to: .normal)
+
+        #expect(normal.presentationFrame == restoredFrame)
+        #expect(normal.installedContentViewController === content)
+    }
+
+    @Test
+    func normalFrameForPersistenceUsesCurrentNormalThenSavedFrameInQuake() throws {
+        let content = NSViewController()
+        content.view = NSView()
+        let normal = FakePresentationContainer(frame: NSRect(x: 10, y: 20, width: 700, height: 400))
+        let quake = FakeQuakeContainer()
+        let controller = try PresentationController(
+            contentViewController: content,
+            normalWindowController: normal,
+            quakeWindowController: quake,
+            persistSuccessfulMode: { _ in }
+        )
+        let currentNormalFrame = NSRect(x: 30, y: 40, width: 900, height: 600)
+        normal.setPresentationFrame(currentNormalFrame)
+
+        #expect(controller.normalFrameForPersistence == currentNormalFrame)
+
+        try controller.transition(to: .quake)
+        normal.setPresentationFrame(NSRect(x: 1, y: 2, width: 300, height: 200))
+
+        #expect(controller.normalFrameForPersistence == currentNormalFrame)
+    }
+
+    @Test
     func configDrivenTransitionDoesNotPersistWhileReparentingContent() throws {
         let content = NSViewController()
         content.view = NSView()

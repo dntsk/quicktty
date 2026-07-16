@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 
 @testable import GhostTerm
@@ -20,6 +21,59 @@ struct WindowCoordinatorConfigurationTests {
         coordinator.applyConfiguration(config)
 
         #expect(hotKeyController.registeredDescriptors == [HotKeyDescriptor(key: .f12)])
+    }
+
+    @Test
+    func normalWindowFrameUsesSavedFrameWhileQuakeIsActive() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let savedFrame = try #require(NormalWindowFrame(x: 11, y: 22, width: 800, height: 500))
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: .quake,
+            normalWindowFrame: savedFrame,
+            hotKeyController: RecordingHotKeyController(),
+            visibleScreenFrames: { [NSRect(x: 0, y: 0, width: 1_200, height: 900)] }
+        )
+        let hiddenNormalWindow = try #require(coordinator.windowForTesting)
+        hiddenNormalWindow.setFrame(NSRect(x: 1, y: 2, width: 300, height: 200), display: false)
+
+        #expect(coordinator.normalWindowFrame == savedFrame)
+    }
+
+    @Test
+    func normalWindowMoveAndResizePersistValidatedFrameAndIgnoreOtherWindows() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        var persistedFrames: [NormalWindowFrame] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            persistNormalWindowFrame: { persistedFrames.append($0) },
+            hotKeyController: RecordingHotKeyController()
+        )
+        let normalWindow = try #require(coordinator.windowForTesting)
+        let expectedFrame = try #require(NormalWindowFrame(x: 15, y: 25, width: 850, height: 550))
+        normalWindow.setFrame(WindowCoordinator.windowFrame(from: expectedFrame), display: false)
+
+        coordinator.windowDidMove(
+            Notification(name: NSWindow.didMoveNotification, object: normalWindow)
+        )
+        coordinator.windowDidEndLiveResize(
+            Notification(name: NSWindow.didEndLiveResizeNotification, object: normalWindow)
+        )
+
+        var quakeConfig = GhostTermConfig()
+        quakeConfig.presentationMode = .quake
+        coordinator.applyConfiguration(quakeConfig)
+        let quakeWindow = try #require(coordinator.activeWindowForTesting)
+        coordinator.windowDidMove(
+            Notification(name: NSWindow.didMoveNotification, object: quakeWindow)
+        )
+        coordinator.windowDidEndLiveResize(
+            Notification(name: NSWindow.didEndLiveResizeNotification, object: quakeWindow)
+        )
+
+        #expect(persistedFrames == [expectedFrame, expectedFrame])
     }
 
     @Test

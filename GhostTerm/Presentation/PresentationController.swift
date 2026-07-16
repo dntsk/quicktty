@@ -50,6 +50,15 @@ final class PresentationController {
         try installInitialPresentation()
     }
 
+    var normalFrameForPersistence: NSRect {
+        switch mode {
+        case .normal:
+            normalWindowController.presentationFrame
+        case .quake:
+            savedNormalFrame ?? normalWindowController.presentationFrame
+        }
+    }
+
     var toggleQuakeVisibility: @MainActor () -> Void {
         { [weak self] in
             guard let self, self.mode == .quake else { return }
@@ -89,12 +98,12 @@ final class PresentationController {
         try clearUnexpectedContent(in: quakeWindowController)
         normalWindowController.hidePresentationWindow()
         quakeWindowController.deactivateForModeTransition()
+        if let savedNormalFrame {
+            normalWindowController.setPresentationFrame(savedNormalFrame)
+        }
 
         switch mode {
         case .normal:
-            if let savedNormalFrame {
-                normalWindowController.setPresentationFrame(savedNormalFrame)
-            }
             try normalWindowController.installContentViewController(contentViewController)
             try normalWindowController.showPresentationWindow()
         case .quake:

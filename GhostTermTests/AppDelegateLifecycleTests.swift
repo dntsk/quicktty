@@ -53,6 +53,21 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func updatingNormalWindowFramePreservesOtherApplicationState() throws {
+        let workspaceStore = WorkspaceStore()
+        let frame = try #require(NormalWindowFrame(x: 12, y: 34, width: 900, height: 600))
+        let initialState = ApplicationState(workspaceStore: workspaceStore)
+
+        let updatedState = AppDelegate.applicationState(
+            initialState,
+            updatingNormalWindowFrame: frame
+        )
+
+        #expect(updatedState.workspaceStore == workspaceStore)
+        #expect(updatedState.normalWindowFrame == frame)
+    }
+
+    @Test
     func newTabMenuItemUsesCommandTAndAppDelegateAction() {
         let delegate = AppDelegate()
         let item = AppDelegate.makeNewTabMenuItem(target: delegate)
