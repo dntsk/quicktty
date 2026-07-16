@@ -319,6 +319,38 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func splitActivePaneUsesLiveWorkingDirectoryInsteadOfStartupDescriptor() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/startup",
+                command: "exec /bin/cat"
+            )
+        )
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+
+        #expect(firstSurface.currentWorkingDirectory == "/tmp/startup")
+        #expect(firstSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/live"))
+        await Task.yield()
+
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        let descriptor = try #require(
+            activeTab(of: coordinator).paneDescriptor(for: secondSurface.paneID)
+        )
+        #expect(descriptor.cwd == "/tmp/live")
+        #expect(secondSurface.currentWorkingDirectory == "/tmp/live")
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: secondSurface.paneID)?.workingDirectory
+                == "/tmp/live"
+        )
+    }
+
+    @Test
     func splitActivePaneRollsBackCreatedSurfaceAndStoreWhenCandidateMutationFails() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

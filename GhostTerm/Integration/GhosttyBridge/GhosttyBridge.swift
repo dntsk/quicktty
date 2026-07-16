@@ -44,9 +44,22 @@ private func ghosttyRuntimeWakeupCallback(_ userdata: UnsafeMutableRawPointer?) 
 
 private func ghosttyRuntimeActionCallback(
     _ application: ghostty_app_t?,
-    _: ghostty_target_s,
+    _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_PWD,
+        target.tag == GHOSTTY_TARGET_SURFACE,
+        let surface = target.target.surface,
+        let userdata = ghostty_surface_userdata(surface),
+        let pwd = action.action.pwd.pwd,
+        let workingDirectory = String(validatingCString: pwd)
+    {
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleWorkingDirectoryChange(workingDirectory)
+    }
+
     guard let application,
         let userdata = ghostty_app_userdata(application)
     else { return false }

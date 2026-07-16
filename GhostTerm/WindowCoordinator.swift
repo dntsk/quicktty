@@ -211,14 +211,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             let tabID = workspace.activeTabID,
             let tab = workspaceStore.tab(id: tabID),
             let descriptor = tab.paneDescriptor(for: tab.activePaneID),
-            surfaces[tab.activePaneID] != nil
+            let activeSurface = surfaces[tab.activePaneID]
         else {
             return
         }
 
+        let workingDirectory =
+            activeSurface.currentWorkingDirectory.flatMap {
+                $0.isEmpty ? nil : $0
+            } ?? descriptor.cwd
         let paneID = PaneID()
         var splitConfiguration = surfaceConfiguration
-        splitConfiguration.workingDirectory = descriptor.cwd
+        splitConfiguration.workingDirectory = workingDirectory
         splitConfiguration.command = nil
         splitConfiguration.initialInput = nil
         splitConfiguration.context = .split
@@ -230,7 +234,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         let newPane = TerminalPaneDescriptor(
             id: paneID,
-            cwd: descriptor.cwd,
+            cwd: workingDirectory,
             startupCommand: .shell
         )
         var candidate = workspaceStore

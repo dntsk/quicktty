@@ -26,6 +26,73 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func pwdChangesAreDeliveredToTheirOwningSurfaces() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/initial-first",
+                command: "exec /bin/cat"
+            )
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/initial-second",
+                command: "exec /bin/cat"
+            )
+        )
+
+        #expect(first.currentWorkingDirectory == "/tmp/initial-first")
+        #expect(second.currentWorkingDirectory == "/tmp/initial-second")
+        #expect(first.scheduleWorkingDirectoryChangeForTesting("/tmp/live-first"))
+        #expect(second.scheduleWorkingDirectoryChangeForTesting("/tmp/live-second"))
+
+        await Task.yield()
+
+        #expect(first.currentWorkingDirectory == "/tmp/live-first")
+        #expect(second.currentWorkingDirectory == "/tmp/live-second")
+    }
+
+    @Test
+    func coalescedPwdChangesKeepTheFinalWorkingDirectory() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/initial",
+                command: "exec /bin/cat"
+            )
+        )
+
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/first"))
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/second"))
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/final"))
+        await Task.yield()
+
+        #expect(surface.currentWorkingDirectory == "/tmp/final")
+    }
+
+    @Test
+    func queuedPwdChangeIsIgnoredAfterSurfaceClose() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let surface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/initial",
+                command: "exec /bin/cat"
+            )
+        )
+
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/live"))
+        bridge.closeSurface(id: paneID)
+        await Task.yield()
+
+        #expect(surface.currentWorkingDirectory == "/tmp/initial")
+    }
+
+    @Test
     func resizeUpdatesRealCoreSurfaceMetricsInBackingPixels() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

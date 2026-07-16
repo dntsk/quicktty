@@ -94,6 +94,7 @@ enum GhosttySurfaceCallbackEvent: Sendable {
         contents: [GhosttyClipboardContent]
     )
     case close(processAlive: Bool)
+    case pwdChanged(String)
 }
 
 func ghosttyRuntimeCloseSurfaceCallback(
@@ -125,6 +126,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private var keyTextAccumulator: [String]?
     private var lastPerformKeyEvent: TimeInterval?
     private(set) var isActive = false
+    private(set) var currentWorkingDirectory: String?
 
     #if DEBUG
         private var inputObservations: [GhosttySurfaceInputObservation] = []
@@ -181,6 +183,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         self.applicationIsActive = applicationIsActive
         self.clipboardClient = clipboardClient
         self.clipboardInvalidationRoute = clipboardInvalidationRoute
+        currentWorkingDirectory = configuration.workingDirectory
         surface = nil
 
         let callbackContext = SurfaceCallbackContext(
@@ -412,6 +415,14 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
                 callbackContextOwnership?.toOpaque(),
                 processAlive
             )
+        }
+
+        @discardableResult
+        func scheduleWorkingDirectoryChangeForTesting(
+            _ workingDirectory: String
+        ) -> Bool {
+            callbackContextOwnership?.takeUnretainedValue()
+                .scheduleWorkingDirectoryChange(workingDirectory) ?? false
         }
 
         func isPlainCommandDigitForTesting(_ event: NSEvent) -> Bool {
@@ -1274,6 +1285,8 @@ extension GhosttySurfaceView {
             processClipboardWrite(location: location, contents: contents)
         case .close:
             break
+        case .pwdChanged(let workingDirectory):
+            currentWorkingDirectory = workingDirectory
         }
     }
 
@@ -1420,6 +1433,7 @@ final class SurfaceCallbackContext: Sendable {
     private struct State: Sendable {
         var isActive = true
         var pendingProcessAlive: Bool?
+        var pendingWorkingDirectory: String?
         var reads: [UInt: PendingRead] = [:]
         var writes: [UUID: GhosttyClipboardConfirmationRequest] = [:]
     }
@@ -1440,6 +1454,7 @@ final class SurfaceCallbackContext: Sendable {
             guard state.isActive else { return [] }
             state.isActive = false
             state.pendingProcessAlive = nil
+            state.pendingWorkingDirectory = nil
             let tokens = Array(state.reads.keys)
             state.reads.removeAll()
             state.writes.removeAll()
@@ -1597,6 +1612,24 @@ final class SurfaceCallbackContext: Sendable {
         }
     }
 
+    @discardableResult
+    func scheduleWorkingDirectoryChange(_ workingDirectory: String) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingWorkingDirectory == nil
+            state.pendingWorkingDirectory = workingDirectory
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverWorkingDirectoryChangeIfActive()
+            }
+        }
+        return true
+    }
+
     func scheduleClose(processAlive: Bool) {
         let shouldSchedule = state.withLock { state in
             guard state.isActive else { return false }
@@ -1649,6 +1682,18 @@ final class SurfaceCallbackContext: Sendable {
         }
         guard isQueued else { return }
         eventHandler(paneID, .clipboardConfirmation(request))
+    }
+
+    @MainActor
+    private func deliverWorkingDirectoryChangeIfActive() {
+        let workingDirectory = state.withLock { state -> String? in
+            guard state.isActive else { return nil }
+            let workingDirectory = state.pendingWorkingDirectory
+            state.pendingWorkingDirectory = nil
+            return workingDirectory
+        }
+        guard let workingDirectory else { return }
+        eventHandler(paneID, .pwdChanged(workingDirectory))
     }
 
     @MainActor
