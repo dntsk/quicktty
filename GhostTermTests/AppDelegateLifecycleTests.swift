@@ -217,8 +217,8 @@ struct AppDelegateLifecycleTests {
         let applicationMenu = NSMenu(title: "GhostTerm")
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)
-        let commandComma = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: ",")
-        commandComma.keyEquivalentModifierMask = [.command]
+        let commandCapsLockComma = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: ",")
+        commandCapsLockComma.keyEquivalentModifierMask = [.command, .capsLock]
         let titledDuplicate = NSMenuItem(
             title: "Open Configuration…",
             action: nil,
@@ -230,12 +230,19 @@ struct AppDelegateLifecycleTests {
         commandOptionComma.keyEquivalentModifierMask = [.command, .option]
         let commandControlComma = NSMenuItem(title: "Control", action: nil, keyEquivalent: ",")
         commandControlComma.keyEquivalentModifierMask = [.command, .control]
+        let commandNumericPadComma = NSMenuItem(
+            title: "Numeric Pad", action: nil, keyEquivalent: ",")
+        commandNumericPadComma.keyEquivalentModifierMask = [.command, .numericPad]
+        let commandHelpComma = NSMenuItem(title: "Help", action: nil, keyEquivalent: ",")
+        commandHelpComma.keyEquivalentModifierMask = [.command, .help]
         [
-            commandComma,
+            commandCapsLockComma,
             titledDuplicate,
             commandShiftComma,
             commandOptionComma,
             commandControlComma,
+            commandNumericPadComma,
+            commandHelpComma,
         ].forEach(applicationMenu.addItem)
 
         for _ in 0..<2 {
@@ -247,16 +254,28 @@ struct AppDelegateLifecycleTests {
         }
 
         let item = try #require(applicationMenu.item(withTitle: "Open Configuration…"))
-        #expect(applicationMenu.items.count == 4)
+        #expect(applicationMenu.items.count == 6)
         #expect(applicationMenu.items.filter { $0.title == "Open Configuration…" }.count == 1)
-        #expect(item === commandComma)
+        #expect(item === commandCapsLockComma)
         #expect(item.action == #selector(OpenConfigurationMenuActionTarget.openConfiguration))
         #expect(item.keyEquivalent == ",")
-        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(AppDelegate.hasExactCommandShortcutModifiers(item.keyEquivalentModifierMask))
         #expect(item.target === target)
-        #expect(applicationMenu.items.contains { $0 === commandShiftComma })
-        #expect(applicationMenu.items.contains { $0 === commandOptionComma })
-        #expect(applicationMenu.items.contains { $0 === commandControlComma })
+
+        let foreignItems = [
+            commandShiftComma,
+            commandOptionComma,
+            commandControlComma,
+            commandNumericPadComma,
+            commandHelpComma,
+        ]
+        for foreignItem in foreignItems {
+            #expect(applicationMenu.items.contains { $0 === foreignItem })
+            #expect(
+                !AppDelegate.hasExactCommandShortcutModifiers(foreignItem.keyEquivalentModifierMask)
+            )
+        }
+        #expect(!AppDelegate.hasExactCommandShortcutModifiers([.command, .function]))
     }
 
     @Test

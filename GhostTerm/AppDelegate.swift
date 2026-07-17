@@ -239,7 +239,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func isCanonicalOpenConfigurationMenuItem(_ item: NSMenuItem) -> Bool {
         item.title == "Open Configuration…"
             || (item.keyEquivalent == ","
-                && normalizedShortcutModifiers(for: item) == [.command])
+                && hasExactCommandShortcutModifiers(item.keyEquivalentModifierMask))
+    }
+
+    static func hasExactCommandShortcutModifiers(_ modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(.capsLock) == [.command]
     }
 
     static func makeSplitPaneMenuItem(

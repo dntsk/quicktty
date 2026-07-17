@@ -997,7 +997,10 @@ extension GhosttySurfaceView {
     }
 
     private func isOpenConfigurationShortcut(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers == "," && isPlainCommandShortcut(event)
+        event.charactersIgnoringModifiers == ","
+            && event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .subtracting(.capsLock) == [.command]
     }
 
     private func isBroadcastShortcut(_ event: NSEvent) -> Bool {

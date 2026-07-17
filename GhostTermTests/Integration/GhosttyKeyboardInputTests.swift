@@ -306,12 +306,39 @@ extension GhosttyBridgeTests {
             keyCode: 43,
             timestamp: 5
         )
+        let commandFunctionComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .function],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 6
+        )
+        let commandNumericPadComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .numericPad],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 7
+        )
+        let commandHelpComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .help],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 8
+        )
 
         #expect(surface.isOpenConfigurationShortcutForTesting(commandComma))
         #expect(surface.isOpenConfigurationShortcutForTesting(commandCapsLockComma))
         #expect(!surface.isOpenConfigurationShortcutForTesting(commandShiftComma))
         #expect(!surface.isOpenConfigurationShortcutForTesting(commandOptionComma))
         #expect(!surface.isOpenConfigurationShortcutForTesting(commandControlComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandFunctionComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandNumericPadComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandHelpComma))
 
         let initialRouteCount = bridge.inputObservationsForTesting.count
         #expect(!surface.performKeyEquivalent(with: commandComma))
@@ -322,7 +349,10 @@ extension GhosttyBridgeTests {
         #expect(surface.performKeyEquivalent(with: commandShiftComma))
         #expect(surface.performKeyEquivalent(with: commandOptionComma))
         #expect(surface.performKeyEquivalent(with: commandControlComma))
-        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 3)
+        #expect(surface.performKeyEquivalent(with: commandFunctionComma))
+        #expect(surface.performKeyEquivalent(with: commandNumericPadComma))
+        #expect(surface.performKeyEquivalent(with: commandHelpComma))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 6)
     }
 
     @Test
