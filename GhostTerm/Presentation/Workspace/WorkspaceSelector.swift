@@ -8,42 +8,63 @@ final class WorkspaceSelector: NSView {
         case delete
     }
 
+    static let workspaceMenuItemAction = #selector(WorkspaceSelector.selectWorkspace(_:))
+    static let workspaceManagementMenuItemAction = #selector(
+        WorkspaceSelector.performWorkspaceAction(_:)
+    )
+
     var onSelection: ((WorkspaceID) -> Void)?
     var onCreateWorkspace: (() -> Void)?
     var onRenameWorkspace: (() -> Void)?
     var onDeleteWorkspace: (() -> Void)?
 
-    private let popUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let button = NSButton(frame: .zero)
+    private let workspaceMenu = NSMenu()
+    private var menuPresenter: ((NSMenu, NSButton) -> Void)?
     private var workspaceNames: [String] = []
     private var activeWorkspaceID: WorkspaceID?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
-        popUpButton.identifier = NSUserInterfaceItemIdentifier("workspace-selector")
-        popUpButton.controlSize = .small
-        popUpButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-        popUpButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(popUpButton)
+        button.identifier = NSUserInterfaceItemIdentifier("workspace-selector")
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        button.image = NSImage(
+            systemSymbolName: "chevron.down",
+            accessibilityDescription: "Workspace menu"
+        )
+        button.imagePosition = .imageTrailing
+        button.imageScaling = .scaleProportionallyDown
+        button.target = self
+        button.action = #selector(presentWorkspaceMenu(_:))
+        button.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(button)
         NSLayoutConstraint.activate([
-            popUpButton.leadingAnchor.constraint(equalTo: leadingAnchor),
-            popUpButton.trailingAnchor.constraint(equalTo: trailingAnchor),
-            popUpButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.leadingAnchor.constraint(equalTo: leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+
+        workspaceMenu.autoenablesItems = false
     }
 
     func apply(workspaces: [Workspace], activeWorkspaceID: WorkspaceID) {
         self.activeWorkspaceID = activeWorkspaceID
         workspaceNames = workspaces.map(\.name)
-        popUpButton.removeAllItems()
-        for workspace in workspaces {
-            addWorkspaceItem(workspace)
+        workspaceMenu.removeAllItems()
+        for (index, workspace) in workspaces.enumerated() {
+            addWorkspaceItem(
+                workspace,
+                index: index,
+                isActive: workspace.id == activeWorkspaceID
+            )
         }
-        popUpButton.menu?.addItem(.separator())
+        workspaceMenu.addItem(.separator())
         addActionItem(.new, title: "New Workspace…")
         addActionItem(.rename, title: "Rename Workspace…")
         addActionItem(.delete, title: "Delete Workspace…", isEnabled: workspaces.count > 1)
-        selectActiveWorkspace()
+        button.title = workspaces.first(where: { $0.id == activeWorkspaceID })?.name ?? ""
     }
 
     var displayedWorkspaceNames: [String] {
@@ -51,19 +72,26 @@ final class WorkspaceSelector: NSView {
     }
 
     var selectedWorkspaceID: WorkspaceID? {
-        guard let rawID = popUpButton.selectedItem?.representedObject as? NSUUID else { return nil }
-        return WorkspaceID(rawValue: rawID as UUID)
+        activeWorkspaceID
     }
 
-    private func addWorkspaceItem(_ workspace: Workspace) {
+    private func addWorkspaceItem(
+        _ workspace: Workspace,
+        index: Int,
+        isActive: Bool
+    ) {
         let item = NSMenuItem(
             title: workspace.name,
-            action: #selector(selectWorkspace(_:)),
-            keyEquivalent: ""
+            action: Self.workspaceMenuItemAction,
+            keyEquivalent: index < 9 ? "\(index + 1)" : ""
         )
+        if index < 9 {
+            item.keyEquivalentModifierMask = [.command, .option]
+        }
         item.target = self
         item.representedObject = workspace.id.rawValue as NSUUID
-        popUpButton.menu?.addItem(item)
+        item.state = isActive ? .on : .off
+        workspaceMenu.addItem(item)
     }
 
     private func addActionItem(
@@ -73,25 +101,25 @@ final class WorkspaceSelector: NSView {
     ) {
         let item = NSMenuItem(
             title: title,
-            action: #selector(performWorkspaceAction(_:)),
+            action: Self.workspaceManagementMenuItemAction,
             keyEquivalent: ""
         )
         item.target = self
         item.tag = action.rawValue
         item.isEnabled = isEnabled
-        popUpButton.menu?.addItem(item)
+        workspaceMenu.addItem(item)
     }
 
-    private func selectActiveWorkspace() {
-        guard let activeWorkspaceID,
-            let itemIndex = popUpButton.itemArray.firstIndex(where: { item in
-                guard let rawID = item.representedObject as? NSUUID else { return false }
-                return WorkspaceID(rawValue: rawID as UUID) == activeWorkspaceID
-            })
-        else {
+    @objc private func presentWorkspaceMenu(_: Any?) {
+        if let menuPresenter {
+            menuPresenter(workspaceMenu, button)
             return
         }
-        popUpButton.selectItem(at: itemIndex)
+        workspaceMenu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: button.bounds.height),
+            in: button
+        )
     }
 
     @objc private func selectWorkspace(_ sender: NSMenuItem) {
@@ -99,18 +127,14 @@ final class WorkspaceSelector: NSView {
             sender.isEnabled,
             let rawID = sender.representedObject as? NSUUID
         else {
-            selectActiveWorkspace()
             return
         }
-        let workspaceID = WorkspaceID(rawValue: rawID as UUID)
-        popUpButton.select(sender)
-        onSelection?(workspaceID)
+        onSelection?(WorkspaceID(rawValue: rawID as UUID))
     }
 
     @objc private func performWorkspaceAction(_ sender: NSMenuItem) {
         guard sender.isEnabled, let action = Action(rawValue: sender.tag) else { return }
 
-        selectActiveWorkspace()
         switch action {
         case .new:
             onCreateWorkspace?()
@@ -130,7 +154,7 @@ final class WorkspaceSelector: NSView {
         }
 
         var itemDescriptorsForTesting: [ItemDescriptor] {
-            popUpButton.itemArray.map { item in
+            workspaceMenu.items.map { item in
                 ItemDescriptor(
                     title: item.title,
                     isSeparator: item.isSeparatorItem,
@@ -141,14 +165,35 @@ final class WorkspaceSelector: NSView {
         }
 
         var allRealItemsHaveExplicitTargetAndActionForTesting: Bool {
-            popUpButton.itemArray
+            workspaceMenu.items
                 .filter { !$0.isSeparatorItem }
-                .allSatisfy { $0.target != nil && $0.action != nil }
+                .allSatisfy { $0.target === self && $0.action != nil }
+        }
+
+        var menuItemsForTesting: [NSMenuItem] {
+            workspaceMenu.items
+        }
+
+        var menuForTesting: NSMenu {
+            workspaceMenu
+        }
+
+        var buttonForTesting: NSButton {
+            button
+        }
+
+        var buttonTitleForTesting: String {
+            button.title
+        }
+
+        var menuPresenterForTesting: ((NSMenu, NSButton) -> Void)? {
+            get { menuPresenter }
+            set { menuPresenter = newValue }
         }
 
         func performWorkspaceSelectionForTesting(_ workspaceID: WorkspaceID) {
             guard
-                let item = popUpButton.itemArray.first(where: { item in
+                let item = workspaceMenu.items.first(where: { item in
                     guard let rawID = item.representedObject as? NSUUID else { return false }
                     return WorkspaceID(rawValue: rawID as UUID) == workspaceID
                 })
@@ -159,11 +204,16 @@ final class WorkspaceSelector: NSView {
         }
 
         func triggerActionForTesting(_ action: Action) {
-            guard let item = popUpButton.itemArray.first(where: { $0.tag == action.rawValue })
+            guard let item = workspaceMenu.items.first(where: { $0.tag == action.rawValue })
             else {
                 return
             }
             dispatchMenuItemActionForTesting(item)
+        }
+
+        func performButtonActionForTesting() {
+            guard let action = button.action else { return }
+            NSApp.sendAction(action, to: button.target, from: button)
         }
 
         private func dispatchMenuItemActionForTesting(_ item: NSMenuItem) {
@@ -172,7 +222,7 @@ final class WorkspaceSelector: NSView {
         }
 
         func isActionEnabledForTesting(_ action: Action) -> Bool {
-            popUpButton.itemArray.first(where: { $0.tag == action.rawValue })?.isEnabled ?? false
+            workspaceMenu.items.first(where: { $0.tag == action.rawValue })?.isEnabled ?? false
         }
     #endif
 

@@ -23,10 +23,10 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func workspaceSelectorKeepsStoreOrderAndActiveSelection() throws {
+    func workspaceSelectorUsesStandaloneMenuAndKeepsActiveWorkspaceUntilApply() throws {
         var store = WorkspaceStore()
-        let backendID = try store.createWorkspace(named: "Backend")
-        try store.activateWorkspace(backendID)
+        let testID = try store.createWorkspace(named: "Test")
+        try store.activateWorkspace(testID)
         let selector = WorkspaceSelector()
         var selectedWorkspaceIDs: [WorkspaceID] = []
         selector.onSelection = { selectedWorkspaceIDs.append($0) }
@@ -35,18 +35,51 @@ struct WorkspacePresentationTests {
             workspaces: store.workspaces,
             activeWorkspaceID: store.activeWorkspaceID
         )
-        selector.performWorkspaceSelectionForTesting(store.workspaces[0].id)
 
-        #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
-        #expect(selector.selectedWorkspaceID == store.workspaces[0].id)
-        #expect(selectedWorkspaceIDs == [store.workspaces[0].id])
+        let items = selector.menuItemsForTesting
+        #expect(selector.displayedWorkspaceNames == ["Default", "Test"])
+        #expect(selector.buttonTitleForTesting == "Test")
+        #expect(selector.selectedWorkspaceID == testID)
+        #expect(
+            items.map(\.title) == [
+                "Default", "Test", "", "New Workspace…", "Rename Workspace…", "Delete Workspace…",
+            ])
+        #expect(items[0].target === selector)
+        #expect(items[1].target === selector)
+        #expect(items[3].target === selector)
+        #expect(items[4].target === selector)
+        #expect(items[5].target === selector)
+        #expect(items[0].action == WorkspaceSelector.workspaceMenuItemAction)
+        #expect(items[1].action == WorkspaceSelector.workspaceMenuItemAction)
+        #expect(items[3].action == WorkspaceSelector.workspaceManagementMenuItemAction)
+        #expect(items[4].action == WorkspaceSelector.workspaceManagementMenuItemAction)
+        #expect(items[5].action == WorkspaceSelector.workspaceManagementMenuItemAction)
+        #expect(items[0].state == .off)
+        #expect(items[1].state == .on)
+        #expect(items[0].keyEquivalent == "1")
+        #expect(items[0].keyEquivalentModifierMask == [.command, .option])
+        #expect(items[1].keyEquivalent == "2")
+        #expect(items[1].keyEquivalentModifierMask == [.command, .option])
+        #expect(selector.allRealItemsHaveExplicitTargetAndActionForTesting)
+
+        let defaultID = store.workspaces[0].id
+        selector.performWorkspaceSelectionForTesting(defaultID)
+
+        #expect(selectedWorkspaceIDs == [defaultID])
+        #expect(selector.selectedWorkspaceID == testID)
+        #expect(selector.buttonTitleForTesting == "Test")
+
+        selector.apply(workspaces: store.workspaces, activeWorkspaceID: defaultID)
+        #expect(selector.selectedWorkspaceID == defaultID)
+        #expect(selector.buttonTitleForTesting == "Default")
+        #expect(selector.menuItemsForTesting[0].state == .on)
     }
 
     @Test
-    func workspaceSelectorSeparatesActionsAndReselectsTheActiveWorkspace() throws {
+    func workspaceSelectorDispatchesManagementActionsOnceAndDoesNotDispatchDisabledDelete() throws {
         var store = WorkspaceStore()
-        let backendID = try store.createWorkspace(named: "Backend")
-        try store.activateWorkspace(backendID)
+        let testID = try store.createWorkspace(named: "Test")
+        try store.activateWorkspace(testID)
         let selector = WorkspaceSelector()
         var requestedActions: [WorkspaceSelector.Action] = []
         var selectedWorkspaceIDsDuringAction: [WorkspaceID?] = []
@@ -63,77 +96,38 @@ struct WorkspacePresentationTests {
             selectedWorkspaceIDsDuringAction.append(selector.selectedWorkspaceID)
         }
 
-        selector.apply(
-            workspaces: store.workspaces,
-            activeWorkspaceID: store.activeWorkspaceID
-        )
-
-        #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
-        #expect(selector.allRealItemsHaveExplicitTargetAndActionForTesting)
-        #expect(
-            selector.itemDescriptorsForTesting
-                == [
-                    .init(
-                        title: "Default",
-                        isSeparator: false,
-                        action: nil,
-                        isEnabled: true
-                    ),
-                    .init(
-                        title: "Backend",
-                        isSeparator: false,
-                        action: nil,
-                        isEnabled: true
-                    ),
-                    .init(
-                        title: "",
-                        isSeparator: true,
-                        action: nil,
-                        isEnabled: false
-                    ),
-                    .init(
-                        title: "New Workspace…",
-                        isSeparator: false,
-                        action: .new,
-                        isEnabled: true
-                    ),
-                    .init(
-                        title: "Rename Workspace…",
-                        isSeparator: false,
-                        action: .rename,
-                        isEnabled: true
-                    ),
-                    .init(
-                        title: "Delete Workspace…",
-                        isSeparator: false,
-                        action: .delete,
-                        isEnabled: true
-                    ),
-                ]
-        )
-
+        selector.apply(workspaces: store.workspaces, activeWorkspaceID: testID)
         selector.triggerActionForTesting(.new)
         selector.triggerActionForTesting(.rename)
         selector.triggerActionForTesting(.delete)
 
-        #expect(selector.selectedWorkspaceID == backendID)
         #expect(requestedActions == [.new, .rename, .delete])
-        #expect(selectedWorkspaceIDsDuringAction == [backendID, backendID, backendID])
+        #expect(selectedWorkspaceIDsDuringAction == [testID, testID, testID])
+        #expect(selector.selectedWorkspaceID == testID)
+        #expect(selector.buttonTitleForTesting == "Test")
 
         selector.apply(workspaces: [store.workspaces[0]], activeWorkspaceID: store.workspaces[0].id)
         requestedActions = []
         selector.triggerActionForTesting(.delete)
         #expect(selector.selectedWorkspaceID == store.workspaces[0].id)
         #expect(requestedActions.isEmpty)
-        #expect(
-            selector.itemDescriptorsForTesting.last
-                == .init(
-                    title: "Delete Workspace…",
-                    isSeparator: false,
-                    action: .delete,
-                    isEnabled: false
-                )
-        )
+        #expect(!selector.menuItemsForTesting.last!.isEnabled)
+    }
+
+    @Test
+    func workspaceSelectorButtonActionUsesItsOwnedMenuThroughTestPresenter() {
+        let selector = WorkspaceSelector()
+        var presentedMenu: NSMenu?
+        var presentedButton: NSButton?
+        selector.menuPresenterForTesting = { menu, button in
+            presentedMenu = menu
+            presentedButton = button
+        }
+
+        selector.performButtonActionForTesting()
+
+        #expect(presentedMenu === selector.menuForTesting)
+        #expect(presentedButton === selector.buttonForTesting)
     }
 
     @Test

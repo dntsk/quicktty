@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installSplitPaneMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
+            installWorkspaceSelectionMenuItems()
             installPaneNavigationMenuItems()
             installToggleBroadcastMenuItem()
 
@@ -212,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
+    static let workspaceSelectionMenuItemAction = #selector(AppDelegate.activateWorkspace(_:))
     static let previousPaneMenuItemAction = #selector(AppDelegate.focusPreviousPane)
     static let nextPaneMenuItemAction = #selector(AppDelegate.focusNextPane)
     static let focusLeftPaneMenuItemAction = #selector(AppDelegate.focusLeftPane)
@@ -672,6 +674,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return mainMenu
     }
 
+    static func makeWorkspaceSelectionMenuItem(
+        index: Int,
+        target: AnyObject,
+        action: Selector = workspaceSelectionMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "Select Workspace \(index)",
+            action: action,
+            keyEquivalent: "\(index)"
+        )
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.representedObject = NSNumber(value: index)
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installWorkspaceSelectionMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = workspaceSelectionMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu = viewMenu(in: mainMenu)
+
+        for index in 1...9 {
+            let canonicalItems = viewMenu.items.filter {
+                $0.title == "Select Workspace \(index)"
+                    || ($0.keyEquivalent == "\(index)"
+                        && normalizedShortcutModifiers(for: $0) == [.command, .option])
+            }
+            guard let canonicalItem = canonicalItems.first else {
+                viewMenu.addItem(
+                    makeWorkspaceSelectionMenuItem(index: index, target: target, action: action))
+                continue
+            }
+
+            canonicalItem.title = "Select Workspace \(index)"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = "\(index)"
+            canonicalItem.keyEquivalentModifierMask = [.command, .option]
+            canonicalItem.representedObject = NSNumber(value: index)
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                viewMenu.removeItem(duplicate)
+            }
+        }
+        return mainMenu
+    }
+
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard menuItem.action == Self.toggleBroadcastMenuItemAction else { return true }
         return Self.validateToggleBroadcastMenuItem(
@@ -713,6 +765,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activateTab(_ sender: NSMenuItem) {
         guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
         windowCoordinator?.activateTab(at: index)
+    }
+
+    @objc private func activateWorkspace(_ sender: NSMenuItem) {
+        guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
+        windowCoordinator?.activateWorkspace(at: index)
     }
 
     @objc private func focusPreviousPane() {
@@ -863,6 +920,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installTabSelectionMenuItems() {
         let mainMenu = Self.installTabSelectionMenuItems(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installWorkspaceSelectionMenuItems() {
+        let mainMenu = Self.installWorkspaceSelectionMenuItems(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }

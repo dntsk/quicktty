@@ -372,6 +372,27 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
+    func activateWorkspace(at oneBasedIndex: Int) {
+        guard
+            (1...9).contains(oneBasedIndex),
+            workspaceStore.workspaces.indices.contains(oneBasedIndex - 1)
+        else {
+            return
+        }
+        activateWorkspace(id: workspaceStore.workspaces[oneBasedIndex - 1].id)
+    }
+
+    private func activateWorkspace(id workspaceID: WorkspaceID) {
+        var candidate = workspaceStore
+        do {
+            try candidate.activateWorkspace(workspaceID)
+        } catch {
+            return
+        }
+        guard commitWorkspaceStore(candidate) else { return }
+        refreshWorkspacePresentation(focusTerminal: true)
+    }
+
     func toggleBroadcast() {
         let workspaceID = workspaceStore.activeWorkspaceID
         guard
@@ -630,15 +651,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func configurePresentationCallbacks() {
         workspaceViewController.onActivateWorkspace = { [weak self] workspaceID in
-            guard let self else { return }
-            var candidate = workspaceStore
-            do {
-                try candidate.activateWorkspace(workspaceID)
-            } catch {
-                return
-            }
-            guard commitWorkspaceStore(candidate) else { return }
-            refreshWorkspacePresentation(focusTerminal: true)
+            self?.activateWorkspace(id: workspaceID)
         }
         workspaceViewController.onCreateWorkspace = { [weak self] in
             self?.presentCreateWorkspace()

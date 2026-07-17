@@ -669,6 +669,95 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func commandOptionDigitsReturnToAppKitWhileExtraModifiersRemainUnreserved() throws {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+opt+Key1=ignore\\n"
+                + "keybind = cmd+opt+shift+Key1=ignore\\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandOptionOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18
+        )
+        let commandOptionCapsLockOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .capsLock],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 2
+        )
+        let commandOptionShiftOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .shift],
+            characters: "!",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 3
+        )
+        let commandOptionControlOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .control],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 4
+        )
+        let commandOptionFunctionOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .function],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 5
+        )
+        let commandOptionNumericPadOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .numericPad],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 83,
+            timestamp: 6
+        )
+        let commandOptionHelpOne = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option, .help],
+            characters: "1",
+            charactersIgnoringModifiers: "1",
+            keyCode: 18,
+            timestamp: 7
+        )
+
+        #expect(surface.isCommandOptionDigitForTesting(commandOptionOne))
+        #expect(surface.isCommandOptionDigitForTesting(commandOptionCapsLockOne))
+        for event in [
+            commandOptionShiftOne,
+            commandOptionControlOne,
+            commandOptionFunctionOne,
+            commandOptionNumericPadOne,
+            commandOptionHelpOne,
+        ] {
+            #expect(!surface.isCommandOptionDigitForTesting(event))
+        }
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandOptionOne))
+        #expect(!surface.performKeyEquivalent(with: commandOptionCapsLockOne))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+    }
+
+    @Test
     func commandDigitsReturnToAppKitBeforeGhosttyBindingsWhileModifiedDigitsRemainBindable() throws
     {
         let config = try KeyboardShortcutConfig(

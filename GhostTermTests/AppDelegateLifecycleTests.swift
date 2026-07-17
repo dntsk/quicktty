@@ -31,6 +31,15 @@ private final class TabSelectionMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class WorkspaceSelectionMenuActionTarget: NSObject {
+    private(set) var selectedIndices: [Int] = []
+
+    @objc func activateWorkspace(_ sender: NSMenuItem) {
+        selectedIndices.append((sender.representedObject as? NSNumber)?.intValue ?? -1)
+    }
+}
+
+@MainActor
 private final class SplitPaneMenuActionTarget: NSObject {
     private(set) var splitRightInvocationCount = 0
     private(set) var splitDownInvocationCount = 0
@@ -750,6 +759,61 @@ struct AppDelegateLifecycleTests {
         #expect(commandOptionLeft.target === target)
         #expect(viewMenu.items.contains { $0 === commandShiftBracket })
         #expect(viewMenu.items.contains { $0 === commandControlOptionLeft })
+    }
+
+    @Test
+    func workspaceSelectionMenuItemsUseExactCommandOptionDigitsWithoutCollidingWithTabs()
+        throws
+    {
+        let tabTarget = TabSelectionMenuActionTarget()
+        let workspaceTarget = WorkspaceSelectionMenuActionTarget()
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+        let foreignModifiedDigit = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: "1")
+        foreignModifiedDigit.keyEquivalentModifierMask = [.command, .option, .shift]
+        viewMenu.addItem(foreignModifiedDigit)
+
+        AppDelegate.installTabSelectionMenuItems(
+            in: mainMenu,
+            target: tabTarget,
+            action: #selector(TabSelectionMenuActionTarget.activateTab(_:))
+        )
+        for _ in 0..<2 {
+            AppDelegate.installWorkspaceSelectionMenuItems(
+                in: mainMenu,
+                target: workspaceTarget,
+                action: #selector(WorkspaceSelectionMenuActionTarget.activateWorkspace(_:))
+            )
+        }
+
+        let workspaceItems = viewMenu.items.filter { $0.title.hasPrefix("Select Workspace ") }
+        let tabItems = viewMenu.items.filter { $0.title.hasPrefix("Select Tab ") }
+        #expect(workspaceItems.count == 9)
+        #expect(tabItems.count == 9)
+        for (offset, item) in workspaceItems.enumerated() {
+            let index = offset + 1
+            #expect(item.title == "Select Workspace \(index)")
+            #expect(item.keyEquivalent == "\(index)")
+            #expect(item.keyEquivalentModifierMask == [.command, .option])
+            #expect((item.representedObject as? NSNumber)?.intValue == index)
+            #expect(item.target === workspaceTarget)
+            #expect(
+                item.action == #selector(WorkspaceSelectionMenuActionTarget.activateWorkspace(_:)))
+        }
+        #expect(foreignModifiedDigit.keyEquivalentModifierMask == [.command, .option, .shift])
+        #expect(viewMenu.items.contains { $0 === foreignModifiedDigit })
+
+        let secondWorkspace = try #require(workspaceItems.dropFirst().first)
+        let ninthTab = try #require(tabItems.last)
+        #expect(
+            NSApp.sendAction(
+                secondWorkspace.action!, to: secondWorkspace.target, from: secondWorkspace))
+        #expect(NSApp.sendAction(ninthTab.action!, to: ninthTab.target, from: ninthTab))
+        #expect(workspaceTarget.selectedIndices == [2])
+        #expect(tabTarget.selectedIndices == [9])
     }
 
     @Test

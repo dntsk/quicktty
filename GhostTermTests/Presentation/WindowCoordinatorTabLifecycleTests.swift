@@ -313,6 +313,139 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func workspaceSelectorActualMenuItemSwitchesLiveWorkspaceWithoutReplacingSurfaces() throws {
+        let defaultPaneID = PaneID()
+        let testPaneID = PaneID()
+        let defaultTab = TerminalTab(
+            title: "Default tab",
+            pane: TerminalPaneDescriptor(id: defaultPaneID, cwd: "/tmp/default")
+        )
+        let testTab = TerminalTab(
+            title: "Test tab",
+            pane: TerminalPaneDescriptor(id: testPaneID, cwd: "/tmp/test")
+        )
+        let defaultWorkspace = Workspace(
+            name: "Default",
+            tabs: [defaultTab],
+            activeTabID: defaultTab.id
+        )
+        let testWorkspace = Workspace(
+            name: "Test",
+            tabs: [testTab],
+            activeTabID: testTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [defaultWorkspace, testWorkspace],
+            activeWorkspaceID: testWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let defaultSurface = try #require(coordinator.surfaceForTesting(id: defaultPaneID))
+        let testSurface = try #require(coordinator.surfaceForTesting(id: testPaneID))
+        let registeredSurfaceIdentities = [
+            defaultPaneID: ObjectIdentifier(defaultSurface),
+            testPaneID: ObjectIdentifier(testSurface),
+        ]
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .performWorkspaceSelectionForTesting(defaultWorkspace.id)
+
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.workspaceStoreForTesting.activeWorkspaceID == defaultWorkspace.id)
+        #expect(coordinator.activeSurfaceForTesting === defaultSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === defaultSurface)
+        #expect(Set(coordinator.surfaceIDsForTesting) == [defaultPaneID, testPaneID])
+        #expect(Set(bridge.activeSurfaceIDs) == [defaultPaneID, testPaneID])
+        #expect(
+            coordinator.surfaceForTesting(id: defaultPaneID).map(ObjectIdentifier.init)
+                == registeredSurfaceIdentities[defaultPaneID])
+        #expect(
+            coordinator.surfaceForTesting(id: testPaneID).map(ObjectIdentifier.init)
+                == registeredSurfaceIdentities[testPaneID])
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == [defaultPaneID: ObjectIdentifier(defaultSurface)])
+        #expect(
+            coordinator.workspaceViewControllerForTesting.workspaceSelector.buttonTitleForTesting
+                == "Default")
+        #expect(
+            coordinator.workspaceViewControllerForTesting.workspaceSelector.selectedWorkspaceID
+                == defaultWorkspace.id)
+    }
+
+    @Test
+    func activateWorkspaceUsesOneBasedIndicesAndIgnoresSameAndOutOfRangeValues() throws {
+        let defaultPaneID = PaneID()
+        let testPaneID = PaneID()
+        let defaultTab = TerminalTab(
+            title: "Default tab",
+            pane: TerminalPaneDescriptor(id: defaultPaneID, cwd: "/tmp/default")
+        )
+        let testTab = TerminalTab(
+            title: "Test tab",
+            pane: TerminalPaneDescriptor(id: testPaneID, cwd: "/tmp/test")
+        )
+        let defaultWorkspace = Workspace(
+            name: "Default",
+            tabs: [defaultTab],
+            activeTabID: defaultTab.id
+        )
+        let testWorkspace = Workspace(
+            name: "Test",
+            tabs: [testTab],
+            activeTabID: testTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [defaultWorkspace, testWorkspace],
+            activeWorkspaceID: testWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let defaultSurface = try #require(coordinator.surfaceForTesting(id: defaultPaneID))
+        let testSurface = try #require(coordinator.surfaceForTesting(id: testPaneID))
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+
+        persistence.reset()
+        coordinator.activateWorkspace(at: 1)
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.activeSurfaceForTesting === defaultSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === defaultSurface)
+
+        persistence.reset()
+        coordinator.activateWorkspace(at: 2)
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.activeSurfaceForTesting === testSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === testSurface)
+
+        persistence.reset()
+        coordinator.activateWorkspace(at: 2)
+        coordinator.activateWorkspace(at: 9)
+        coordinator.activateWorkspace(at: 0)
+        coordinator.activateWorkspace(at: 10)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.activeSurfaceForTesting === testSurface)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(Set(bridge.activeSurfaceIDs) == Set(surfaceIDs))
+    }
+
+    @Test
     func workspacePersistenceReportsMoveToNewWorkspaceThroughNameSheetExactlyOnce() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
