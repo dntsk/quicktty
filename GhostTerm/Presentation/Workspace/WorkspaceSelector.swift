@@ -23,8 +23,6 @@ final class WorkspaceSelector: NSView {
         popUpButton.identifier = NSUserInterfaceItemIdentifier("workspace-selector")
         popUpButton.controlSize = .small
         popUpButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-        popUpButton.target = self
-        popUpButton.action = #selector(selectionChanged)
         popUpButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(popUpButton)
         NSLayoutConstraint.activate([
@@ -39,8 +37,7 @@ final class WorkspaceSelector: NSView {
         workspaceNames = workspaces.map(\.name)
         popUpButton.removeAllItems()
         for workspace in workspaces {
-            popUpButton.addItem(withTitle: workspace.name)
-            popUpButton.lastItem?.representedObject = workspace.id.rawValue as NSUUID
+            addWorkspaceItem(workspace)
         }
         popUpButton.menu?.addItem(.separator())
         addActionItem(.new, title: "New Workspace…")
@@ -58,14 +55,31 @@ final class WorkspaceSelector: NSView {
         return WorkspaceID(rawValue: rawID as UUID)
     }
 
+    private func addWorkspaceItem(_ workspace: Workspace) {
+        let item = NSMenuItem(
+            title: workspace.name,
+            action: #selector(selectWorkspace(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = workspace.id.rawValue as NSUUID
+        popUpButton.menu?.addItem(item)
+    }
+
     private func addActionItem(
         _ action: Action,
         title: String,
         isEnabled: Bool = true
     ) {
-        popUpButton.addItem(withTitle: title)
-        popUpButton.lastItem?.tag = action.rawValue
-        popUpButton.lastItem?.isEnabled = isEnabled
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(performWorkspaceAction(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.tag = action.rawValue
+        item.isEnabled = isEnabled
+        popUpButton.menu?.addItem(item)
     }
 
     private func selectActiveWorkspace() {
@@ -80,19 +94,21 @@ final class WorkspaceSelector: NSView {
         popUpButton.selectItem(at: itemIndex)
     }
 
-    @objc private func selectionChanged() {
-        if let selectedWorkspaceID {
-            onSelection?(selectedWorkspaceID)
-            return
-        }
+    @objc private func selectWorkspace(_ sender: NSMenuItem) {
         guard
-            let selectedItem = popUpButton.selectedItem,
-            let action = Action(rawValue: selectedItem.tag),
-            selectedItem.isEnabled
+            sender.isEnabled,
+            let rawID = sender.representedObject as? NSUUID
         else {
             selectActiveWorkspace()
             return
         }
+        let workspaceID = WorkspaceID(rawValue: rawID as UUID)
+        popUpButton.select(sender)
+        onSelection?(workspaceID)
+    }
+
+    @objc private func performWorkspaceAction(_ sender: NSMenuItem) {
+        guard sender.isEnabled, let action = Action(rawValue: sender.tag) else { return }
 
         selectActiveWorkspace()
         switch action {
@@ -124,13 +140,35 @@ final class WorkspaceSelector: NSView {
             }
         }
 
+        var allRealItemsHaveExplicitTargetAndActionForTesting: Bool {
+            popUpButton.itemArray
+                .filter { !$0.isSeparatorItem }
+                .allSatisfy { $0.target != nil && $0.action != nil }
+        }
+
+        func performWorkspaceSelectionForTesting(_ workspaceID: WorkspaceID) {
+            guard
+                let item = popUpButton.itemArray.first(where: { item in
+                    guard let rawID = item.representedObject as? NSUUID else { return false }
+                    return WorkspaceID(rawValue: rawID as UUID) == workspaceID
+                })
+            else {
+                return
+            }
+            dispatchMenuItemActionForTesting(item)
+        }
+
         func triggerActionForTesting(_ action: Action) {
             guard let item = popUpButton.itemArray.first(where: { $0.tag == action.rawValue })
             else {
                 return
             }
-            popUpButton.select(item)
-            selectionChanged()
+            dispatchMenuItemActionForTesting(item)
+        }
+
+        private func dispatchMenuItemActionForTesting(_ item: NSMenuItem) {
+            guard let action = item.action else { return }
+            NSApp.sendAction(action, to: item.target, from: item)
         }
 
         func isActionEnabledForTesting(_ action: Action) -> Bool {

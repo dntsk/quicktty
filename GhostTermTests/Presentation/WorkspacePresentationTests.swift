@@ -28,14 +28,18 @@ struct WorkspacePresentationTests {
         let backendID = try store.createWorkspace(named: "Backend")
         try store.activateWorkspace(backendID)
         let selector = WorkspaceSelector()
+        var selectedWorkspaceIDs: [WorkspaceID] = []
+        selector.onSelection = { selectedWorkspaceIDs.append($0) }
 
         selector.apply(
             workspaces: store.workspaces,
             activeWorkspaceID: store.activeWorkspaceID
         )
+        selector.performWorkspaceSelectionForTesting(store.workspaces[0].id)
 
         #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
-        #expect(selector.selectedWorkspaceID == backendID)
+        #expect(selector.selectedWorkspaceID == store.workspaces[0].id)
+        #expect(selectedWorkspaceIDs == [store.workspaces[0].id])
     }
 
     @Test
@@ -45,9 +49,19 @@ struct WorkspacePresentationTests {
         try store.activateWorkspace(backendID)
         let selector = WorkspaceSelector()
         var requestedActions: [WorkspaceSelector.Action] = []
-        selector.onCreateWorkspace = { requestedActions.append(.new) }
-        selector.onRenameWorkspace = { requestedActions.append(.rename) }
-        selector.onDeleteWorkspace = { requestedActions.append(.delete) }
+        var selectedWorkspaceIDsDuringAction: [WorkspaceID?] = []
+        selector.onCreateWorkspace = {
+            requestedActions.append(.new)
+            selectedWorkspaceIDsDuringAction.append(selector.selectedWorkspaceID)
+        }
+        selector.onRenameWorkspace = {
+            requestedActions.append(.rename)
+            selectedWorkspaceIDsDuringAction.append(selector.selectedWorkspaceID)
+        }
+        selector.onDeleteWorkspace = {
+            requestedActions.append(.delete)
+            selectedWorkspaceIDsDuringAction.append(selector.selectedWorkspaceID)
+        }
 
         selector.apply(
             workspaces: store.workspaces,
@@ -55,6 +69,7 @@ struct WorkspacePresentationTests {
         )
 
         #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
+        #expect(selector.allRealItemsHaveExplicitTargetAndActionForTesting)
         #expect(
             selector.itemDescriptorsForTesting
                 == [
@@ -103,8 +118,13 @@ struct WorkspacePresentationTests {
 
         #expect(selector.selectedWorkspaceID == backendID)
         #expect(requestedActions == [.new, .rename, .delete])
+        #expect(selectedWorkspaceIDsDuringAction == [backendID, backendID, backendID])
 
         selector.apply(workspaces: [store.workspaces[0]], activeWorkspaceID: store.workspaces[0].id)
+        requestedActions = []
+        selector.triggerActionForTesting(.delete)
+        #expect(selector.selectedWorkspaceID == store.workspaces[0].id)
+        #expect(requestedActions.isEmpty)
         #expect(
             selector.itemDescriptorsForTesting.last
                 == .init(
@@ -123,13 +143,15 @@ struct WorkspacePresentationTests {
         controller.onCreateWorkspace = { actions.append("create") }
         controller.onRenameWorkspace = { actions.append("rename") }
         controller.onDeleteWorkspace = { actions.append("delete") }
-        controller.apply(WorkspaceStore())
+        var store = WorkspaceStore()
+        _ = try? store.createWorkspace(named: "Backend")
+        controller.apply(store)
 
         controller.workspaceSelector.triggerActionForTesting(.new)
         controller.workspaceSelector.triggerActionForTesting(.rename)
         controller.workspaceSelector.triggerActionForTesting(.delete)
 
-        #expect(actions == ["create", "rename"])
+        #expect(actions == ["create", "rename", "delete"])
     }
 
     @Test

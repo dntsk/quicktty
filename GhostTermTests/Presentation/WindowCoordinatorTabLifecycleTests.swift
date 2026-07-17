@@ -255,7 +255,8 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.start()
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(secondWorkspace.id)
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .performWorkspaceSelectionForTesting(secondWorkspace.id)
         persistence.expectSingleFinalSnapshot(from: coordinator)
     }
 
@@ -1626,7 +1627,8 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.start()
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onCreateWorkspace?()
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .triggerActionForTesting(.new)
         let createSheet = try #require(coordinator.createWorkspaceControllerForTesting)
         createSheet.submitForTesting(name: "Backend")
 
@@ -1643,7 +1645,8 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.activeWindowForTesting?.firstResponder === backendSurface)
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onRenameWorkspace?()
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .triggerActionForTesting(.rename)
         let renameSheet = try #require(coordinator.createWorkspaceControllerForTesting)
         renameSheet.submitForTesting(name: "Services")
 
@@ -1933,7 +1936,8 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.start()
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .triggerActionForTesting(.delete)
 
         #expect(persistence.snapshots.isEmpty)
         #expect(coordinator.workspaceStoreForTesting.workspaces.count == 1)
@@ -1976,7 +1980,8 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.start()
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .triggerActionForTesting(.delete)
 
         #expect(alertCount == 0)
         #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
