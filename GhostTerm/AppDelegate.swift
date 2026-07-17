@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configController: ConfigController?
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
+    private var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !ApplicationEnvironment.isRunningHostedTests else { return }
@@ -89,29 +90,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        configController?.stop()
-        if let applicationState, let stateStore {
-            let finalState = Self.applicationState(
-                applicationState,
-                merging: windowCoordinator?.workspaceStoreForPersistence
-                    ?? applicationState.workspaceStore,
-                normalWindowFrame: windowCoordinator?.normalWindowFrame
-            )
-            self.applicationState = finalState
-            stateStore.scheduleSave(finalState)
-            do {
+        Self.performApplicationTermination(
+            stopConfiguration: {
+                self.configController?.stop()
+                self.isTerminating = true
+            },
+            persistFinalState: {
+                guard let applicationState = self.applicationState, let stateStore = self.stateStore
+                else {
+                    return
+                }
+                let finalState = Self.applicationState(
+                    applicationState,
+                    merging: self.windowCoordinator?.workspaceStoreForPersistence
+                        ?? applicationState.workspaceStore,
+                    normalWindowFrame: self.windowCoordinator?.normalWindowFrame
+                )
+                self.applicationState = finalState
+                stateStore.scheduleSave(finalState)
                 try stateStore.flushPendingSave()
-            } catch {
-                logger.error(
+            },
+            logSaveError: { error in
+                self.logger.error(
                     "Final state save failed: \(error.localizedDescription, privacy: .public)"
                 )
-            }
-        }
-        ghosttyBridge?.shutdown()
+            },
+            prepareForTermination: {
+                self.windowCoordinator?.prepareForApplicationTermination()
+            },
+            shutdownRuntime: { self.ghosttyBridge?.shutdown() }
+        )
     }
 
     func workspaceStoreDidChange(_ workspaceStore: WorkspaceStore) {
-        guard let applicationState, let stateStore else { return }
+        guard !isTerminating, let applicationState, let stateStore else { return }
         let updatedState = Self.applicationState(
             applicationState,
             updatingWorkspaceStore: workspaceStore
@@ -176,6 +188,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         guard !isRunningHostedTests else { return false }
         return presentationMode != .quake
+    }
+
+    static func performApplicationTermination(
+        stopConfiguration: () -> Void,
+        persistFinalState: () throws -> Void,
+        logSaveError: (Error) -> Void,
+        prepareForTermination: () -> Void,
+        shutdownRuntime: () -> Void
+    ) {
+        stopConfiguration()
+        do {
+            try persistFinalState()
+        } catch {
+            logSaveError(error)
+        }
+        prepareForTermination()
+        shutdownRuntime()
     }
 
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
@@ -719,7 +748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func normalWindowFrameDidChange(_ normalWindowFrame: NormalWindowFrame) {
-        guard let applicationState, let stateStore else { return }
+        guard !isTerminating, let applicationState, let stateStore else { return }
         let updatedState = Self.applicationState(
             applicationState,
             updatingNormalWindowFrame: normalWindowFrame

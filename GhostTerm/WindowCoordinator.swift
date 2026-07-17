@@ -166,7 +166,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     isolated deinit {
-        tearDownSurfaces()
+        prepareForApplicationTermination()
         try? hotKeyController.unregister()
         ghosttyBridge.surfaceFocusHandler = nil
         ghosttyBridge.surfaceWorkingDirectoryHandler = nil
@@ -1182,6 +1182,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         return closeOwningTab(tabID)
     }
 
+    func prepareForApplicationTermination() {
+        tearDownSurfaces()
+    }
+
     #if DEBUG
         var windowForTesting: NSWindow? {
             normalWindowController.window
@@ -1265,7 +1269,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         func prepareForBridgeShutdownForTesting() {
-            tearDownSurfaces()
+            prepareForApplicationTermination()
         }
 
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {

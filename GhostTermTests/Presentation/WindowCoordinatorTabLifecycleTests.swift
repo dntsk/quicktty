@@ -820,6 +820,68 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func applicationTerminationDetachesNestedLiveSurfacesBeforeRuntimeShutdown() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .vertical)
+        let thirdSurface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let surfaceIDs = Set([firstSurface.paneID, secondSurface.paneID, thirdSurface.paneID])
+
+        #expect(window.firstResponder === thirdSurface)
+        #expect(
+            Set(
+                coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                    .keys
+            ) == surfaceIDs
+        )
+        #expect(
+            Set(coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting)
+                == Set([
+                    ObjectIdentifier(firstSurface), ObjectIdentifier(secondSurface),
+                    ObjectIdentifier(thirdSurface),
+                ])
+        )
+
+        coordinator.prepareForApplicationTermination()
+
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        #expect(window.firstResponder === window)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+                == nil
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting.isEmpty
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting
+                .isEmpty
+        )
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(Set(closeObservations) == surfaceIDs)
+        #expect(closeObservations.count == surfaceIDs.count)
+
+        coordinator.prepareForApplicationTermination()
+
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+
+        bridge.shutdown()
+
+        #expect(!bridge.isReady)
+    }
+
+    @Test
     func splitActivePaneUsesLiveWorkingDirectoryInsteadOfStartupDescriptor() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -893,12 +955,17 @@ struct WindowCoordinatorTabLifecycleTests {
                 == "/tmp/immediate"
         )
 
+        coordinator.prepareForApplicationTermination()
         await Task.yield()
 
         #expect(
-            activeTab(of: coordinator).paneDescriptor(for: surface.paneID)?.cwd == "/tmp/immediate"
+            finalState.workspaceStore.tab(id: tab.id)?.paneDescriptor(for: surface.paneID)?.cwd
+                == "/tmp/immediate"
         )
-        persistence.expectSingleFinalSnapshot(from: coordinator)
+        #expect(
+            activeTab(of: coordinator).paneDescriptor(for: surface.paneID)?.cwd == "/tmp/startup"
+        )
+        #expect(persistence.snapshots.isEmpty)
     }
 
     @Test

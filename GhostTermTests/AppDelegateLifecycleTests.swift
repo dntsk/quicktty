@@ -201,6 +201,72 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func terminationCapturesFinalSnapshotBeforeDetachAndShutsDownAfterSaveFailure() throws {
+        enum SaveFailure: Error {
+            case expected
+        }
+
+        let savedWorkspace = Workspace(name: "Saved")
+        let finalWorkspace = Workspace(name: "Final")
+        let savedStore = try WorkspaceStore(
+            workspaces: [savedWorkspace],
+            activeWorkspaceID: savedWorkspace.id
+        )
+        let finalStore = try WorkspaceStore(
+            workspaces: [finalWorkspace],
+            activeWorkspaceID: finalWorkspace.id
+        )
+        let savedFrame = try #require(NormalWindowFrame(x: 1, y: 2, width: 800, height: 600))
+        let finalFrame = try #require(NormalWindowFrame(x: 12, y: 34, width: 900, height: 700))
+        let applicationState = ApplicationState(
+            workspaceStore: savedStore,
+            normalWindowFrame: savedFrame
+        )
+        var events: [String] = []
+        var scheduledState: ApplicationState?
+
+        AppDelegate.performApplicationTermination(
+            stopConfiguration: {
+                events.append("stop configuration")
+            },
+            persistFinalState: {
+                events.append("snapshot")
+                let finalState = AppDelegate.applicationState(
+                    applicationState,
+                    merging: finalStore,
+                    normalWindowFrame: finalFrame
+                )
+                scheduledState = finalState
+                events.append("schedule and flush")
+                throw SaveFailure.expected
+            },
+            logSaveError: { _ in
+                events.append("save failed")
+            },
+            prepareForTermination: {
+                events.append("detach")
+            },
+            shutdownRuntime: {
+                events.append("shutdown")
+            }
+        )
+
+        #expect(
+            events
+                == [
+                    "stop configuration",
+                    "snapshot",
+                    "schedule and flush",
+                    "save failed",
+                    "detach",
+                    "shutdown",
+                ]
+        )
+        #expect(scheduledState?.workspaceStore == finalStore)
+        #expect(scheduledState?.normalWindowFrame == finalFrame)
+    }
+
+    @Test
     func newTabMenuItemUsesCommandTAndAppDelegateAction() {
         let delegate = AppDelegate()
         let item = AppDelegate.makeNewTabMenuItem(target: delegate)
