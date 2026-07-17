@@ -240,6 +240,29 @@ struct ConfigDocumentTests {
         )
     }
 
+    @Test
+    func effectiveGhosttyDataPreservesByteOrderMarkWhenInjectingClipboardDefault() {
+        let source = Data([0xEF, 0xBB, 0xBF]) + Data("font-size = 14\r\n".utf8)
+        let document = ConfigDocument(data: source)
+
+        #expect(document.data == source)
+        #expect(
+            document.effectiveGhosttyData
+                == Data([0xEF, 0xBB, 0xBF])
+                + Data("copy-on-select = clipboard\nfont-size = 14\r\n".utf8)
+        )
+    }
+
+    @Test
+    func effectiveGhosttyDataPreservesByteOrderMarkWithExplicitCopyOnSelect() {
+        let source = Data([0xEF, 0xBB, 0xBF]) + Data("copy-on-select = false\r\n".utf8)
+        let document = ConfigDocument(data: source)
+
+        #expect(document.data == source)
+        #expect(document.effectiveGhosttyData == document.filteredGhosttyData)
+        #expect(document.effectiveGhosttyData == source)
+    }
+
     @Test(arguments: ["false", "true", "clipboard"])
     func effectiveGhosttyDataPreservesExplicitCopyOnSelect(_ value: String) {
         let source = Data(
@@ -248,5 +271,19 @@ struct ConfigDocumentTests {
         let document = ConfigDocument(data: source)
 
         #expect(document.effectiveGhosttyData == Data("copy-on-select = \(value)\r\n".utf8))
+    }
+
+    @Test
+    func effectiveGhosttyDataInjectsClipboardDefaultWhenKeyOnlyStartsWithCopyOnSelect() {
+        let source = Data("copy-on-select-extra = false\r\nfont-size = 14\r\n".utf8)
+        let document = ConfigDocument(data: source)
+
+        #expect(
+            document.effectiveGhosttyData
+                == Data(
+                    "copy-on-select = clipboard\ncopy-on-select-extra = false\r\nfont-size = 14\r\n"
+                        .utf8
+                )
+        )
     }
 }

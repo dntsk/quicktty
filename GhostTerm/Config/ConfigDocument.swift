@@ -91,7 +91,12 @@ struct ConfigDocument: Equatable, Sendable {
         else {
             return filteredData
         }
-        return Data("copy-on-select = clipboard\n".utf8) + filteredData
+        let defaultAssignment = Data("copy-on-select = clipboard\n".utf8)
+        let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
+        guard filteredData.starts(with: byteOrderMark) else {
+            return defaultAssignment + filteredData
+        }
+        return byteOrderMark + defaultAssignment + filteredData.dropFirst(byteOrderMark.count)
     }
 
     func parse() -> ConfigParseResult {
@@ -283,7 +288,8 @@ struct ConfigDocument: Equatable, Sendable {
 
     private static func isTerminalCopyOnSelectAssignment(in data: Data) -> Bool {
         let bytes = [UInt8](data)
-        var first = 0
+        let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
+        var first = bytes.starts(with: byteOrderMark) ? byteOrderMark.count : 0
         while first < bytes.count, isHorizontalWhitespace(bytes[first]) {
             first += 1
         }
