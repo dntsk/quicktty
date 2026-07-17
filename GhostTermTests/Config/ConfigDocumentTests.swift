@@ -254,6 +254,40 @@ struct ConfigDocumentTests {
     }
 
     @Test
+    func byteOrderMarkPrefixedGhostTermAssignmentParsesAndIsFiltered() {
+        let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
+        let source =
+            byteOrderMark
+            + Data("ghostterm-restore-workspaces = false\r\nfont-size = 14\r\n".utf8)
+        let document = ConfigDocument(data: source)
+
+        let result = document.parse()
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(!result.config.restoreWorkspaces)
+        #expect(document.filteredGhosttyData == byteOrderMark + Data("font-size = 14\r\n".utf8))
+        #expect(
+            document.effectiveGhosttyData
+                == byteOrderMark + Data("copy-on-select = clipboard\nfont-size = 14\r\n".utf8)
+        )
+    }
+
+    @Test
+    func setValuePreservesByteOrderMarkOnFirstGhostTermAssignment() {
+        let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
+        var document = ConfigDocument(
+            data: byteOrderMark + Data("ghostterm-restore-workspaces = false\r\n".utf8)
+        )
+
+        document.setValue("true", for: .restoreWorkspaces)
+
+        #expect(
+            document.data
+                == byteOrderMark + Data("ghostterm-restore-workspaces = true\r\n".utf8)
+        )
+    }
+
+    @Test
     func effectiveGhosttyDataPreservesByteOrderMarkWithExplicitCopyOnSelect() {
         let source = Data([0xEF, 0xBB, 0xBF]) + Data("copy-on-select = false\r\n".utf8)
         let document = ConfigDocument(data: source)

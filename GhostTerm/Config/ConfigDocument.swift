@@ -60,6 +60,8 @@ struct ConfigDocument: Equatable, Sendable {
         let malformed: Bool
     }
 
+    private static let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
+
     private var lines: [Line]
 
     init(data: Data) {
@@ -79,9 +81,14 @@ struct ConfigDocument: Equatable, Sendable {
 
     var filteredGhosttyData: Data {
         lines.reduce(into: Data()) { result, line in
-            guard !Self.assignment(in: line.content).belongsToGhostTerm else { return }
-            result.append(line.content)
-            result.append(line.terminator)
+            guard Self.assignment(in: line.content).belongsToGhostTerm else {
+                result.append(line.content)
+                result.append(line.terminator)
+                return
+            }
+            result.append(
+                contentsOf: line.content.prefix(Self.byteOrderMarkLength(in: [UInt8](line.content)))
+            )
         }
     }
 
@@ -92,7 +99,7 @@ struct ConfigDocument: Equatable, Sendable {
             return filteredData
         }
         let defaultAssignment = Data("copy-on-select = clipboard\n".utf8)
-        let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
+        let byteOrderMark = Data(Self.byteOrderMark)
         guard filteredData.starts(with: byteOrderMark) else {
             return defaultAssignment + filteredData
         }
@@ -224,10 +231,7 @@ struct ConfigDocument: Equatable, Sendable {
 
     private static func assignment(in data: Data) -> Assignment {
         let bytes = [UInt8](data)
-        var first = 0
-        while first < bytes.count, isHorizontalWhitespace(bytes[first]) {
-            first += 1
-        }
+        let first = firstContentByteIndex(in: bytes)
         guard first < bytes.count, bytes[first] != 0x23 else {
             return Assignment(
                 key: nil,
@@ -288,11 +292,7 @@ struct ConfigDocument: Equatable, Sendable {
 
     private static func isTerminalCopyOnSelectAssignment(in data: Data) -> Bool {
         let bytes = [UInt8](data)
-        let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
-        var first = bytes.starts(with: byteOrderMark) ? byteOrderMark.count : 0
-        while first < bytes.count, isHorizontalWhitespace(bytes[first]) {
-            first += 1
-        }
+        let first = firstContentByteIndex(in: bytes)
         guard first < bytes.count, bytes[first] != 0x23,
             let equals = bytes[first...].firstIndex(of: 0x3D)
         else {
@@ -416,6 +416,18 @@ struct ConfigDocument: Equatable, Sendable {
             return nil
         }
         return fraction
+    }
+
+    private static func firstContentByteIndex(in bytes: [UInt8]) -> Int {
+        var index = byteOrderMarkLength(in: bytes)
+        while index < bytes.count, isHorizontalWhitespace(bytes[index]) {
+            index += 1
+        }
+        return index
+    }
+
+    private static func byteOrderMarkLength(in bytes: [UInt8]) -> Int {
+        bytes.starts(with: byteOrderMark) ? byteOrderMark.count : 0
     }
 
     private static func isHorizontalWhitespace(_ byte: UInt8) -> Bool {
