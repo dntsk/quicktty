@@ -53,17 +53,67 @@ struct WorkspacePresentationTests {
             workspaces: store.workspaces,
             activeWorkspaceID: store.activeWorkspaceID
         )
+
+        #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
+        #expect(
+            selector.itemDescriptorsForTesting
+                == [
+                    .init(
+                        title: "Default",
+                        isSeparator: false,
+                        action: nil,
+                        isEnabled: true
+                    ),
+                    .init(
+                        title: "Backend",
+                        isSeparator: false,
+                        action: nil,
+                        isEnabled: true
+                    ),
+                    .init(
+                        title: "",
+                        isSeparator: true,
+                        action: nil,
+                        isEnabled: false
+                    ),
+                    .init(
+                        title: "New Workspace…",
+                        isSeparator: false,
+                        action: .new,
+                        isEnabled: true
+                    ),
+                    .init(
+                        title: "Rename Workspace…",
+                        isSeparator: false,
+                        action: .rename,
+                        isEnabled: true
+                    ),
+                    .init(
+                        title: "Delete Workspace…",
+                        isSeparator: false,
+                        action: .delete,
+                        isEnabled: true
+                    ),
+                ]
+        )
+
         selector.triggerActionForTesting(.new)
         selector.triggerActionForTesting(.rename)
         selector.triggerActionForTesting(.delete)
 
-        #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
         #expect(selector.selectedWorkspaceID == backendID)
         #expect(requestedActions == [.new, .rename, .delete])
-        #expect(selector.isActionEnabledForTesting(.delete))
 
         selector.apply(workspaces: [store.workspaces[0]], activeWorkspaceID: store.workspaces[0].id)
-        #expect(!selector.isActionEnabledForTesting(.delete))
+        #expect(
+            selector.itemDescriptorsForTesting.last
+                == .init(
+                    title: "Delete Workspace…",
+                    isSeparator: false,
+                    action: .delete,
+                    isEnabled: false
+                )
+        )
     }
 
     @Test

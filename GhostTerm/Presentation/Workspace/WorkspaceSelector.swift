@@ -106,6 +106,24 @@ final class WorkspaceSelector: NSView {
     }
 
     #if DEBUG
+        struct ItemDescriptor: Equatable {
+            let title: String
+            let isSeparator: Bool
+            let action: Action?
+            let isEnabled: Bool
+        }
+
+        var itemDescriptorsForTesting: [ItemDescriptor] {
+            popUpButton.itemArray.map { item in
+                ItemDescriptor(
+                    title: item.title,
+                    isSeparator: item.isSeparatorItem,
+                    action: Action(rawValue: item.tag),
+                    isEnabled: item.isEnabled
+                )
+            }
+        }
+
         func triggerActionForTesting(_ action: Action) {
             guard let item = popUpButton.itemArray.first(where: { $0.tag == action.rawValue })
             else {

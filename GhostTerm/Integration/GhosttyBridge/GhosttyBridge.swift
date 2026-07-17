@@ -173,6 +173,7 @@ final class GhosttyBridge {
 
     #if DEBUG
         private var inputObservations: [GhosttyBridgeInputObservation] = []
+        private var successfulSurfaceCloseObservations: [PaneID] = []
         private var surfaceConfigurationsForTesting: [PaneID: GhosttySurfaceConfiguration] = [:]
         private var failsNextSurfaceCreationForTesting = false
         private var failingSurfaceCreationPaneIDForTesting: PaneID?
@@ -328,6 +329,9 @@ final class GhosttyBridge {
         surfaceCloseHandlers.removeValue(forKey: id)
 
         #if DEBUG
+            if successfulSurfaceCloseObservations.count < 64 {
+                successfulSurfaceCloseObservations.append(id)
+            }
             surfaceConfigurationsForTesting.removeValue(forKey: id)
         #endif
 
@@ -407,6 +411,10 @@ final class GhosttyBridge {
 
         var inputObservationsForTesting: [GhosttyBridgeInputObservation] {
             inputObservations
+        }
+
+        var successfulSurfaceCloseObservationsForTesting: [PaneID] {
+            successfulSurfaceCloseObservations
         }
 
         func surfaceConfigurationForTesting(id: PaneID) -> GhosttySurfaceConfiguration? {
