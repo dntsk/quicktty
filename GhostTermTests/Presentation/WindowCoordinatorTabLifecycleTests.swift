@@ -383,6 +383,38 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func quakeWorkspaceMenuTrackingDoesNotRecreateSurfaces() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: .quake,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let activeSurface = try #require(coordinator.activeSurfaceForTesting)
+        let selector = coordinator.workspaceViewControllerForTesting.workspaceSelector
+
+        selector.onMenuTrackingChanged?(true)
+
+        #expect(coordinator.isWorkspaceMenuTrackingForTesting)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+
+        selector.onMenuTrackingChanged?(false)
+
+        #expect(!coordinator.isWorkspaceMenuTrackingForTesting)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+
+        selector.onMenuTrackingChanged?(true)
+        coordinator.prepareForBridgeShutdownForTesting()
+        #expect(!coordinator.isWorkspaceMenuTrackingForTesting)
+    }
+
+    @Test
     func activateWorkspaceUsesOneBasedIndicesAndIgnoresSameAndOutOfRangeValues() throws {
         let defaultPaneID = PaneID()
         let testPaneID = PaneID()

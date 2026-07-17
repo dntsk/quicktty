@@ -9,6 +9,7 @@ final class WorkspaceViewController: NSViewController {
     var onCreateWorkspace: (() -> Void)?
     var onRenameWorkspace: (() -> Void)?
     var onDeleteWorkspace: (() -> Void)?
+    var onWorkspaceMenuTrackingChanged: ((Bool) -> Void)?
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
     var onToggleBroadcast: (() -> Void)?
@@ -94,6 +95,9 @@ final class WorkspaceViewController: NSViewController {
         }
         workspaceSelector.onDeleteWorkspace = { [weak self] in
             self?.onDeleteWorkspace?()
+        }
+        workspaceSelector.onMenuTrackingChanged = { [weak self] isTracking in
+            self?.onWorkspaceMenuTrackingChanged?(isTracking)
         }
         tabBarViewController.onActivateTab = { [weak self] tabID in
             self?.onActivateTab?(tabID)

@@ -17,6 +17,7 @@ final class WorkspaceSelector: NSView {
     var onCreateWorkspace: (() -> Void)?
     var onRenameWorkspace: (() -> Void)?
     var onDeleteWorkspace: (() -> Void)?
+    var onMenuTrackingChanged: ((Bool) -> Void)?
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: 22)
@@ -126,6 +127,9 @@ final class WorkspaceSelector: NSView {
     }
 
     @objc private func presentWorkspaceMenu(_: Any?) {
+        onMenuTrackingChanged?(true)
+        defer { onMenuTrackingChanged?(false) }
+
         if let menuPresenter {
             menuPresenter(workspaceMenu, button)
             return

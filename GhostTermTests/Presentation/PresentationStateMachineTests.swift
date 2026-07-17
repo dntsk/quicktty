@@ -517,6 +517,63 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func explicitTransientInteractionsSuppressFocusLossUntilEveryInteractionEnds() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler
+        )
+
+        try controller.requestVisibility(.shown)
+        animator.completeRequest(at: 0)
+        let firstInteraction = controller.beginTransientInteraction()
+        let secondInteraction = controller.beginTransientInteraction()
+
+        controller.focusDidResignKey()
+        scheduler.runActiveRequests()
+        #expect(controller.requestedVisibility == .shown)
+        #expect(animator.requests.count == 1)
+
+        firstInteraction.end()
+        firstInteraction.end()
+        controller.focusDidResignKey()
+        scheduler.runActiveRequests()
+        #expect(controller.requestedVisibility == .shown)
+
+        secondInteraction.end()
+        controller.focusDidResignKey()
+        scheduler.runActiveRequests()
+        #expect(controller.requestedVisibility == .hidden)
+        #expect(animator.requests.count == 2)
+    }
+
+    @Test
+    func resettingTransientInteractionsMakesOutstandingTokensNoOps() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler
+        )
+
+        try controller.requestVisibility(.shown)
+        animator.completeRequest(at: 0)
+        let interaction = controller.beginTransientInteraction()
+        controller.resetTransientInteractions()
+        interaction.end()
+
+        #expect(!controller.hasTransientInteractionForTesting)
+        controller.focusDidResignKey()
+        scheduler.runActiveRequests()
+        #expect(controller.requestedVisibility == .hidden)
+    }
+
+    @Test
     func hotKeyIntegrationCallbackOnlyTogglesInQuakeMode() throws {
         let content = NSViewController()
         content.view = NSView()

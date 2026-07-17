@@ -41,6 +41,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var closingPaneIDs: Set<PaneID> = []
     private var activeHotKey = HotKeyDescriptor(key: .f12)
     private var configEditor = "nano"
+    private var workspaceMenuTransientInteraction: QuakeWindowController.TransientInteraction?
 
     #if DEBUG
         private var failsNextSplitMutationForTesting = false
@@ -683,6 +684,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onDeleteWorkspace = { [weak self] in
             self?.requestDeleteActiveWorkspace()
         }
+        workspaceViewController.onWorkspaceMenuTrackingChanged = { [weak self] isTracking in
+            self?.setWorkspaceMenuTracking(isTracking)
+        }
         workspaceViewController.onActivateTab = { [weak self] tabID in
             guard let self else { return }
             var candidate = workspaceStore
@@ -713,6 +717,23 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onFinishReorderTabs = { [weak self] in
             self?.finishTabReorder()
         }
+    }
+
+    private func setWorkspaceMenuTracking(_ isTracking: Bool) {
+        if isTracking {
+            guard presentationMode == .quake, workspaceMenuTransientInteraction == nil else {
+                return
+            }
+            workspaceMenuTransientInteraction = quakeWindowController.beginTransientInteraction()
+            return
+        }
+
+        endWorkspaceMenuTracking()
+    }
+
+    private func endWorkspaceMenuTracking() {
+        workspaceMenuTransientInteraction?.end()
+        workspaceMenuTransientInteraction = nil
     }
 
     private enum PaneFocusCommand {
@@ -1281,6 +1302,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             activeSurfaceForTesting
         }
 
+        var isWorkspaceMenuTrackingForTesting: Bool {
+            workspaceMenuTransientInteraction != nil
+        }
+
         var activeSurfaceForTesting: GhosttySurfaceView? {
             activePaneID.flatMap { surfaces[$0] }
         }
@@ -1415,6 +1440,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func tearDownSurfaces() {
+        endWorkspaceMenuTracking()
         _ = activeWindow?.makeFirstResponder(nil)
         workspaceViewController.displayTerminal(
             root: nil,

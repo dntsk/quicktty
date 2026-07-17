@@ -165,12 +165,45 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func workspaceSelectorBalancesMenuTrackingAroundTestPresenterAndDispatchesAction() throws {
+        let store = WorkspaceStore()
+        let selectedID = store.activeWorkspaceID
+        let selector = WorkspaceSelector()
+        var trackingStates: [Bool] = []
+        var trackingStatesDuringSelection: [Bool] = []
+        var selectedWorkspaceIDs: [WorkspaceID] = []
+        selector.onMenuTrackingChanged = { trackingStates.append($0) }
+        selector.onSelection = {
+            selectedWorkspaceIDs.append($0)
+            trackingStatesDuringSelection = trackingStates
+        }
+        selector.apply(
+            workspaces: store.workspaces,
+            activeWorkspaceID: store.activeWorkspaceID
+        )
+        selector.menuPresenterForTesting = { menu, _ in
+            guard let item = menu.items.first(where: { !$0.isSeparatorItem }),
+                let action = item.action
+            else { return }
+            NSApp.sendAction(action, to: item.target, from: item)
+        }
+
+        selector.performButtonActionForTesting()
+
+        #expect(trackingStates == [true, false])
+        #expect(trackingStatesDuringSelection == [true])
+        #expect(selectedWorkspaceIDs == [selectedID])
+    }
+
+    @Test
     func workspaceViewControllerForwardsWorkspaceSelectorActions() {
         let controller = WorkspaceViewController()
         var actions: [String] = []
+        var trackingStates: [Bool] = []
         controller.onCreateWorkspace = { actions.append("create") }
         controller.onRenameWorkspace = { actions.append("rename") }
         controller.onDeleteWorkspace = { actions.append("delete") }
+        controller.onWorkspaceMenuTrackingChanged = { trackingStates.append($0) }
         var store = WorkspaceStore()
         _ = try? store.createWorkspace(named: "Backend")
         controller.apply(store)
@@ -178,8 +211,11 @@ struct WorkspacePresentationTests {
         controller.workspaceSelector.triggerActionForTesting(.new)
         controller.workspaceSelector.triggerActionForTesting(.rename)
         controller.workspaceSelector.triggerActionForTesting(.delete)
+        controller.workspaceSelector.onMenuTrackingChanged?(true)
+        controller.workspaceSelector.onMenuTrackingChanged?(false)
 
         #expect(actions == ["create", "rename", "delete"])
+        #expect(trackingStates == [true, false])
     }
 
     @Test

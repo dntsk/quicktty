@@ -199,6 +199,28 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     typealias ErrorHandler = @MainActor (Error) -> Void
     typealias QuakeHeightPersistence = @MainActor (Double) -> Void
 
+    @MainActor
+    final class TransientInteraction {
+        private weak var controller: QuakeWindowController?
+        private let identifier: UUID
+        private var hasEnded = false
+
+        fileprivate init(controller: QuakeWindowController, identifier: UUID) {
+            self.controller = controller
+            self.identifier = identifier
+        }
+
+        func end() {
+            guard !hasEnded else { return }
+            hasEnded = true
+            controller?.endTransientInteraction(identifier)
+        }
+
+        isolated deinit {
+            end()
+        }
+    }
+
     private let quakeWindow: any QuakeWindowRepresenting
     private var configuration: QuakeWindowConfiguration
     private let visibleFrames: VisibleFramesProvider
@@ -219,6 +241,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     private var isLiveResizing = false
     private var isNormalizingLiveResize = false
     private var liveResizeVisibleFrame: NSRect?
+    private var transientInteractionIDs: Set<UUID> = []
     private(set) var requestedVisibility: QuakeVisibility
 
     init(
@@ -284,6 +307,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         animationCancellation?.cancel()
         deferredAnimationCancellation?.cancel()
         focusLossCancellation?.cancel()
+        resetTransientInteractions()
         if let window = quakeWindow as? NSWindow, window.delegate === self {
             window.delegate = nil
         }
@@ -317,6 +341,17 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         self.configuration = configuration
     }
 
+    @discardableResult
+    func beginTransientInteraction() -> TransientInteraction {
+        let identifier = UUID()
+        transientInteractionIDs.insert(identifier)
+        return TransientInteraction(controller: self, identifier: identifier)
+    }
+
+    func resetTransientInteractions() {
+        transientInteractionIDs.removeAll()
+    }
+
     func requestVisibility(_ visibility: QuakeVisibility) throws {
         guard visibility != requestedVisibility else { return }
         switch visibility {
@@ -342,7 +377,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             [weak self] in
             guard let self else { return }
             self.focusLossCancellation = nil
-            guard !self.isFocusLossSuppressed() else { return }
+            guard !self.isFocusLossSuppressed(), !self.hasTransientInteraction else { return }
             do {
                 try self.requestVisibility(.hidden)
             } catch {
@@ -539,10 +574,24 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         }
     }
 
+    private var hasTransientInteraction: Bool {
+        !transientInteractionIDs.isEmpty
+    }
+
+    private func endTransientInteraction(_ identifier: UUID) {
+        transientInteractionIDs.remove(identifier)
+    }
+
     private func cancelFocusLossHide() {
         focusLossCancellation?.cancel()
         focusLossCancellation = nil
     }
+
+    #if DEBUG
+        var hasTransientInteractionForTesting: Bool {
+            hasTransientInteraction
+        }
+    #endif
 }
 
 @MainActor
