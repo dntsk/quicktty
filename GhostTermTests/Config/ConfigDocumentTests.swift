@@ -15,6 +15,76 @@ struct ConfigDocumentTests {
         #expect(config.quakeAnimationDuration == 0.18)
         #expect(config.quakePadding == 0)
         #expect(config.hideOnFocusLoss)
+        #expect(config.restoreWorkspaces)
+        #expect(config.configEditor == "nano")
+    }
+
+    @Test
+    func parsesWorkspaceRestoreAndEditorValuesIncludingArguments() {
+        let document = ConfigDocument(
+            text: """
+                ghostterm-restore-workspaces = false
+                ghostterm-config-editor = \t nvim --nofork \t
+                """
+        )
+
+        let result = document.parse()
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(!result.config.restoreWorkspaces)
+        #expect(result.config.configEditor == "nvim --nofork")
+    }
+
+    @Test(arguments: ["TRUE", "False", "yes", "0"])
+    func restoreWorkspacesRejectsNonExactBooleanValues(_ value: String) {
+        let result = ConfigDocument(
+            text: "ghostterm-restore-workspaces = \(value)\n"
+        ).parse()
+
+        #expect(result.config.restoreWorkspaces)
+        #expect(
+            result.diagnostics == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: GhostTermConfig.Key.restoreWorkspaces.rawValue,
+                    reason: .invalidBoolean
+                )
+            ]
+        )
+    }
+
+    @Test
+    func configEditorRejectsNUL() {
+        let result = ConfigDocument(
+            text: "ghostterm-config-editor = na\0no\n"
+        ).parse()
+
+        #expect(result.config.configEditor == "nano")
+        #expect(
+            result.diagnostics == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: GhostTermConfig.Key.configEditor.rawValue,
+                    reason: .invalidConfigEditor
+                )
+            ]
+        )
+    }
+
+    @Test
+    func duplicateWorkspaceRestoreAndEditorAssignmentsUseLastValidValue() {
+        let result = ConfigDocument(
+            text: """
+                ghostterm-restore-workspaces = false
+                ghostterm-restore-workspaces = true
+                ghostterm-config-editor = vim
+                ghostterm-config-editor = code --wait
+                """
+        ).parse()
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.config.restoreWorkspaces)
+        #expect(result.config.configEditor == "code --wait")
     }
 
     @Test
@@ -131,6 +201,8 @@ struct ConfigDocumentTests {
                 + "ghostterm-quake-animation-duration = 0.2\r\n"
                 + "ghostterm-quake-padding = 8\r\n"
                 + "ghostterm-hide-on-focus-loss = false\r\n"
+                + "ghostterm-restore-workspaces = false\r\n"
+                + "ghostterm-config-editor = code --wait\r\n"
                 + "include = themes/local.conf").utf8
         )
         let document = ConfigDocument(data: source)
@@ -144,11 +216,37 @@ struct ConfigDocumentTests {
         #expect(result.config.quakeAnimationDuration == 0.2)
         #expect(result.config.quakePadding == 8)
         #expect(!result.config.hideOnFocusLoss)
+        #expect(!result.config.restoreWorkspaces)
+        #expect(result.config.configEditor == "code --wait")
         #expect(
             document.filteredGhosttyData
                 == Data(
                     ("# terminal\r\nfont-size = 15\r\ninclude = themes/local.conf").utf8
                 )
         )
+    }
+
+    @Test
+    func effectiveGhosttyDataInjectsClipboardDefaultOnlyWithoutTerminalAssignment() {
+        let source = Data(
+            "ghostterm-config-editor = vim\r\nfont-size = 14\r\n".utf8
+        )
+        let document = ConfigDocument(data: source)
+
+        #expect(document.filteredGhosttyData == Data("font-size = 14\r\n".utf8))
+        #expect(
+            document.effectiveGhosttyData
+                == Data("copy-on-select = clipboard\nfont-size = 14\r\n".utf8)
+        )
+    }
+
+    @Test(arguments: ["false", "true", "clipboard"])
+    func effectiveGhosttyDataPreservesExplicitCopyOnSelect(_ value: String) {
+        let source = Data(
+            "ghostterm-restore-workspaces = false\r\ncopy-on-select = \(value)\r\n".utf8
+        )
+        let document = ConfigDocument(data: source)
+
+        #expect(document.effectiveGhosttyData == Data("copy-on-select = \(value)\r\n".utf8))
     }
 }

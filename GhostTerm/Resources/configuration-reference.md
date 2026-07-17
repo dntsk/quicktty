@@ -28,6 +28,20 @@
 
 Скрывать Quake-окно после потери фокуса: `true` или `false`. Значение по умолчанию — `true`.
 
+### `ghostterm-restore-workspaces`
+
+Восстанавливать сохранённые рабочие пространства при следующем запуске: `true` или `false`. Значение по умолчанию — `true`. При `false` GhostTerm открывает новое рабочее пространство Default; восстановление рамки окна при этом сохраняется.
+
+### `ghostterm-config-editor`
+
+Команда терминального редактора для конфигурации, включая аргументы, например `code --wait`. Значение по умолчанию — `nano`. Сочетание `Cmd+,` для открытия редактора будет добавлено следующим integration-коммитом.
+
+## Параметры Ghostty
+
+### `copy-on-select`
+
+GhostTerm по умолчанию использует `copy-on-select = clipboard`, чтобы копирование по выделению помещало текст в обычный системный буфер обмена. Укажите `copy-on-select = false`, чтобы отключить это поведение; любое явное значение пользователя, включая `true` и `clipboard`, сохраняется без изменений.
+
 ## Сочетания клавиш
 
 - `Cmd+B` — включить или выключить broadcast-ввод для текущей вкладки.
@@ -44,6 +58,10 @@ ghostterm-quake-height = 75%
 ghostterm-quake-animation-duration = 0.18
 ghostterm-quake-padding = 0
 ghostterm-hide-on-focus-loss = true
+ghostterm-restore-workspaces = true
+ghostterm-config-editor = nano
+
+copy-on-select = clipboard
 ```
 
 Файл `.ghostty-effective-config` создаётся GhostTerm рядом с пользовательским config. Его не следует редактировать вручную.

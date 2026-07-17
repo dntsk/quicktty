@@ -24,7 +24,7 @@ struct ConfigControllerTests {
         #expect(updates == [GhostTermConfig()])
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
-                == Data("font-family = Mono\n".utf8)
+                == Data("font-family = Mono\ncopy-on-select = clipboard\n".utf8)
         )
         #expect(
             try FileManager.default.contentsOfDirectory(
@@ -32,6 +32,32 @@ struct ConfigControllerTests {
                 includingPropertiesForKeys: nil
             ).contains { $0.lastPathComponent.contains(".tmp-") } == false
         )
+    }
+
+    @Test
+    func reloadWritesEffectiveDataAndUpdatesActiveConfig() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        var reloadURLs: [URL] = []
+        let controller = fixture.makeController(reloadGhostty: { reloadURLs.append($0) })
+        try controller.load()
+        try Data(
+            """
+            font-family = Changed\r
+            ghostterm-restore-workspaces = false\r
+            ghostterm-config-editor = code --wait\r
+            """.utf8
+        ).write(to: fixture.configURL)
+
+        try controller.reload()
+
+        #expect(!controller.activeConfig.restoreWorkspaces)
+        #expect(controller.activeConfig.configEditor == "code --wait")
+        #expect(
+            try Data(contentsOf: fixture.effectiveURL)
+                == Data("copy-on-select = clipboard\nfont-family = Changed\r\n".utf8)
+        )
+        #expect(reloadURLs == [fixture.effectiveURL, fixture.effectiveURL])
     }
 
     @Test
@@ -148,7 +174,10 @@ struct ConfigControllerTests {
         #expect(controller.activeConfig.quakeHeight == 0.73125)
         #expect(updates.map(\.quakeHeight) == [0.75, 0.73125])
         #expect(reloadCount == 2)
-        #expect(try Data(contentsOf: fixture.effectiveURL) == Data("font-size = 14\r\n".utf8))
+        #expect(
+            try Data(contentsOf: fixture.effectiveURL)
+                == Data("copy-on-select = clipboard\nfont-size = 14\r\n".utf8)
+        )
         #expect(
             try FileManager.default.contentsOfDirectory(
                 at: fixture.directoryURL,
@@ -215,12 +244,15 @@ struct ConfigControllerTests {
                 == Data(
                     """
                     font-family = Mono
+                    copy-on-select = clipboard
                     ghostterm-presentation-mode = normal
                     ghostterm-global-toggle = f12
                     ghostterm-quake-height = 73.125%
                     ghostterm-quake-animation-duration = 0.18
                     ghostterm-quake-padding = 0
                     ghostterm-hide-on-focus-loss = true
+                    ghostterm-restore-workspaces = true
+                    ghostterm-config-editor = nano
                     """.utf8
                 )
         )
@@ -316,12 +348,15 @@ private struct ConfigFixture {
     let starterData = Data(
         """
         font-family = Mono
+        copy-on-select = clipboard
         ghostterm-presentation-mode = normal
         ghostterm-global-toggle = f12
         ghostterm-quake-height = 75%
         ghostterm-quake-animation-duration = 0.18
         ghostterm-quake-padding = 0
         ghostterm-hide-on-focus-loss = true
+        ghostterm-restore-workspaces = true
+        ghostterm-config-editor = nano
         """.utf8
     )
 

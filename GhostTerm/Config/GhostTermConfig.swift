@@ -9,6 +9,8 @@ struct GhostTermConfig: Equatable, Sendable {
         case quakeAnimationDuration = "ghostterm-quake-animation-duration"
         case quakePadding = "ghostterm-quake-padding"
         case hideOnFocusLoss = "ghostterm-hide-on-focus-loss"
+        case restoreWorkspaces = "ghostterm-restore-workspaces"
+        case configEditor = "ghostterm-config-editor"
     }
 
     var presentationMode: PresentationMode = .normal
@@ -17,4 +19,6 @@ struct GhostTermConfig: Equatable, Sendable {
     var quakeAnimationDuration: TimeInterval = 0.18
     var quakePadding: CGFloat = 0
     var hideOnFocusLoss = true
+    var restoreWorkspaces = true
+    var configEditor = "nano"
 }

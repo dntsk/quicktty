@@ -9,6 +9,7 @@ struct ConfigDiagnostic: Error, Equatable, Sendable {
         case invalidHotKey(HotKeyDescriptor.ParseError)
         case invalidNumber(expected: String)
         case invalidBoolean
+        case invalidConfigEditor
     }
 
     let line: Int
@@ -34,6 +35,8 @@ extension ConfigDiagnostic: LocalizedError {
             return "\(prefix): expected \(expected)."
         case .invalidBoolean:
             return "\(prefix): expected 'true' or 'false'."
+        case .invalidConfigEditor:
+            return "\(prefix): must not contain NUL or line breaks."
         }
     }
 }
@@ -80,6 +83,15 @@ struct ConfigDocument: Equatable, Sendable {
             result.append(line.content)
             result.append(line.terminator)
         }
+    }
+
+    var effectiveGhosttyData: Data {
+        let filteredData = filteredGhosttyData
+        guard !lines.contains(where: { Self.isTerminalCopyOnSelectAssignment(in: $0.content) })
+        else {
+            return filteredData
+        }
+        return Data("copy-on-select = clipboard\n".utf8) + filteredData
     }
 
     func parse() -> ConfigParseResult {
@@ -269,6 +281,25 @@ struct ConfigDocument: Equatable, Sendable {
         )
     }
 
+    private static func isTerminalCopyOnSelectAssignment(in data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var first = 0
+        while first < bytes.count, isHorizontalWhitespace(bytes[first]) {
+            first += 1
+        }
+        guard first < bytes.count, bytes[first] != 0x23,
+            let equals = bytes[first...].firstIndex(of: 0x3D)
+        else {
+            return false
+        }
+
+        var keyEnd = equals
+        while keyEnd > first, isHorizontalWhitespace(bytes[keyEnd - 1]) {
+            keyEnd -= 1
+        }
+        return bytes[first..<keyEnd].elementsEqual("copy-on-select".utf8)
+    }
+
     private static func apply(
         _ value: String,
         for key: GhostTermConfig.Key,
@@ -350,6 +381,22 @@ struct ConfigDocument: Equatable, Sendable {
                 return
             }
             config.hideOnFocusLoss = value == "true"
+        case .restoreWorkspaces:
+            guard value == "true" || value == "false" else {
+                diagnostics.append(
+                    ConfigDiagnostic(line: line, key: key.rawValue, reason: .invalidBoolean)
+                )
+                return
+            }
+            config.restoreWorkspaces = value == "true"
+        case .configEditor:
+            guard !value.utf8.contains(0), !value.contains("\n"), !value.contains("\r") else {
+                diagnostics.append(
+                    ConfigDiagnostic(line: line, key: key.rawValue, reason: .invalidConfigEditor)
+                )
+                return
+            }
+            config.configEditor = value
         }
     }
 

@@ -5,6 +5,7 @@
 font-family = JetBrains Mono
 font-size = 13
 theme = Monokai Remastered
+copy-on-select = clipboard
 
 # GhostTerm window and Quake options.
 ghostterm-presentation-mode = normal
@@ -13,3 +14,5 @@ ghostterm-quake-height = 75%
 ghostterm-quake-animation-duration = 0.18
 ghostterm-quake-padding = 0
 ghostterm-hide-on-focus-loss = true
+ghostterm-restore-workspaces = true
+ghostterm-config-editor = nano

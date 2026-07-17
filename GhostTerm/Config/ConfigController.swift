@@ -226,7 +226,7 @@ final class ConfigController {
 
         activeConfig = result.config
         do {
-            try fileClient.writeAtomic(document.filteredGhosttyData, effectiveGhosttyURL)
+            try fileClient.writeAtomic(document.effectiveGhosttyData, effectiveGhosttyURL)
         } catch {
             activeConfig = previousConfig
             throw ConfigControllerError.effectiveWriteFailed(String(describing: error))
