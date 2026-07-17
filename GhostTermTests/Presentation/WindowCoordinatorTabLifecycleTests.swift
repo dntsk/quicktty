@@ -16,6 +16,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ghosttyBridge: bridge,
                 surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
             )
+            defer { coordinator.prepareForBridgeShutdownForTesting() }
             try coordinator.start()
             let firstSurface = try #require(coordinator.activeSurfaceForTesting)
             let firstTabID = try #require(
@@ -60,6 +61,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         await Task.yield()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
@@ -89,6 +91,7 @@ struct WindowCoordinatorTabLifecycleTests {
             presentationMode: .quake,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
 
@@ -110,6 +113,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let activeSurface = try #require(coordinator.activeSurfaceForTesting)
         let storeBeforeFailure = coordinator.workspaceStoreForTesting
@@ -136,6 +140,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ghosttyBridge: bridge,
                 surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
             )
+            defer { coordinator.prepareForBridgeShutdownForTesting() }
             try coordinator.start()
             let firstSurface = try #require(coordinator.activeSurfaceForTesting)
             coordinator.createNewTab()
@@ -170,6 +175,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 return nil
             }
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let window = try #require(coordinator.windowForTesting)
         let surface = try #require(coordinator.activeSurfaceForTesting)
@@ -203,6 +209,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ghosttyBridge: bridge,
                 surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
             )
+            defer { coordinator.prepareForBridgeShutdownForTesting() }
             try coordinator.start()
             let exitedSurface = try #require(coordinator.activeSurfaceForTesting)
 
@@ -236,6 +243,7 @@ struct WindowCoordinatorTabLifecycleTests {
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
             onError: { errors.append($0) }
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let window = try #require(coordinator.windowForTesting)
         let exitedSurface = try #require(coordinator.activeSurfaceForTesting)
@@ -268,6 +276,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let exitingSurface = try #require(coordinator.activeSurfaceForTesting)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -298,6 +307,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 initialInput: "echo should-not-run\n"
             )
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
 
@@ -355,6 +365,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 command: "exec /bin/cat"
             )
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
 
@@ -384,6 +395,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let surfaceIDs = coordinator.surfaceIDsForTesting
         let store = coordinator.workspaceStoreForTesting
@@ -407,6 +419,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -447,6 +460,7 @@ struct WindowCoordinatorTabLifecycleTests {
             presentationMode: mode,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let firstSurface = try #require(coordinator.activeSurfaceForTesting)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -470,6 +484,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let first = try #require(coordinator.activeSurfaceForTesting)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -527,6 +542,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let surface = try #require(coordinator.activeSurfaceForTesting)
         let window = try #require(coordinator.activeWindowForTesting)
@@ -555,6 +571,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
         try coordinator.splitActivePaneForTesting(axis: .vertical)
@@ -596,6 +613,7 @@ struct WindowCoordinatorTabLifecycleTests {
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let sibling = try #require(coordinator.activeSurfaceForTesting)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -627,6 +645,7 @@ struct WindowCoordinatorTabLifecycleTests {
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
             initialWorkspaceStore: initialStore
         )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
         let exitedSurface = try #require(coordinator.activeSurfaceForTesting)
 
@@ -676,6 +695,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ),
                 initialWorkspaceStore: savedStore
             )
+            defer { coordinator.prepareForBridgeShutdownForTesting() }
 
             try coordinator.start()
             await Task.yield()
@@ -760,6 +780,7 @@ struct WindowCoordinatorTabLifecycleTests {
 
         do {
             let emptyCoordinator = WindowCoordinator(ghosttyBridge: emptyBridge)
+            defer { emptyCoordinator.prepareForBridgeShutdownForTesting() }
 
             try emptyCoordinator.start()
             await Task.yield()
@@ -805,6 +826,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ghosttyBridge: mixedBridge,
                 initialWorkspaceStore: mixedStore
             )
+            defer { mixedCoordinator.prepareForBridgeShutdownForTesting() }
 
             try mixedCoordinator.start()
             await Task.yield()
@@ -841,6 +863,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 ghosttyBridge: bridge,
                 initialWorkspaceStore: store
             )
+            defer { coordinator.prepareForBridgeShutdownForTesting() }
             bridge.failSurfaceCreationForTesting(id: failingPaneID)
 
             do {

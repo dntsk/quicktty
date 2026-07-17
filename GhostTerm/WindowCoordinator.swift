@@ -849,6 +849,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             try workspaceStore.setBroadcasting(isBroadcasting, for: tabID, in: workspaceID)
         }
 
+        func prepareForBridgeShutdownForTesting() {
+            _ = activeWindow?.makeFirstResponder(nil)
+            workspaceViewController.displayTerminal(
+                root: nil,
+                surfaces: [:],
+                palette: ghosttyBridge.chromePalette,
+                onResize: { _, _ in },
+                onEqualize: { _ in }
+            )
+            activeWindow?.orderOut(nil)
+            closeActiveSurfaces()
+        }
+
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
             confirmationQueue.activePresentation
         }
