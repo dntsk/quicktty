@@ -132,6 +132,58 @@ Expected: restore tests and `make build` PASS.
 git commit -m "feat: restore workspace surfaces at startup"
 ```
 
+### Task 2A: Config-controlled restore, config editor shortcut and copy-on-select
+
+**Files:**
+- Modify: `GhostTerm/Config/GhostTermConfig.swift`
+- Modify: `GhostTerm/Config/ConfigDocument.swift`
+- Modify: `GhostTerm/Config/ConfigController.swift`
+- Modify: `GhostTerm/Resources/default-config`
+- Modify: `GhostTerm/Resources/configuration-reference.md`
+- Modify: `GhostTerm/AppDelegate.swift`
+- Modify: `GhostTerm/WindowCoordinator.swift`
+- Modify: `GhostTerm/Integration/GhosttyBridge/GhosttySurfaceView.swift`
+- Test: `GhostTermTests/Config/ConfigDocumentTests.swift`
+- Test: `GhostTermTests/Config/ConfigControllerTests.swift`
+- Test: `GhostTermTests/AppDelegateLifecycleTests.swift`
+- Test: `GhostTermTests/Presentation/WindowCoordinatorTabLifecycleTests.swift`
+- Test: `GhostTermTests/Integration/GhosttyKeyboardInputTests.swift`
+
+**Step 1: Add and parse two GhostTerm options**
+
+```text
+ghostterm-restore-workspaces = true
+ghostterm-config-editor = nano
+```
+
+`restore-workspaces` accepts only `true`/`false`, defaults to `true` and affects only the next launch. `config-editor` must be a non-empty command, defaults to `nano`, and may contain normal command arguments.
+
+**Step 2: Gate startup restore**
+
+Before constructing `WindowCoordinator`, `AppDelegate` chooses the loaded `applicationState.workspaceStore` when `restoreWorkspaces == true`; otherwise it passes a fresh `WorkspaceStore()`. Normal window frame restoration remains independent and always uses saved state.
+
+**Step 3: Add Cmd-comma config tab**
+
+Install an idempotent `Open Configuration…` application-menu item with exact `Cmd+,`. Reserve exact `Cmd+,` before Ghostty binding lookup. The action creates a new tab in the active workspace using the configured terminal editor and shell-escaped `~/.config/ghostterm/config` path. The tab is created transactionally, titled `Config`, and its custom command is not auto-replayed by Task 2 restore.
+
+**Step 4: Make selection update the standard clipboard**
+
+Ghostty's `copy-on-select = true` prefers its separate selection pasteboard on macOS. GhostTerm's effective terminal default must therefore be:
+
+```text
+copy-on-select = clipboard
+```
+
+Inject this line into generated `.ghostty-effective-config` only when the user has no explicit `copy-on-select` assignment. Add it to the starter config. An explicit user value such as `false` remains authoritative.
+
+**Step 5: Test and commit**
+
+Test parser defaults/validation/last-value behavior, startup gating without changing frame restore, exact shortcut bypass/idempotence, transactional editor-tab creation/quoting, and effective-config default/override behavior.
+
+```bash
+git commit -m "feat: configure workspace restore and config editing"
+```
+
 ### Task 3: Persist every completed runtime mutation and live CWD
 
 **Files:**
