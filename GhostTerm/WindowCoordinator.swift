@@ -1,11 +1,23 @@
 import AppKit
 
+struct WorkspaceDeletionConfirmation: Equatable {
+    let workspaceID: WorkspaceID
+    let workspaceName: String
+    let tabCount: Int
+    let paneCount: Int
+}
+
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
     typealias ModePersistence = @MainActor (PresentationMode) -> Void
     typealias QuakeHeightPersistence = @MainActor (Double) -> Void
     typealias NormalWindowFramePersistence = @MainActor (NormalWindowFrame) -> Void
     typealias WorkspacePersistence = @MainActor (WorkspaceStore) -> Void
+    typealias WorkspaceDeletionConfirmationPresenter =
+        @MainActor (
+            WorkspaceDeletionConfirmation,
+            @escaping @MainActor (Bool) -> Void
+        ) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
 
     private let ghosttyBridge: GhosttyBridge
@@ -15,6 +27,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let hotKeyController: any HotKeyControlling
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
+    private let workspaceDeletionConfirmationPresenter: WorkspaceDeletionConfirmationPresenter?
     private let persistNormalWindowFrame: NormalWindowFramePersistence
     private let persistWorkspaceStore: WorkspacePersistence
     private let onError: ErrorHandler
@@ -22,6 +35,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let splitCoordinator = SplitCoordinator()
     private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
+    private var pendingWorkspaceDeletionID: WorkspaceID?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
     private var isCreatingReplacementShell = false
     private var activeHotKey = HotKeyDescriptor(key: .f12)
@@ -71,6 +85,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         initialWorkspaceStore: WorkspaceStore = WorkspaceStore(),
         persistWorkspaceStore: @escaping WorkspacePersistence = { _ in },
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
+        workspaceDeletionConfirmationPresenter: WorkspaceDeletionConfirmationPresenter? = nil,
         persistPresentationMode: @escaping ModePersistence = { _ in },
         persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
         persistNormalWindowFrame: @escaping NormalWindowFramePersistence = { _ in },
@@ -102,6 +117,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.surfaceConfiguration = surfaceConfiguration
         workspaceStore = initialWorkspaceStore
         self.confirmationPresenter = confirmationPresenter
+        self.workspaceDeletionConfirmationPresenter = workspaceDeletionConfirmationPresenter
         self.persistNormalWindowFrame = persistNormalWindowFrame
         self.persistWorkspaceStore = persistWorkspaceStore
         self.onError = onError
@@ -624,6 +640,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             guard commitWorkspaceStore(candidate) else { return }
             refreshWorkspacePresentation(focusTerminal: true)
         }
+        workspaceViewController.onCreateWorkspace = { [weak self] in
+            self?.presentCreateWorkspace()
+        }
+        workspaceViewController.onRenameWorkspace = { [weak self] in
+            self?.presentRenameWorkspace()
+        }
+        workspaceViewController.onDeleteWorkspace = { [weak self] in
+            self?.requestDeleteActiveWorkspace()
+        }
         workspaceViewController.onActivateTab = { [weak self] tabID in
             guard let self else { return }
             var candidate = workspaceStore
@@ -825,8 +850,212 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: false)
     }
 
+    private func presentCreateWorkspace() {
+        guard createWorkspaceController == nil, let window = activeWindow else { return }
+
+        let controller = CreateWorkspaceController(
+            existingNames: { [weak self] in
+                self?.workspaceStore.workspaces.map(\.name) ?? []
+            },
+            submit: { [weak self] name in
+                guard let self else {
+                    return .failure(.workspaceNotFound(WorkspaceID()))
+                }
+                var candidate = workspaceStore
+                do {
+                    let workspaceID = try candidate.createWorkspace(named: name)
+                    try candidate.activateWorkspace(workspaceID)
+                    let prepared = try prepareShellTab(
+                        in: workspaceID,
+                        candidate: &candidate,
+                        surfaceContext: .newTab
+                    )
+                    surfaces[prepared.paneID] = prepared.surface
+                    guard commitWorkspaceStore(candidate) else {
+                        ghosttyBridge.closeSurface(id: prepared.paneID)
+                        surfaces.removeValue(forKey: prepared.paneID)
+                        return .failure(.workspaceNotFound(workspaceID))
+                    }
+                    refreshWorkspacePresentation(focusTerminal: true)
+                    return .success(())
+                } catch let error as WorkspaceError {
+                    return .failure(error)
+                } catch {
+                    onError(error)
+                    return .failure(.workspaceNotFound(candidate.activeWorkspaceID))
+                }
+            }
+        )
+        presentWorkspaceEditor(controller, for: window)
+    }
+
+    private func presentRenameWorkspace() {
+        guard
+            createWorkspaceController == nil,
+            let window = activeWindow,
+            let workspace = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)
+        else {
+            return
+        }
+        let workspaceID = workspace.id
+        let controller = CreateWorkspaceController(
+            title: "Rename Workspace",
+            initialName: workspace.name,
+            buttonTitle: "Rename",
+            errorMessage: "The workspace could not be renamed.",
+            existingNames: { [weak self] in
+                self?.workspaceStore.workspaces.compactMap { workspace in
+                    workspace.id == workspaceID ? nil : workspace.name
+                } ?? []
+            },
+            submit: { [weak self] name in
+                guard let self, workspaceStore.activeWorkspaceID == workspaceID else {
+                    return .failure(.workspaceNotFound(workspaceID))
+                }
+                var candidate = workspaceStore
+                do {
+                    try candidate.renameWorkspace(workspaceID, to: name)
+                    guard commitWorkspaceStore(candidate) else { return .success(()) }
+                    refreshWorkspacePresentation(focusTerminal: true)
+                    return .success(())
+                } catch let error as WorkspaceError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.workspaceNotFound(workspaceID))
+                }
+            }
+        )
+        presentWorkspaceEditor(controller, for: window)
+    }
+
+    private func presentWorkspaceEditor(
+        _ controller: CreateWorkspaceController,
+        for window: NSWindow
+    ) {
+        controller.onDismiss = { [weak self, weak controller] in
+            guard self?.createWorkspaceController === controller else { return }
+            self?.createWorkspaceController = nil
+        }
+        createWorkspaceController = controller
+        controller.presentSheet(for: window)
+    }
+
+    private func requestDeleteActiveWorkspace() {
+        requestDeleteWorkspace(workspaceStore.activeWorkspaceID)
+    }
+
+    private func requestDeleteWorkspace(_ workspaceID: WorkspaceID) {
+        guard
+            pendingWorkspaceDeletionID == nil,
+            workspaceID == workspaceStore.activeWorkspaceID,
+            workspaceStore.workspaces.count > 1,
+            let workspace = workspaceStore.workspace(id: workspaceID)
+        else {
+            return
+        }
+
+        let paneCount = workspace.tabs.reduce(into: 0) { count, tab in
+            count += tab.root.leaves.count
+        }
+        guard paneCount > 0 else {
+            deleteWorkspace(workspaceID)
+            return
+        }
+
+        let confirmation = WorkspaceDeletionConfirmation(
+            workspaceID: workspaceID,
+            workspaceName: workspace.name,
+            tabCount: workspace.tabs.count,
+            paneCount: paneCount
+        )
+        pendingWorkspaceDeletionID = workspaceID
+        let completion: @MainActor (Bool) -> Void = { [weak self] allowed in
+            self?.resolveWorkspaceDeletion(workspaceID, allowed: allowed)
+        }
+        if let workspaceDeletionConfirmationPresenter {
+            workspaceDeletionConfirmationPresenter(confirmation, completion)
+        } else {
+            presentWorkspaceDeletionConfirmation(confirmation, completion: completion)
+        }
+    }
+
+    private func resolveWorkspaceDeletion(_ workspaceID: WorkspaceID, allowed: Bool) {
+        guard pendingWorkspaceDeletionID == workspaceID else { return }
+        pendingWorkspaceDeletionID = nil
+        guard allowed else { return }
+        deleteWorkspace(workspaceID)
+    }
+
+    private func deleteWorkspace(_ workspaceID: WorkspaceID) {
+        guard
+            workspaceID == workspaceStore.activeWorkspaceID,
+            workspaceStore.workspaces.count > 1
+        else {
+            return
+        }
+        var candidate = workspaceStore
+        let removedWorkspace: Workspace
+        do {
+            removedWorkspace = try candidate.deleteWorkspace(workspaceID)
+        } catch {
+            return
+        }
+
+        detachActiveWorkspacePresentation()
+        for paneID in removedWorkspace.tabs.flatMap(\.root.leaves) {
+            _ = removeSurface(id: paneID, closeBridgeSurface: true)
+        }
+        guard commitWorkspaceStore(candidate) else { return }
+        refreshWorkspacePresentation(focusTerminal: true)
+    }
+
+    private func detachActiveWorkspacePresentation() {
+        _ = activeWindow?.makeFirstResponder(nil)
+        workspaceViewController.displayTerminal(
+            root: nil,
+            surfaces: [:],
+            palette: ghosttyBridge.chromePalette,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+    }
+
+    private func presentWorkspaceDeletionConfirmation(
+        _ confirmation: WorkspaceDeletionConfirmation,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard let window = activeWindow else {
+            completion(false)
+            return
+        }
+        let alert = Self.makeWorkspaceDeletionAlert(confirmation)
+        alert.beginSheetModal(for: window) { response in
+            completion(response == .alertFirstButtonReturn)
+        }
+    }
+
+    static func makeWorkspaceDeletionAlert(_ confirmation: WorkspaceDeletionConfirmation) -> NSAlert
+    {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete Workspace?"
+        alert.informativeText =
+            "\(confirmation.workspaceName) contains \(confirmation.tabCount) \(pluralized(confirmation.tabCount, singular: "tab", plural: "tabs")) and \(confirmation.paneCount) \(pluralized(confirmation.paneCount, singular: "pane", plural: "panes")). All of its terminals will be closed."
+        let deleteButton = alert.addButton(withTitle: "Delete")
+        deleteButton.hasDestructiveAction = true
+        deleteButton.keyEquivalent = "\r"
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1B}"
+        return alert
+    }
+
+    private static func pluralized(_ count: Int, singular: String, plural: String) -> String {
+        count == 1 ? singular : plural
+    }
+
     private func presentMoveToNewWorkspace(_ tabIDs: [TabID]) {
-        guard !tabIDs.isEmpty, let window = activeWindow else { return }
+        guard !tabIDs.isEmpty, createWorkspaceController == nil, let window = activeWindow else {
+            return
+        }
         let sourceWorkspaceID = workspaceStore.activeWorkspaceID
         let controller = CreateWorkspaceController(
             existingNames: { [weak self] in
@@ -857,11 +1086,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 }
             }
         )
-        controller.onDismiss = { [weak self] in
-            self?.createWorkspaceController = nil
-        }
-        createWorkspaceController = controller
-        controller.presentSheet(for: window)
+        presentWorkspaceEditor(controller, for: window)
     }
 
     private func moveTabs(_ tabIDs: [TabID], to destinationWorkspaceID: WorkspaceID) {

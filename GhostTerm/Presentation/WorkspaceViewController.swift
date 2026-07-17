@@ -6,6 +6,9 @@ final class WorkspaceViewController: NSViewController {
     static let chromeHeight: CGFloat = 28
 
     var onActivateWorkspace: ((WorkspaceID) -> Void)?
+    var onCreateWorkspace: (() -> Void)?
+    var onRenameWorkspace: (() -> Void)?
+    var onDeleteWorkspace: (() -> Void)?
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
     var onToggleBroadcast: (() -> Void)?
@@ -81,6 +84,15 @@ final class WorkspaceViewController: NSViewController {
 
         workspaceSelector.onSelection = { [weak self] workspaceID in
             self?.onActivateWorkspace?(workspaceID)
+        }
+        workspaceSelector.onCreateWorkspace = { [weak self] in
+            self?.onCreateWorkspace?()
+        }
+        workspaceSelector.onRenameWorkspace = { [weak self] in
+            self?.onRenameWorkspace?()
+        }
+        workspaceSelector.onDeleteWorkspace = { [weak self] in
+            self?.onDeleteWorkspace?()
         }
         tabBarViewController.onActivateTab = { [weak self] tabID in
             self?.onActivateTab?(tabID)

@@ -1465,6 +1465,272 @@ struct WindowCoordinatorTabLifecycleTests {
         }
     }
 
+    @Test
+    func workspaceCreateAndRenameCommitOnceWithoutRecreatingLiveSurfaces() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onCreateWorkspace?()
+        let createSheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        createSheet.submitForTesting(name: "Backend")
+
+        let createdStore = coordinator.workspaceStoreForTesting
+        let backend = try #require(createdStore.workspaces.last)
+        let backendTab = try #require(backend.tabs.first)
+        let backendSurface = try #require(coordinator.activeSurfaceForTesting)
+        #expect(persistence.snapshots == [createdStore])
+        #expect(createdStore.activeWorkspaceID == backend.id)
+        #expect(backend.name == "Backend")
+        #expect(backendTab.activePaneID == backendSurface.paneID)
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: backendSurface.paneID)?.context == .newTab)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === backendSurface)
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onRenameWorkspace?()
+        let renameSheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        renameSheet.submitForTesting(name: "Services")
+
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.workspaceStoreForTesting.workspace(id: backend.id)?.name == "Services")
+        #expect(coordinator.activeSurfaceForTesting === backendSurface)
+        #expect(coordinator.surfaceIDsForTesting.contains(backendSurface.paneID))
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onRenameWorkspace?()
+        let noOpSheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        noOpSheet.submitForTesting(name: "Services")
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.activeSurfaceForTesting === backendSurface)
+
+        coordinator.workspaceViewControllerForTesting.onRenameWorkspace?()
+        let invalidRenameSheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        invalidRenameSheet.submitForTesting(name: "default")
+        #expect(
+            invalidRenameSheet.errorMessageForTesting
+                == "A workspace with this name already exists.")
+        invalidRenameSheet.submitForTesting(name: " \n")
+        #expect(invalidRenameSheet.errorMessageForTesting == "Workspace name is required.")
+        #expect(persistence.snapshots.isEmpty)
+        invalidRenameSheet.cancelForTesting()
+    }
+
+    @Test
+    func workspaceCreateRollsBackOnSurfaceFailureWithoutPersisting() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let beforeStore = coordinator.workspaceStoreForTesting
+        let beforeSurfaceIDs = coordinator.surfaceIDsForTesting
+
+        persistence.reset()
+        bridge.failNextSurfaceCreationForTesting()
+        coordinator.workspaceViewControllerForTesting.onCreateWorkspace?()
+        let sheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        sheet.submitForTesting(name: "Broken")
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == beforeStore)
+        #expect(coordinator.surfaceIDsForTesting == beforeSurfaceIDs)
+        #expect(bridge.activeSurfaceIDs == beforeSurfaceIDs)
+        #expect(!sheet.errorMessageForTesting.isEmpty)
+    }
+
+    @Test
+    func deletingActiveWorkspaceUsesOneAggregateConfirmationAndPreservesBackgroundSurfaces() throws
+    {
+        let backgroundPaneID = PaneID()
+        let activeFirstPaneID = PaneID()
+        let activeSecondPaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp/background")
+        )
+        let activeTab = try TerminalTab(
+            title: "Active",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .pane(activeFirstPaneID),
+                second: .pane(activeSecondPaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: activeFirstPaneID, cwd: "/tmp/one"),
+                TerminalPaneDescriptor(id: activeSecondPaneID, cwd: "/tmp/two"),
+            ],
+            activePaneID: activeSecondPaneID
+        )
+        let background = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let active = Workspace(name: "Active", tabs: [activeTab], activeTabID: activeTab.id)
+        let store = try WorkspaceStore(
+            workspaces: [background, active],
+            activeWorkspaceID: active.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var confirmations: [WorkspaceDeletionConfirmation] = []
+        var respond: ((Bool) -> Void)?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            workspaceDeletionConfirmationPresenter: { confirmation, completion in
+                confirmations.append(confirmation)
+                respond = completion
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        let confirmation = try #require(confirmations.first)
+        #expect(confirmations.count == 1)
+        #expect(confirmation.workspaceName == "Active")
+        #expect(confirmation.tabCount == 1)
+        #expect(confirmation.paneCount == 2)
+        respond?(false)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(
+            Set(coordinator.surfaceIDsForTesting) == [
+                backgroundPaneID,
+                activeFirstPaneID,
+                activeSecondPaneID,
+            ])
+
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        respond?(true)
+        let resultingStore = coordinator.workspaceStoreForTesting
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(resultingStore.workspaces.map(\.id) == [background.id])
+        #expect(resultingStore.activeWorkspaceID == background.id)
+        #expect(coordinator.surfaceIDsForTesting == [backgroundPaneID])
+        #expect(bridge.activeSurfaceIDs == [backgroundPaneID])
+        #expect(coordinator.activeSurfaceForTesting?.paneID == backgroundPaneID)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting
+                == [ObjectIdentifier(coordinator.surfaceForTesting(id: backgroundPaneID)!)]
+        )
+
+        coordinator.surfaceDidRequestCloseForTesting(id: activeFirstPaneID, processAlive: false)
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(coordinator.surfaceIDsForTesting == [backgroundPaneID])
+    }
+
+    @Test
+    func deletingTheOnlyWorkspaceIsDisabledAndDoesNotPersist() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting.workspaces.count == 1)
+        #expect(
+            !coordinator.workspaceViewControllerForTesting.workspaceSelector
+                .isActionEnabledForTesting(.delete)
+        )
+    }
+
+    @Test
+    func deletingAnEmptyActiveWorkspaceCommitsOnceWithoutPresentingAnAlert() throws {
+        let backgroundPaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp")
+        )
+        let background = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let empty = Workspace(name: "Empty")
+        let store = try WorkspaceStore(
+            workspaces: [background, empty],
+            activeWorkspaceID: empty.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var alertCount = 0
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            workspaceDeletionConfirmationPresenter: { _, _ in
+                alertCount += 1
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+
+        #expect(alertCount == 0)
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.workspaceStoreForTesting.workspaces.map(\.id) == [background.id])
+        #expect(coordinator.workspaceStoreForTesting.activeWorkspaceID == background.id)
+        #expect(coordinator.surfaceIDsForTesting == [backgroundPaneID])
+        #expect(coordinator.activeSurfaceForTesting?.paneID == backgroundPaneID)
+    }
+
+    @Test
+    func startingTwiceDoesNotCreateOrPersistAdditionalSurfaces() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let storeAfterFirstStart = coordinator.workspaceStoreForTesting
+        let surfacesAfterFirstStart = coordinator.surfaceIDsForTesting
+        persistence.reset()
+
+        try coordinator.start()
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == storeAfterFirstStart)
+        #expect(coordinator.surfaceIDsForTesting == surfacesAfterFirstStart)
+        #expect(bridge.activeSurfaceIDs == surfacesAfterFirstStart)
+    }
+
     private func restoredWorkspaceStore(isBroadcasting: Bool = false) throws -> WorkspaceStore {
         let backgroundFirstPaneID = PaneID()
         let backgroundSecondPaneID = PaneID()

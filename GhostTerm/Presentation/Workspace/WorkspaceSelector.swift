@@ -2,9 +2,20 @@ import AppKit
 
 @MainActor
 final class WorkspaceSelector: NSView {
+    enum Action: Int, Hashable {
+        case new = 1
+        case rename
+        case delete
+    }
+
     var onSelection: ((WorkspaceID) -> Void)?
+    var onCreateWorkspace: (() -> Void)?
+    var onRenameWorkspace: (() -> Void)?
+    var onDeleteWorkspace: (() -> Void)?
 
     private let popUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var workspaceNames: [String] = []
+    private var activeWorkspaceID: WorkspaceID?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -24,18 +35,22 @@ final class WorkspaceSelector: NSView {
     }
 
     func apply(workspaces: [Workspace], activeWorkspaceID: WorkspaceID) {
+        self.activeWorkspaceID = activeWorkspaceID
+        workspaceNames = workspaces.map(\.name)
         popUpButton.removeAllItems()
         for workspace in workspaces {
             popUpButton.addItem(withTitle: workspace.name)
             popUpButton.lastItem?.representedObject = workspace.id.rawValue as NSUUID
         }
-        if let activeIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID }) {
-            popUpButton.selectItem(at: activeIndex)
-        }
+        popUpButton.menu?.addItem(.separator())
+        addActionItem(.new, title: "New Workspace…")
+        addActionItem(.rename, title: "Rename Workspace…")
+        addActionItem(.delete, title: "Delete Workspace…", isEnabled: workspaces.count > 1)
+        selectActiveWorkspace()
     }
 
     var displayedWorkspaceNames: [String] {
-        popUpButton.itemArray.map(\.title)
+        workspaceNames
     }
 
     var selectedWorkspaceID: WorkspaceID? {
@@ -43,10 +58,67 @@ final class WorkspaceSelector: NSView {
         return WorkspaceID(rawValue: rawID as UUID)
     }
 
-    @objc private func selectionChanged() {
-        guard let selectedWorkspaceID else { return }
-        onSelection?(selectedWorkspaceID)
+    private func addActionItem(
+        _ action: Action,
+        title: String,
+        isEnabled: Bool = true
+    ) {
+        popUpButton.addItem(withTitle: title)
+        popUpButton.lastItem?.tag = action.rawValue
+        popUpButton.lastItem?.isEnabled = isEnabled
     }
+
+    private func selectActiveWorkspace() {
+        guard let activeWorkspaceID,
+            let itemIndex = popUpButton.itemArray.firstIndex(where: { item in
+                guard let rawID = item.representedObject as? NSUUID else { return false }
+                return WorkspaceID(rawValue: rawID as UUID) == activeWorkspaceID
+            })
+        else {
+            return
+        }
+        popUpButton.selectItem(at: itemIndex)
+    }
+
+    @objc private func selectionChanged() {
+        if let selectedWorkspaceID {
+            onSelection?(selectedWorkspaceID)
+            return
+        }
+        guard
+            let selectedItem = popUpButton.selectedItem,
+            let action = Action(rawValue: selectedItem.tag),
+            selectedItem.isEnabled
+        else {
+            selectActiveWorkspace()
+            return
+        }
+
+        selectActiveWorkspace()
+        switch action {
+        case .new:
+            onCreateWorkspace?()
+        case .rename:
+            onRenameWorkspace?()
+        case .delete:
+            onDeleteWorkspace?()
+        }
+    }
+
+    #if DEBUG
+        func triggerActionForTesting(_ action: Action) {
+            guard let item = popUpButton.itemArray.first(where: { $0.tag == action.rawValue })
+            else {
+                return
+            }
+            popUpButton.select(item)
+            selectionChanged()
+        }
+
+        func isActionEnabledForTesting(_ action: Action) -> Bool {
+            popUpButton.itemArray.first(where: { $0.tag == action.rawValue })?.isEnabled ?? false
+        }
+    #endif
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {

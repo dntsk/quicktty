@@ -39,6 +39,74 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func workspaceSelectorSeparatesActionsAndReselectsTheActiveWorkspace() throws {
+        var store = WorkspaceStore()
+        let backendID = try store.createWorkspace(named: "Backend")
+        try store.activateWorkspace(backendID)
+        let selector = WorkspaceSelector()
+        var requestedActions: [WorkspaceSelector.Action] = []
+        selector.onCreateWorkspace = { requestedActions.append(.new) }
+        selector.onRenameWorkspace = { requestedActions.append(.rename) }
+        selector.onDeleteWorkspace = { requestedActions.append(.delete) }
+
+        selector.apply(
+            workspaces: store.workspaces,
+            activeWorkspaceID: store.activeWorkspaceID
+        )
+        selector.triggerActionForTesting(.new)
+        selector.triggerActionForTesting(.rename)
+        selector.triggerActionForTesting(.delete)
+
+        #expect(selector.displayedWorkspaceNames == ["Default", "Backend"])
+        #expect(selector.selectedWorkspaceID == backendID)
+        #expect(requestedActions == [.new, .rename, .delete])
+        #expect(selector.isActionEnabledForTesting(.delete))
+
+        selector.apply(workspaces: [store.workspaces[0]], activeWorkspaceID: store.workspaces[0].id)
+        #expect(!selector.isActionEnabledForTesting(.delete))
+    }
+
+    @Test
+    func workspaceViewControllerForwardsWorkspaceSelectorActions() {
+        let controller = WorkspaceViewController()
+        var actions: [String] = []
+        controller.onCreateWorkspace = { actions.append("create") }
+        controller.onRenameWorkspace = { actions.append("rename") }
+        controller.onDeleteWorkspace = { actions.append("delete") }
+        controller.apply(WorkspaceStore())
+
+        controller.workspaceSelector.triggerActionForTesting(.new)
+        controller.workspaceSelector.triggerActionForTesting(.rename)
+        controller.workspaceSelector.triggerActionForTesting(.delete)
+
+        #expect(actions == ["create", "rename"])
+    }
+
+    @Test
+    func workspaceNameEditorConfiguresRenameAndLeavesAnUnchangedNameAsASuccessfulNoOp() {
+        var submittedNames: [String] = []
+        let controller = CreateWorkspaceController(
+            title: "Rename Workspace",
+            initialName: "Backend",
+            buttonTitle: "Rename",
+            errorMessage: "The workspace could not be renamed.",
+            existingNames: { ["Default"] },
+            submit: { name in
+                submittedNames.append(name)
+                return .success(())
+            }
+        )
+
+        controller.submitForTesting(name: "Backend")
+
+        #expect(controller.window?.title == "Rename Workspace")
+        #expect(controller.nameForTesting == "Backend")
+        #expect(controller.submitButtonTitleForTesting == "Rename")
+        #expect(submittedNames == ["Backend"])
+        #expect(controller.errorMessageForTesting.isEmpty)
+    }
+
+    @Test
     func workspaceNameValidationTrimsAndRejectsCaseInsensitiveDuplicates() throws {
         let trimmed = try WorkspaceNameValidator.validate(
             "  Backend\n",

@@ -33,14 +33,25 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
 
     private let existingNames: () -> [String]
     private let submit: Submit
+    private let failureMessage: String
     private let nameField = NSTextField()
     private let errorLabel = NSTextField(labelWithString: "")
-    private let createButton = NSButton(title: "Create", target: nil, action: nil)
+    private let submitButton: NSButton
     private weak var parentWindow: NSWindow?
+    private var hasDismissed = false
 
-    init(existingNames: @escaping () -> [String], submit: @escaping Submit) {
+    init(
+        title: String = "New Workspace",
+        initialName: String = "",
+        buttonTitle: String = "Create",
+        errorMessage: String = "The workspace could not be created.",
+        existingNames: @escaping () -> [String],
+        submit: @escaping Submit
+    ) {
         self.existingNames = existingNames
         self.submit = submit
+        failureMessage = errorMessage
+        submitButton = NSButton(title: buttonTitle, target: nil, action: nil)
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 176),
@@ -48,8 +59,9 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.title = "New Workspace"
+        panel.title = title
         super.init(window: panel)
+        nameField.stringValue = initialName
         configureContent()
     }
 
@@ -84,17 +96,16 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
         cancelButton.keyEquivalent = "\u{1B}"
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
 
-        createButton.target = self
-        createButton.action = #selector(createWorkspace)
-        createButton.keyEquivalent = "\r"
-        createButton.isEnabled = false
-        createButton.translatesAutoresizingMaskIntoConstraints = false
+        submitButton.target = self
+        submitButton.action = #selector(submitWorkspace)
+        submitButton.keyEquivalent = "\r"
+        submitButton.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(prompt)
         contentView.addSubview(nameField)
         contentView.addSubview(errorLabel)
         contentView.addSubview(cancelButton)
-        contentView.addSubview(createButton)
+        contentView.addSubview(submitButton)
         NSLayoutConstraint.activate([
             prompt.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 22),
             prompt.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
@@ -105,13 +116,14 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
             errorLabel.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 6),
             errorLabel.leadingAnchor.constraint(equalTo: prompt.leadingAnchor),
             errorLabel.trailingAnchor.constraint(equalTo: prompt.trailingAnchor),
-            createButton.trailingAnchor.constraint(
+            submitButton.trailingAnchor.constraint(
                 equalTo: contentView.trailingAnchor, constant: -20),
-            createButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+            submitButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
             cancelButton.trailingAnchor.constraint(
-                equalTo: createButton.leadingAnchor, constant: -8),
-            cancelButton.centerYAnchor.constraint(equalTo: createButton.centerYAnchor),
+                equalTo: submitButton.leadingAnchor, constant: -8),
+            cancelButton.centerYAnchor.constraint(equalTo: submitButton.centerYAnchor),
         ])
+        updateValidation(showEmptyError: false)
     }
 
     private func updateValidation(showEmptyError: Bool) {
@@ -121,27 +133,43 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
                 existingNames: existingNames()
             )
             errorLabel.stringValue = ""
-            createButton.isEnabled = true
+            submitButton.isEnabled = true
         } catch WorkspaceNameValidator.ValidationError.empty {
             errorLabel.stringValue = showEmptyError ? "Workspace name is required." : ""
-            createButton.isEnabled = false
+            submitButton.isEnabled = false
         } catch WorkspaceNameValidator.ValidationError.duplicate {
             errorLabel.stringValue = "A workspace with this name already exists."
-            createButton.isEnabled = false
+            submitButton.isEnabled = false
         } catch {
-            errorLabel.stringValue = "The workspace name is invalid."
-            createButton.isEnabled = false
+            errorLabel.stringValue = failureMessage
+            submitButton.isEnabled = false
         }
     }
 
     #if DEBUG
+        var nameForTesting: String {
+            nameField.stringValue
+        }
+
+        var submitButtonTitleForTesting: String {
+            submitButton.title
+        }
+
+        var errorMessageForTesting: String {
+            errorLabel.stringValue
+        }
+
         func submitForTesting(name: String) {
             nameField.stringValue = name
-            createWorkspace()
+            submitWorkspace()
+        }
+
+        func cancelForTesting() {
+            cancel()
         }
     #endif
 
-    @objc private func createWorkspace() {
+    @objc private func submitWorkspace() {
         let name: String
         do {
             name = try WorkspaceNameValidator.validate(
@@ -161,7 +189,7 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
         case .failure(.duplicateWorkspaceName):
             errorLabel.stringValue = "A workspace with this name already exists."
         case .failure:
-            errorLabel.stringValue = "The workspace could not be created."
+            errorLabel.stringValue = failureMessage
         }
     }
 
@@ -173,6 +201,8 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
         if let parentWindow, let window, window.sheetParent === parentWindow {
             parentWindow.endSheet(window)
         }
+        guard !hasDismissed else { return }
+        hasDismissed = true
         onDismiss?()
     }
 
