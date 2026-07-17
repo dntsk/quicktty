@@ -643,6 +643,288 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(replacement.paneID != exitedSurface.paneID)
     }
 
+    @Test
+    func startRestoresEverySavedPaneWithoutReplayingCommands() async throws {
+        let authoredStore = try restoredWorkspaceStore(isBroadcasting: true)
+        let savedStore = try JSONDecoder().decode(
+            WorkspaceStore.self,
+            from: JSONEncoder().encode(authoredStore)
+        )
+        let savedActiveWorkspace = try #require(
+            savedStore.workspace(id: savedStore.activeWorkspaceID)
+        )
+        let savedActiveTabID = try #require(savedActiveWorkspace.activeTabID)
+        let savedActiveTab = try #require(savedStore.tab(id: savedActiveTabID))
+        let customPaneID = savedActiveTab.root.leaves[1]
+
+        #expect(!savedActiveTab.isBroadcasting)
+        #expect(
+            savedActiveTab.paneDescriptor(for: customPaneID)?.startupCommand
+                == .custom("printf should-not-run")
+        )
+
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+
+        do {
+            let coordinator = WindowCoordinator(
+                ghosttyBridge: bridge,
+                surfaceConfiguration: GhosttySurfaceConfiguration(
+                    workingDirectory: "/tmp/ignored",
+                    command: "exec /bin/cat",
+                    initialInput: "echo should-not-run\\n"
+                ),
+                initialWorkspaceStore: savedStore
+            )
+
+            try coordinator.start()
+            await Task.yield()
+
+            let expectedPaneIDs = Set(
+                savedStore.workspaces.flatMap(\.tabs).flatMap { $0.root.leaves }
+            )
+            #expect(Set(coordinator.surfaceIDsForTesting) == expectedPaneIDs)
+            #expect(Set(bridge.activeSurfaceIDs) == expectedPaneIDs)
+            #expect(bridge.activeSurfaceCount == expectedPaneIDs.count)
+            #expect(coordinator.workspaceStoreForTesting == savedStore)
+            #expect(
+                coordinator.workspaceStoreForTesting.activeWorkspaceID
+                    == savedStore.activeWorkspaceID)
+            #expect(
+                coordinator.workspaceStoreForTesting.workspace(id: savedStore.activeWorkspaceID)?
+                    .activeTabID == savedActiveTabID
+            )
+            #expect(
+                coordinator.workspaceStoreForTesting.tab(id: savedActiveTabID)?.activePaneID
+                    == savedActiveTab.activePaneID
+            )
+            #expect(!coordinator.isBroadcastingActiveTab)
+            #expect(
+                coordinator.workspaceStoreForTesting.tab(id: savedActiveTabID)?
+                    .paneDescriptor(for: customPaneID)?.startupCommand
+                    == .custom("printf should-not-run")
+            )
+
+            var expectedActiveSurfaceIdentities: [PaneID: ObjectIdentifier] = [:]
+            for paneID in savedActiveTab.root.leaves {
+                let surface = try #require(coordinator.surfaceForTesting(id: paneID))
+                expectedActiveSurfaceIdentities[paneID] = ObjectIdentifier(surface)
+            }
+            #expect(
+                coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                    == expectedActiveSurfaceIdentities
+            )
+            let activeSurface = try #require(coordinator.activeSurfaceForTesting)
+            #expect(activeSurface.paneID == savedActiveTab.activePaneID)
+            #expect(coordinator.activeWindowForTesting?.firstResponder === activeSurface)
+
+            for workspace in savedStore.workspaces {
+                for tab in workspace.tabs {
+                    for (leafIndex, paneID) in tab.root.leaves.enumerated() {
+                        let descriptor = try #require(tab.paneDescriptor(for: paneID))
+                        let configuration = try #require(
+                            bridge.surfaceConfigurationForTesting(id: paneID)
+                        )
+                        #expect(configuration.workingDirectory == descriptor.cwd)
+                        #expect(configuration.command == nil)
+                        #expect(configuration.initialInput == nil)
+                        #expect(
+                            configuration.context
+                                == (leafIndex == 0 ? .newTab : .split)
+                        )
+                    }
+                }
+            }
+
+            var originalSurfaceIdentities: [PaneID: ObjectIdentifier] = [:]
+            for paneID in expectedPaneIDs {
+                let surface = try #require(coordinator.surfaceForTesting(id: paneID))
+                originalSurfaceIdentities[paneID] = ObjectIdentifier(surface)
+            }
+
+            try coordinator.start()
+
+            #expect(Set(coordinator.surfaceIDsForTesting) == expectedPaneIDs)
+            #expect(bridge.activeSurfaceCount == expectedPaneIDs.count)
+            for (paneID, identity) in originalSurfaceIdentities {
+                let surface = try #require(coordinator.surfaceForTesting(id: paneID))
+                #expect(ObjectIdentifier(surface) == identity)
+            }
+        }
+    }
+
+    @Test
+    func startCreatesDefaultShellOnlyWhenEveryWorkspaceIsEmpty() async throws {
+        let emptyBridge = try GhosttyBridge()
+        defer { emptyBridge.shutdown() }
+
+        do {
+            let emptyCoordinator = WindowCoordinator(ghosttyBridge: emptyBridge)
+
+            try emptyCoordinator.start()
+            await Task.yield()
+
+            let defaultStore = emptyCoordinator.workspaceStoreForTesting
+            let defaultWorkspace = try #require(
+                defaultStore.workspace(id: defaultStore.activeWorkspaceID)
+            )
+            let defaultTabID = try #require(defaultWorkspace.activeTabID)
+            let defaultTab = try #require(defaultStore.tab(id: defaultTabID))
+            let defaultSurface = try #require(emptyCoordinator.activeSurfaceForTesting)
+            #expect(defaultWorkspace.tabs.count == 1)
+            #expect(defaultTab.root.leaves == [defaultSurface.paneID])
+            #expect(defaultTab.paneDescriptor(for: defaultSurface.paneID)?.startupCommand == .shell)
+            #expect(emptyBridge.activeSurfaceIDs == [defaultSurface.paneID])
+            #expect(
+                emptyBridge.surfaceConfigurationForTesting(id: defaultSurface.paneID)?.context
+                    == .newTab
+            )
+            #expect(emptyCoordinator.activeWindowForTesting?.firstResponder === defaultSurface)
+        }
+
+        let backgroundPaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp")
+        )
+        let emptyActiveWorkspace = Workspace(name: "Active Empty")
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let mixedStore = try WorkspaceStore(
+            workspaces: [emptyActiveWorkspace, backgroundWorkspace],
+            activeWorkspaceID: emptyActiveWorkspace.id
+        )
+        let mixedBridge = try GhosttyBridge()
+        defer { mixedBridge.shutdown() }
+
+        do {
+            let mixedCoordinator = WindowCoordinator(
+                ghosttyBridge: mixedBridge,
+                initialWorkspaceStore: mixedStore
+            )
+
+            try mixedCoordinator.start()
+            await Task.yield()
+
+            #expect(mixedCoordinator.workspaceStoreForTesting == mixedStore)
+            #expect(
+                mixedCoordinator.workspaceStoreForTesting.activeWorkspaceID
+                    == emptyActiveWorkspace.id)
+            #expect(mixedCoordinator.activeSurfaceForTesting == nil)
+            #expect(mixedCoordinator.surfaceIDsForTesting == [backgroundPaneID])
+            #expect(mixedBridge.activeSurfaceIDs == [backgroundPaneID])
+            #expect(
+                mixedCoordinator.workspaceViewControllerForTesting
+                    .hostedSurfaceIdentifiersForTesting
+                    .isEmpty
+            )
+            #expect(
+                mixedCoordinator.workspaceViewControllerForTesting
+                    .emptyWorkspaceLabelIsVisibleForTesting)
+        }
+    }
+
+    @Test
+    func startRollsBackEveryCreatedSurfaceWhenRestorationFails() throws {
+        let store = try restoredWorkspaceStore()
+        let failingPaneID = try #require(
+            store.workspaces.first?.tabs.first?.root.leaves.dropFirst().first
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+
+        do {
+            let coordinator = WindowCoordinator(
+                ghosttyBridge: bridge,
+                initialWorkspaceStore: store
+            )
+            bridge.failSurfaceCreationForTesting(id: failingPaneID)
+
+            do {
+                try coordinator.start()
+                Issue.record("Expected restoration to fail")
+            } catch let error as GhosttyBridgeError {
+                #expect(error == .surfaceCreationFailed(failingPaneID))
+            }
+
+            #expect(bridge.activeSurfaceIDs.isEmpty)
+            #expect(coordinator.surfaceIDsForTesting.isEmpty)
+            #expect(coordinator.workspaceStoreForTesting == store)
+        }
+    }
+
+    private func restoredWorkspaceStore(isBroadcasting: Bool = false) throws -> WorkspaceStore {
+        let backgroundFirstPaneID = PaneID()
+        let backgroundSecondPaneID = PaneID()
+        let backgroundTab = try TerminalTab(
+            title: "Background split",
+            root: .split(
+                id: UUID(),
+                axis: .vertical,
+                ratio: 0.3,
+                first: .pane(backgroundFirstPaneID),
+                second: .pane(backgroundSecondPaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: backgroundFirstPaneID, cwd: "/"),
+                TerminalPaneDescriptor(id: backgroundSecondPaneID, cwd: "/usr"),
+            ],
+            activePaneID: backgroundSecondPaneID
+        )
+        let hiddenPaneID = PaneID()
+        let hiddenTab = TerminalTab(
+            title: "Hidden tab",
+            pane: TerminalPaneDescriptor(id: hiddenPaneID, cwd: "/bin")
+        )
+        let activeFirstPaneID = PaneID()
+        let activeSecondPaneID = PaneID()
+        let activeThirdPaneID = PaneID()
+        let activeTab = try TerminalTab(
+            title: "Active nested split",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.6,
+                first: .pane(activeFirstPaneID),
+                second: .split(
+                    id: UUID(),
+                    axis: .vertical,
+                    ratio: 0.4,
+                    first: .pane(activeSecondPaneID),
+                    second: .pane(activeThirdPaneID)
+                )
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: activeFirstPaneID, cwd: "/System"),
+                TerminalPaneDescriptor(
+                    id: activeSecondPaneID,
+                    cwd: "/private",
+                    startupCommand: .custom("printf should-not-run")
+                ),
+                TerminalPaneDescriptor(id: activeThirdPaneID, cwd: "/tmp"),
+            ],
+            activePaneID: activeThirdPaneID,
+            isBroadcasting: isBroadcasting
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let activeWorkspace = Workspace(
+            name: "Active",
+            tabs: [hiddenTab, activeTab],
+            activeTabID: activeTab.id
+        )
+        return try WorkspaceStore(
+            workspaces: [backgroundWorkspace, activeWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+    }
+
     private func activeTab(of coordinator: WindowCoordinator) -> TerminalTab {
         let store = coordinator.workspaceStoreForTesting
         let workspace = store.workspace(id: store.activeWorkspaceID)!

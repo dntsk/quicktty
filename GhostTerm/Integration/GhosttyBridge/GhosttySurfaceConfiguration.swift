@@ -3,7 +3,7 @@ import Foundation
 struct GhosttySurfaceConfiguration: Equatable, Sendable {
     enum Context: Equatable, Sendable {
         case window
-        case tab
+        case newTab
         case split
     }
 

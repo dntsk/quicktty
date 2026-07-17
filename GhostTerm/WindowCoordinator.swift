@@ -208,8 +208,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func start() throws {
+        guard surfaces.isEmpty else { return }
+
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
-        try createShellTab()
+        if workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }) {
+            try createShellTab(refreshPresentation: false)
+        } else {
+            try restoreWorkspaceSurfaces()
+        }
+        refreshWorkspacePresentation(focusTerminal: true)
     }
 
     func createNewTab() {
@@ -335,11 +342,20 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func createShellTab(in workspaceID: WorkspaceID? = nil) throws {
+        try createShellTab(in: workspaceID, refreshPresentation: true)
+    }
+
+    private func createShellTab(
+        in workspaceID: WorkspaceID? = nil,
+        refreshPresentation: Bool
+    ) throws {
         let destinationWorkspaceID = workspaceID ?? workspaceStore.activeWorkspaceID
         let paneID = PaneID()
+        var tabConfiguration = surfaceConfiguration
+        tabConfiguration.context = .newTab
         let surface = try ghosttyBridge.makeSurface(
             id: paneID,
-            configuration: surfaceConfiguration
+            configuration: tabConfiguration
         ) { [weak self] paneID, processAlive in
             self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
         }
@@ -363,7 +379,46 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         surfaces[paneID] = surface
         workspaceStore = updatedStore
-        refreshWorkspacePresentation(focusTerminal: true)
+        if refreshPresentation {
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+    }
+
+    private func restoreWorkspaceSurfaces() throws {
+        var restoredSurfaces: [PaneID: GhosttySurfaceView] = [:]
+        var restoredPaneIDs: [PaneID] = []
+
+        do {
+            for workspace in workspaceStore.workspaces {
+                for tab in workspace.tabs {
+                    for (leafIndex, paneID) in tab.root.leaves.enumerated() {
+                        guard let descriptor = tab.paneDescriptor(for: paneID) else {
+                            preconditionFailure("WorkspaceStore contains an invalid tab")
+                        }
+                        var restoredConfiguration = surfaceConfiguration
+                        restoredConfiguration.workingDirectory = descriptor.cwd
+                        restoredConfiguration.command = nil
+                        restoredConfiguration.initialInput = nil
+                        restoredConfiguration.context = leafIndex == 0 ? .newTab : .split
+                        let surface = try ghosttyBridge.makeSurface(
+                            id: paneID,
+                            configuration: restoredConfiguration
+                        ) { [weak self] paneID, processAlive in
+                            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+                        }
+                        restoredSurfaces[paneID] = surface
+                        restoredPaneIDs.append(paneID)
+                    }
+                }
+            }
+        } catch {
+            for paneID in restoredPaneIDs {
+                ghosttyBridge.closeSurface(id: paneID)
+            }
+            throw error
+        }
+
+        surfaces = restoredSurfaces
     }
 
     func applyConfiguration(_ config: GhostTermConfig) {
@@ -761,6 +816,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var surfaceIDsForTesting: [PaneID] {
             surfaces.keys.sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
+        }
+
+        func surfaceForTesting(id paneID: PaneID) -> GhosttySurfaceView? {
+            surfaces[paneID]
         }
 
         func activateTabForTesting(_ tabID: TabID) {

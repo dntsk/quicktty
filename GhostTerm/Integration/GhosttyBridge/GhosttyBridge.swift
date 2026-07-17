@@ -173,6 +173,7 @@ final class GhosttyBridge {
         private var inputObservations: [GhosttyBridgeInputObservation] = []
         private var surfaceConfigurationsForTesting: [PaneID: GhosttySurfaceConfiguration] = [:]
         private var failsNextSurfaceCreationForTesting = false
+        private var failingSurfaceCreationPaneIDForTesting: PaneID?
     #endif
 
     private(set) var diagnostics: [String]
@@ -265,8 +266,11 @@ final class GhosttyBridge {
         }
 
         #if DEBUG
-            if failsNextSurfaceCreationForTesting {
+            if failsNextSurfaceCreationForTesting
+                || failingSurfaceCreationPaneIDForTesting == id
+            {
                 failsNextSurfaceCreationForTesting = false
+                failingSurfaceCreationPaneIDForTesting = nil
                 throw GhosttyBridgeError.surfaceCreationFailed(id)
             }
         #endif
@@ -401,6 +405,10 @@ final class GhosttyBridge {
 
         func failNextSurfaceCreationForTesting() {
             failsNextSurfaceCreationForTesting = true
+        }
+
+        func failSurfaceCreationForTesting(id: PaneID) {
+            failingSurfaceCreationPaneIDForTesting = id
         }
 
         static func runtimeReloadActionForTesting(soft: Bool) -> GhosttyRuntimeAction {

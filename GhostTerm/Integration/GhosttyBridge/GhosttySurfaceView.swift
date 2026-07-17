@@ -1915,7 +1915,7 @@ extension GhosttySurfaceConfiguration {
             switch context {
             case .window:
                 GHOSTTY_SURFACE_CONTEXT_WINDOW
-            case .tab:
+            case .newTab:
                 GHOSTTY_SURFACE_CONTEXT_TAB
             case .split:
                 GHOSTTY_SURFACE_CONTEXT_SPLIT
