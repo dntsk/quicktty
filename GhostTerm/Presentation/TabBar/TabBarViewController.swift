@@ -51,6 +51,11 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let name: String
     }
 
+    private struct PendingReorder {
+        let orderedTabIDs: [TabID]
+        let activeTabID: TabID
+    }
+
     static let itemHeight: CGFloat = 28
 
     var onActivateTab: ((TabID) -> Void)?
@@ -58,7 +63,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
-    var onReorderTabs: (([TabID]) -> Bool)?
+    var onReorderTabs: (([TabID], TabID) -> Bool)?
+    var onFinishReorderTabs: (() -> Void)?
 
     private let collectionView = NSCollectionView()
     private let collectionViewLayout = NSCollectionViewFlowLayout()
@@ -70,6 +76,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var dataReloadGeneration = 0
     private var hasAppliedPresentation = false
     private var lastAppliedActiveTabID: TabID?
+    private var pendingReorder: PendingReorder?
 
     override func loadView() {
         let rootView = NSView()
@@ -303,6 +310,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         dropOperation: NSCollectionView.DropOperation
     ) -> Bool {
         guard
+            pendingReorder == nil,
             dropOperation == .before,
             indexPath.section == 0,
             (0...tabs.count).contains(indexPath.item),
@@ -316,17 +324,42 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         let currentOrder = selection.orderedTabIDs
         let reorderedIDs = selection.reorderSelection(to: indexPath.item)
         guard reorderedIDs != currentOrder else { return true }
-        guard onReorderTabs?(reorderedIDs) == true else {
+        guard
+            let activeTabID = selection.activeTabID,
+            onReorderTabs?(reorderedIDs, activeTabID) == true
+        else {
             selection = previousSelection
+            synchronizeNativeSelection()
             return false
         }
-        guard tabs.map(\.id) != reorderedIDs else { return true }
 
-        tabs = reorderedIDs.compactMap { tabID in
+        pendingReorder = PendingReorder(
+            orderedTabIDs: reorderedIDs,
+            activeTabID: activeTabID
+        )
+        lastAppliedActiveTabID = activeTabID
+        return true
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        draggingSession session: NSDraggingSession,
+        endedAt screenPoint: NSPoint,
+        dragOperation operation: NSDragOperation
+    ) {
+        guard let pendingReorder else { return }
+
+        tabs = pendingReorder.orderedTabIDs.compactMap { tabID in
             tabs.first { $0.id == tabID }
         }
+        selection.synchronize(
+            tabIDs: pendingReorder.orderedTabIDs,
+            activeTabID: pendingReorder.activeTabID
+        )
+        lastAppliedActiveTabID = pendingReorder.activeTabID
         reloadCollectionView()
-        return true
+        onFinishReorderTabs?()
+        self.pendingReorder = nil
     }
 
     private func recordDragSessionStart() {

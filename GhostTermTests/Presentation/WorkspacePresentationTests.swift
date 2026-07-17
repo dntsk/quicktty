@@ -442,7 +442,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func tabBarModifierMouseDownSynchronizesNativeSelectionBeforeForwarding() throws {
+    func tabBarCommandMouseDownSanitizesForwardedModifiersAfterCustomSelection() throws {
         let tabs = Self.makeTabs(count: 3)
         let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
         defer { fixture.window.orderOut(nil) }
@@ -454,27 +454,55 @@ struct WorkspacePresentationTests {
         defer { background.nextResponder = originalNextResponder }
         background.nextResponder = forwardingResponder
         let reloadGeneration = tabBar.dataReloadGenerationForTesting
+        var selectedIDsWhileForwarded: [TabID] = []
         var nativeSelectionWhileForwarded: Set<IndexPath> = []
         var activatedTabIDs: [TabID] = []
         var activatedTabIDsWhileForwarded: [TabID] = []
         tabBar.onActivateTab = { activatedTabIDs.append($0) }
         forwardingResponder.onMouseDown = {
+            selectedIDsWhileForwarded = tabBar.selectedTabIDsInOrderForTesting
             nativeSelectionWhileForwarded = collectionView.selectionIndexPaths
             activatedTabIDsWhileForwarded = activatedTabIDs
         }
 
-        background.mouseDown(with: try Self.mouseDownEvent(modifierFlags: [.command]))
+        background.mouseDown(with: try Self.mouseDownEvent(modifierFlags: [.command, .option]))
 
         #expect(forwardingResponder.mouseDownCount == 1)
+        #expect(selectedIDsWhileForwarded == [tabs[0].id, tabs[2].id])
         #expect(
             nativeSelectionWhileForwarded == [
                 IndexPath(item: 0, section: 0),
                 IndexPath(item: 2, section: 0),
             ])
+        #expect(forwardingResponder.lastMouseDownEvent?.modifierFlags == [.option])
         #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration + 1)
         #expect(activatedTabIDsWhileForwarded.isEmpty)
         #expect(activatedTabIDs == [tabs[2].id])
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[2].id])
+        #expect(tabBar.activeTabIDForTesting == tabs[2].id)
+    }
+
+    @Test
+    func tabBarShiftMouseDownSanitizesForwardedModifiersAfterCustomSelection() throws {
+        let tabs = Self.makeTabs(count: 3)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        let background = tabBar.tabItemForTesting(at: 2).backgroundViewForTesting
+        let forwardingResponder = MouseDownForwardingResponder()
+        let originalNextResponder = background.nextResponder
+        defer { background.nextResponder = originalNextResponder }
+        background.nextResponder = forwardingResponder
+        var selectedIDsWhileForwarded: [TabID] = []
+        forwardingResponder.onMouseDown = {
+            selectedIDsWhileForwarded = tabBar.selectedTabIDsInOrderForTesting
+        }
+
+        background.mouseDown(with: try Self.mouseDownEvent(modifierFlags: [.shift, .option]))
+
+        #expect(selectedIDsWhileForwarded == tabs.map(\.id))
+        #expect(forwardingResponder.lastMouseDownEvent?.modifierFlags == [.option])
+        #expect(tabBar.selectedTabIDsInOrderForTesting == tabs.map(\.id))
         #expect(tabBar.activeTabIDForTesting == tabs[2].id)
     }
 
@@ -589,8 +617,8 @@ struct WorkspacePresentationTests {
         tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
         let collectionView = tabBar.collectionViewForTesting
         var proposedOrders: [[TabID]] = []
-        tabBar.onReorderTabs = {
-            proposedOrders.append($0)
+        tabBar.onReorderTabs = { orderedTabIDs, _ in
+            proposedOrders.append(orderedTabIDs)
             return false
         }
 
@@ -613,17 +641,22 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func tabBarAcceptsLocalSelectedBlockAndUpdatesDisplayedOrderOnce() throws {
+    func tabBarDefersAcceptedLocalSelectedBlockPresentationUntilDragSessionEnds() throws {
         let tabs = Self.makeTabs(count: 5)
         let tabBar = TabBarViewController()
         tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
         let collectionView = tabBar.collectionViewForTesting
         Self.selectMultipleTabs([1, 3], in: tabBar, tabs: tabs)
         var reorderedOrders: [[TabID]] = []
-        tabBar.onReorderTabs = {
-            reorderedOrders.append($0)
+        var reorderedActiveTabIDs: [TabID] = []
+        var completionCount = 0
+        tabBar.onReorderTabs = { orderedTabIDs, activeTabID in
+            reorderedOrders.append(orderedTabIDs)
+            reorderedActiveTabIDs.append(activeTabID)
             return true
         }
+        tabBar.onFinishReorderTabs = { completionCount += 1 }
+        let reloadGeneration = tabBar.dataReloadGenerationForTesting
 
         #expect(
             tabBar.collectionView(
@@ -638,25 +671,43 @@ struct WorkspacePresentationTests {
         )
 
         let expectedOrder = [tabs[2].id, tabs[4].id, tabs[0].id, tabs[1].id, tabs[3].id]
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == tabs.map(\.id))
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
+        #expect(reorderedOrders == [expectedOrder])
+        #expect(reorderedActiveTabIDs == [tabs[3].id])
+        #expect(completionCount == 0)
+
+        tabBar.collectionView(
+            collectionView,
+            draggingSession: NSDraggingSession(),
+            endedAt: .zero,
+            dragOperation: .move
+        )
+
         #expect(tabBar.displayedTabsForTesting.map(\.id) == expectedOrder)
         #expect(tabBar.orderedTabIDsForTesting == expectedOrder)
-        #expect(reorderedOrders == [expectedOrder])
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration + 1)
+        #expect(completionCount == 1)
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[1].id, tabs[3].id])
         #expect(tabBar.activeTabIDForTesting == tabs[3].id)
     }
 
     @Test
-    func tabBarSelectsDraggedTabAndMovesItBeforeTheDropDestination() throws {
+    func tabBarSelectsDraggedInactiveTabAndFinalizesItsOrderAndActivationAfterDragSession() throws {
         let tabs = Self.makeTabs(count: 3)
         let tabBar = TabBarViewController()
         tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
         let collectionView = tabBar.collectionViewForTesting
         var reorderedOrders: [[TabID]] = []
-        tabBar.onReorderTabs = {
-            reorderedOrders.append($0)
+        var reorderedActiveTabIDs: [TabID] = []
+        tabBar.onReorderTabs = { orderedTabIDs, activeTabID in
+            reorderedOrders.append(orderedTabIDs)
+            reorderedActiveTabIDs.append(activeTabID)
             return true
         }
         let expectedOrder = [tabs[2].id, tabs[0].id, tabs[1].id]
+        var activatedTabIDs: [TabID] = []
+        tabBar.onActivateTab = { activatedTabIDs.append($0) }
 
         #expect(
             tabBar.collectionView(
@@ -669,10 +720,24 @@ struct WorkspacePresentationTests {
                 dropOperation: .before
             )
         )
-        #expect(tabBar.displayedTabsForTesting.map(\.id) == expectedOrder)
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == tabs.map(\.id))
         #expect(reorderedOrders == [expectedOrder])
+        #expect(reorderedActiveTabIDs == [tabs[2].id])
+
+        tabBar.collectionView(
+            collectionView,
+            draggingSession: NSDraggingSession(),
+            endedAt: .zero,
+            dragOperation: .move
+        )
+
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == expectedOrder)
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[2].id])
         #expect(tabBar.activeTabIDForTesting == tabs[2].id)
+
+        tabBar.finishSelectionForTesting()
+
+        #expect(activatedTabIDs.isEmpty)
     }
 
     @Test
@@ -686,10 +751,13 @@ struct WorkspacePresentationTests {
             payload: tabs[1].id.rawValue.uuidString
         )
         var reorderedOrders: [[TabID]] = []
-        tabBar.onReorderTabs = {
-            reorderedOrders.append($0)
+        var completionCount = 0
+        tabBar.onReorderTabs = { orderedTabIDs, _ in
+            reorderedOrders.append(orderedTabIDs)
             return true
         }
+        tabBar.onFinishReorderTabs = { completionCount += 1 }
+        let reloadGeneration = tabBar.dataReloadGenerationForTesting
 
         for (indexPath, dropOperation) in [
             (IndexPath(item: 0, section: 1), NSCollectionView.DropOperation.before),
@@ -729,6 +797,16 @@ struct WorkspacePresentationTests {
         )
         #expect(tabBar.displayedTabsForTesting.map(\.id) == tabs.map(\.id))
         #expect(reorderedOrders.isEmpty)
+
+        tabBar.collectionView(
+            collectionView,
+            draggingSession: NSDraggingSession(),
+            endedAt: .zero,
+            dragOperation: []
+        )
+
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
+        #expect(completionCount == 0)
     }
 
     private static func makeMountedTabBar(
@@ -806,10 +884,12 @@ struct WorkspacePresentationTests {
 @MainActor
 private final class MouseDownForwardingResponder: NSResponder {
     private(set) var mouseDownCount = 0
+    private(set) var lastMouseDownEvent: NSEvent?
     var onMouseDown: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         mouseDownCount += 1
+        lastMouseDownEvent = event
         onMouseDown?()
     }
 }

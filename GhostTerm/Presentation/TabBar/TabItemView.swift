@@ -287,7 +287,7 @@ final class TabItemBackgroundView: NSView {
         }
         guard gesture == .click, isPartOfMultiSelection else {
             beginSelectionHandler?(gesture)
-            super.mouseDown(with: event)
+            super.mouseDown(with: nativeSelectionMouseDownEvent(from: event, gesture: gesture))
             finishSelectionHandler?()
             return
         }
@@ -298,6 +298,24 @@ final class TabItemBackgroundView: NSView {
             beginSelectionHandler?(.click)
         }
         finishSelectionHandler?()
+    }
+
+    private func nativeSelectionMouseDownEvent(
+        from event: NSEvent,
+        gesture: TabSelectionModel.Gesture
+    ) -> NSEvent {
+        guard gesture != .click else { return event }
+        return NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags.subtracting([.command, .shift]),
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            eventNumber: event.eventNumber,
+            clickCount: event.clickCount,
+            pressure: event.pressure
+        ) ?? event
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

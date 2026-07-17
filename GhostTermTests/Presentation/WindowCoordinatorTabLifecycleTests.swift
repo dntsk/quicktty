@@ -133,8 +133,10 @@ struct WindowCoordinatorTabLifecycleTests {
 
         persistence.reset()
         #expect(
-            coordinator.workspaceViewControllerForTesting.onReorderTabs?([secondTabID, firstTabID])
-                == true
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(
+                [secondTabID, firstTabID],
+                secondTabID
+            ) == true
         )
         persistence.expectSingleFinalSnapshot(from: coordinator)
 
@@ -164,11 +166,14 @@ struct WindowCoordinatorTabLifecycleTests {
             )
         )
         let expectedOrder = workspace.tabs.map(\.id).reversed()
+        let activeTabID = try #require(workspace.activeTabID)
 
         persistence.reset()
         #expect(
-            coordinator.workspaceViewControllerForTesting.onReorderTabs?(Array(expectedOrder))
-                == true
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(
+                Array(expectedOrder),
+                activeTabID
+            ) == true
         )
 
         #expect(
@@ -179,6 +184,53 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
         #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
         #expect(bridge.activeSurfaceIDs == coordinator.surfaceIDsForTesting)
+    }
+
+    @Test
+    func tabReorderCommitsOrderAndActivationOnceThenFinishesPresentation() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.createNewTab()
+
+        let workspace = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )
+        )
+        let firstTabID = workspace.tabs[0].id
+        let secondTabID = workspace.tabs[1].id
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        persistence.reset()
+        #expect(
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(
+                [secondTabID, firstTabID],
+                firstTabID
+            ) == true
+        )
+
+        let snapshot = try #require(persistence.snapshots.first)
+        #expect(persistence.snapshots.count == 1)
+        #expect(
+            snapshot.workspace(id: workspace.id)?.tabs.map(\.id) == [secondTabID, firstTabID]
+        )
+        #expect(snapshot.workspace(id: workspace.id)?.activeTabID == firstTabID)
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == workspace.tabs.map(\.id))
+        #expect(tabBar.activeTabIDForTesting == secondTabID)
+
+        coordinator.workspaceViewControllerForTesting.onFinishReorderTabs?()
+
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == [secondTabID, firstTabID])
+        #expect(tabBar.activeTabIDForTesting == firstTabID)
+        #expect(persistence.snapshots == [snapshot])
     }
 
     @Test
@@ -342,10 +394,14 @@ struct WindowCoordinatorTabLifecycleTests {
         )
         coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(WorkspaceID())
         #expect(
-            coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs) == false
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(
+                orderedTabIDs,
+                activeTabID
+            ) == false
         )
         #expect(
-            coordinator.workspaceViewControllerForTesting.onReorderTabs?([activeTabID]) == false
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?([activeTabID], activeTabID)
+                == false
         )
 
         #expect(persistence.snapshots.isEmpty)
