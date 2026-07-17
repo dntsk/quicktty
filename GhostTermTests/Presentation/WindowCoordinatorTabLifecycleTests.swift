@@ -1694,6 +1694,86 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func cancellingNonemptyWorkspaceDeletionLeavesRuntimeStateUntouchedAndCanPresentAgain() throws {
+        let backgroundPaneID = PaneID()
+        let deletedPaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp/background")
+        )
+        let deletedTab = TerminalTab(
+            title: "Deleted",
+            pane: TerminalPaneDescriptor(id: deletedPaneID, cwd: "/tmp/deleted")
+        )
+        let background = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let deleted = Workspace(name: "Deleted", tabs: [deletedTab], activeTabID: deletedTab.id)
+        let store = try WorkspaceStore(
+            workspaces: [background, deleted],
+            activeWorkspaceID: deleted.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var deletionConfirmations: [WorkspaceDeletionConfirmation] = []
+        var deletionResponses: [(@MainActor (Bool) -> Void)] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            workspaceDeletionConfirmationPresenter: { confirmation, completion in
+                deletionConfirmations.append(confirmation)
+                deletionResponses.append(completion)
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let backgroundSurface = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
+        let deletedSurface = try #require(coordinator.surfaceForTesting(id: deletedPaneID))
+        let activeWindow = try #require(coordinator.activeWindowForTesting)
+        let storeBeforeCancellation = coordinator.workspaceStoreForTesting
+        let surfaceIDsBeforeCancellation = coordinator.surfaceIDsForTesting
+        let bridgeSurfaceIDsBeforeCancellation = bridge.activeSurfaceIDs
+        let closeObservationsBeforeCancellation = bridge
+            .successfulSurfaceCloseObservationsForTesting
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        let firstResponse = try #require(deletionResponses.first)
+        #expect(
+            deletionConfirmations == [
+                WorkspaceDeletionConfirmation(
+                    workspaceID: deleted.id,
+                    workspaceName: "Deleted",
+                    tabCount: 1,
+                    paneCount: 1
+                )
+            ])
+
+        firstResponse(false)
+
+        #expect(coordinator.workspaceStoreForTesting == storeBeforeCancellation)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDsBeforeCancellation)
+        #expect(bridge.activeSurfaceIDs == bridgeSurfaceIDsBeforeCancellation)
+        #expect(coordinator.surfaceForTesting(id: backgroundPaneID) === backgroundSurface)
+        #expect(coordinator.surfaceForTesting(id: deletedPaneID) === deletedSurface)
+        #expect(coordinator.activeSurfaceForTesting === deletedSurface)
+        #expect(activeWindow.firstResponder === deletedSurface)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(
+            bridge.successfulSurfaceCloseObservationsForTesting
+                == closeObservationsBeforeCancellation)
+
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        #expect(deletionConfirmations.count == 2)
+        let secondResponse = try #require(deletionResponses.last)
+        secondResponse(false)
+    }
+
+    @Test
     func deletingTheOnlyWorkspaceIsDisabledAndDoesNotPersist() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
