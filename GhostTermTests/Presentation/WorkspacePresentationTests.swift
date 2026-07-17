@@ -115,6 +115,40 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func workspaceSelectorIsLaidOutAndHitTestableInsideWindow() throws {
+        let controller = WorkspaceViewController()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        let contentView = try #require(window.contentView)
+        let controllerView = controller.view
+        controllerView.frame = contentView.bounds
+        controllerView.autoresizingMask = [.width, .height]
+        contentView.addSubview(controllerView)
+        controller.apply(WorkspaceStore())
+        contentView.layoutSubtreeIfNeeded()
+        controllerView.layoutSubtreeIfNeeded()
+
+        let selector = controller.workspaceSelector
+        let button = selector.buttonForTesting
+        let hitPoint = button.convert(
+            NSPoint(x: button.bounds.midX, y: button.bounds.midY),
+            to: selector
+        )
+        let hitView = selector.hitTest(hitPoint)
+
+        #expect(selector.frame.height > 0)
+        #expect(selector.bounds.height > 0)
+        #expect(button.frame.height > 0)
+        #expect(selector.bounds.contains(button.frame))
+        #expect(hitView === button || hitView?.isDescendant(of: button) == true)
+    }
+
+    @Test
     func workspaceSelectorButtonActionUsesItsOwnedMenuThroughTestPresenter() {
         let selector = WorkspaceSelector()
         var presentedMenu: NSMenu?

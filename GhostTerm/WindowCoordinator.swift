@@ -37,7 +37,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var createWorkspaceController: CreateWorkspaceController?
     private var pendingWorkspaceDeletionID: WorkspaceID?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
-    private var isCreatingReplacementShell = false
+    private var closingTabIDs: Set<TabID> = []
+    private var closingPaneIDs: Set<PaneID> = []
     private var activeHotKey = HotKeyDescriptor(key: .f12)
     private var configEditor = "nano"
 
@@ -74,6 +75,26 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var canToggleBroadcast: Bool {
         activeTab != nil
+    }
+
+    var hasActiveWorkspace: Bool {
+        workspaceStore.workspace(id: workspaceStore.activeWorkspaceID) != nil
+    }
+
+    var canDeleteActiveWorkspace: Bool {
+        hasActiveWorkspace && workspaceStore.workspaces.count > 1
+    }
+
+    func createWorkspace() {
+        presentCreateWorkspace()
+    }
+
+    func renameActiveWorkspace() {
+        presentRenameWorkspace()
+    }
+
+    func deleteActiveWorkspace() {
+        requestDeleteActiveWorkspace()
     }
 
     init(
@@ -1156,11 +1177,74 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func closeTab(_ tabID: TabID, paneIDs: [PaneID]) {
-        for paneID in paneIDs {
-            _ = removeSurface(id: paneID, closeBridgeSurface: true)
+        guard closingTabIDs.insert(tabID).inserted else { return }
+        defer { closingTabIDs.remove(tabID) }
+        guard
+            let owner = workspaceStore.workspaces.first(where: {
+                $0.tabs.contains(where: { $0.id == tabID })
+            }),
+            paneIDs.allSatisfy({ surfaces[$0] != nil })
+        else {
+            return
         }
-        closeOwningTab(tabID)
-        refreshWorkspacePresentation(focusTerminal: true)
+        let newlyClosingPaneIDs = paneIDs.filter { closingPaneIDs.insert($0).inserted }
+        guard newlyClosingPaneIDs.count == paneIDs.count else {
+            for paneID in newlyClosingPaneIDs {
+                closingPaneIDs.remove(paneID)
+            }
+            return
+        }
+        defer {
+            for paneID in newlyClosingPaneIDs {
+                closingPaneIDs.remove(paneID)
+            }
+        }
+
+        var candidate = workspaceStore
+        do {
+            try candidate.closeTab(tabID, in: owner.id)
+        } catch {
+            return
+        }
+
+        let requiresReplacement = candidate.workspace(id: owner.id)?.tabs.isEmpty == true
+        let replacement: (paneID: PaneID, surface: GhosttySurfaceView)?
+        if requiresReplacement {
+            do {
+                replacement = try prepareShellTab(
+                    in: owner.id,
+                    candidate: &candidate,
+                    surfaceContext: .newTab
+                )
+            } catch {
+                for paneID in paneIDs {
+                    _ = removeSurface(id: paneID, closeBridgeSurface: true)
+                }
+                _ = commitWorkspaceStore(candidate)
+                refreshWorkspacePresentation(focusTerminal: owner.id == candidate.activeWorkspaceID)
+                if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
+                    normalWindowController.close()
+                }
+                onError(error)
+                return
+            }
+        } else {
+            replacement = nil
+        }
+
+        for paneID in paneIDs {
+            guard removeSurface(id: paneID, closeBridgeSurface: true) else {
+                if let replacement {
+                    ghosttyBridge.closeSurface(id: replacement.paneID)
+                }
+                return
+            }
+        }
+        if let replacement {
+            surfaces[replacement.paneID] = replacement.surface
+        }
+        _ = commitWorkspaceStore(candidate)
+        refreshWorkspacePresentation(focusTerminal: owner.id == candidate.activeWorkspaceID)
         if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
             normalWindowController.close()
         }
@@ -1174,32 +1258,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             ghosttyBridge.closeSurface(id: id)
         }
         return true
-    }
-
-    @discardableResult
-    private func closeOwningTab(_ tabID: TabID) -> Bool {
-        guard
-            let owner = workspaceStore.workspaces.first(where: {
-                $0.tabs.contains(where: { $0.id == tabID })
-            })
-        else { return false }
-        var candidate = workspaceStore
-        do {
-            try candidate.closeTab(tabID, in: owner.id)
-        } catch {
-            return false
-        }
-        return commitWorkspaceStore(candidate)
-    }
-
-    @discardableResult
-    private func closeOwningTab(containing paneID: PaneID) -> Bool {
-        guard
-            let tabID = workspaceStore.workspaces.lazy
-                .flatMap(\.tabs)
-                .first(where: { $0.root.contains(paneID) })?.id
-        else { return false }
-        return closeOwningTab(tabID)
     }
 
     func prepareForApplicationTermination() {
@@ -1380,20 +1438,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             guard surfaces[id] != nil else { return }
             confirmationQueue.enqueueClose(paneID: id) { [weak self] response in
                 guard response == .allow, let self else { return }
-                finishSurfaceClosure(
-                    id: id,
-                    closeBridgeSurface: true,
-                    createsReplacement: false
-                )
+                finishSurfaceClosure(id: id, closeBridgeSurface: true)
             }
             return
         }
 
-        finishSurfaceClosure(
-            id: id,
-            closeBridgeSurface: true,
-            createsReplacement: true
-        )
+        finishSurfaceClosure(id: id, closeBridgeSurface: true)
     }
 
     private func presentConfirmation(
@@ -1511,10 +1561,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func finishSurfaceClosure(
         id: PaneID,
-        closeBridgeSurface: Bool,
-        createsReplacement: Bool
+        closeBridgeSurface: Bool
     ) {
-        guard surfaces[id] != nil else { return }
+        guard surfaces[id] != nil, closingPaneIDs.insert(id).inserted else { return }
+        defer { closingPaneIDs.remove(id) }
         let location = workspaceStore.workspaces.lazy
             .flatMap(\.tabs)
             .first { $0.root.contains(id) }
@@ -1535,29 +1585,28 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             try? candidate.setBroadcasting(false, for: tab.id, in: workspace.id)
         }
         guard
-            (try? splitCoordinator.apply(
+            let delta = try? splitCoordinator.apply(
                 .closePane(
                     workspaceID: workspace.id,
                     tabID: tab.id,
                     paneID: id
                 ),
                 to: &candidate
-            )) != nil
+            )
         else {
             return
         }
 
-        let shouldCreateReplacement =
-            createsReplacement
-            && surfaces.count == 1
-            && candidate.workspaces.allSatisfy({ $0.tabs.isEmpty })
-            && !isCreatingReplacementShell
-        if shouldCreateReplacement {
-            isCreatingReplacementShell = true
-            defer { isCreatingReplacementShell = false }
+        let requiresReplacement: Bool
+        if case .tabClosed = delta {
+            requiresReplacement = candidate.workspace(id: workspace.id)?.tabs.isEmpty == true
+        } else {
+            requiresReplacement = false
+        }
+        if requiresReplacement {
             do {
                 let replacement = try prepareShellTab(
-                    in: candidate.activeWorkspaceID,
+                    in: workspace.id,
                     candidate: &candidate,
                     surfaceContext: .newTab
                 )
@@ -1567,13 +1616,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 }
                 surfaces[replacement.paneID] = replacement.surface
                 _ = commitWorkspaceStore(candidate)
-                refreshWorkspacePresentation(focusTerminal: true)
+                refreshWorkspacePresentation(
+                    focusTerminal: workspace.id == candidate.activeWorkspaceID)
             } catch {
                 guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else {
                     return
                 }
                 _ = commitWorkspaceStore(candidate)
-                refreshWorkspacePresentation(focusTerminal: true)
+                refreshWorkspacePresentation(
+                    focusTerminal: workspace.id == candidate.activeWorkspaceID)
                 onError(error)
             }
             return
@@ -1581,7 +1632,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else { return }
         guard commitWorkspaceStore(candidate) else { return }
-        refreshWorkspacePresentation(focusTerminal: true)
+        refreshWorkspacePresentation(focusTerminal: workspace.id == candidate.activeWorkspaceID)
     }
 }
 

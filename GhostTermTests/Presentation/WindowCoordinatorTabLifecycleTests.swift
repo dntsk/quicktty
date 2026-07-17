@@ -815,7 +815,7 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
-    func explicitConfirmedFinalTabCloseIsIdempotentAndDoesNotCreateReplacement() throws {
+    func explicitConfirmedFinalTabCloseIsIdempotentAndCreatesOneReplacement() throws {
         let config = try WindowCloseConfig(confirmCloseSurface: "always")
         defer { config.remove() }
         let bridge = try GhosttyBridge(configURL: config.url)
@@ -844,14 +844,91 @@ struct WindowCoordinatorTabLifecycleTests {
         coordinator.requestCloseTabForTesting(tabID)
         coordinator.surfaceDidRequestCloseForTesting(id: surface.paneID, processAlive: true)
 
+        let replacement = try #require(coordinator.activeSurfaceForTesting)
+        let activeWorkspace = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )
+        )
+
         #expect(confirmationCount == 1)
-        #expect(bridge.activeSurfaceIDs.isEmpty)
-        #expect(coordinator.surfaceIDsForTesting.isEmpty)
-        #expect(coordinator.workspaceStoreForTesting.workspaces.allSatisfy { $0.tabs.isEmpty })
-        #expect(coordinator.activeSurfaceForTesting == nil)
-        #expect(!window.isVisible)
+        #expect(bridge.activeSurfaceIDs == [replacement.paneID])
+        #expect(coordinator.surfaceIDsForTesting == [replacement.paneID])
+        #expect(activeWorkspace.tabs.count == 1)
+        #expect(activeWorkspace.tabs[0].activePaneID == replacement.paneID)
+        #expect(replacement.paneID != surface.paneID)
+        #expect(window.firstResponder === replacement)
+        #expect(window.isVisible)
         #expect(coordinator.windowForTesting === window)
         #expect(window.delegate === coordinator)
+    }
+
+    @Test
+    func closingLastTabCreatesReplacementInItsOwnerWorkspaceWithoutChangingOtherSurfaces() throws {
+        let backgroundPaneID = PaneID()
+        let ownerPaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp/background")
+        )
+        let ownerTab = TerminalTab(
+            title: "Owner",
+            pane: TerminalPaneDescriptor(id: ownerPaneID, cwd: "/tmp/owner")
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let ownerWorkspace = Workspace(
+            name: "Owner",
+            tabs: [ownerTab],
+            activeTabID: ownerTab.id
+        )
+        let initialStore = try WorkspaceStore(
+            workspaces: [backgroundWorkspace, ownerWorkspace],
+            activeWorkspaceID: ownerWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: initialStore,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let backgroundSurface = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
+        let closedSurface = try #require(coordinator.surfaceForTesting(id: ownerPaneID))
+        let window = try #require(coordinator.activeWindowForTesting)
+
+        persistence.reset()
+        coordinator.closeTabImmediatelyForTesting(ownerTab.id)
+
+        let store = coordinator.workspaceStoreForTesting
+        let owner = try #require(store.workspace(id: ownerWorkspace.id))
+        let replacement = try #require(coordinator.activeSurfaceForTesting)
+        #expect(persistence.snapshots == [store])
+        #expect(owner.tabs.count == 1)
+        #expect(owner.activeTabID == owner.tabs[0].id)
+        #expect(owner.tabs[0].activePaneID == replacement.paneID)
+        #expect(replacement.paneID != closedSurface.paneID)
+        #expect(coordinator.surfaceForTesting(id: backgroundPaneID) === backgroundSurface)
+        #expect(bridge.activeSurfaceIDs.contains(backgroundPaneID))
+        #expect(window.firstResponder === replacement)
+
+        let restartBridge = try GhosttyBridge()
+        defer { restartBridge.shutdown() }
+        let restarted = WindowCoordinator(
+            ghosttyBridge: restartBridge,
+            initialWorkspaceStore: try #require(persistence.snapshots.first)
+        )
+        defer { restarted.prepareForBridgeShutdownForTesting() }
+        try restarted.start()
+        #expect(
+            restarted.workspaceStoreForTesting.workspace(id: ownerWorkspace.id)?.tabs.count == 1)
+        #expect(restartBridge.activeSurfaceIDs.contains(replacement.paneID))
     }
 
     @Test
@@ -1060,6 +1137,7 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.splitActivePaneForTesting(axis: .vertical)
         let thirdSurface = try #require(coordinator.activeSurfaceForTesting)
         let window = try #require(coordinator.activeWindowForTesting)
+        let storeBeforeTermination = coordinator.workspaceStoreForTesting
         let surfaceIDs = Set([firstSurface.paneID, secondSurface.paneID, thirdSurface.paneID])
 
         #expect(window.firstResponder === thirdSurface)
@@ -1093,6 +1171,7 @@ struct WindowCoordinatorTabLifecycleTests {
                 .isEmpty
         )
         #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == storeBeforeTermination)
         #expect(bridge.activeSurfaceIDs.isEmpty)
         #expect(Set(closeObservations) == surfaceIDs)
         #expect(closeObservations.count == surfaceIDs.count)
@@ -1543,6 +1622,62 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.activeSurfaceForTesting === sibling)
         #expect(coordinator.surfaceIDsForTesting == [sibling.paneID])
         #expect(bridge.activeSurfaceIDs == [sibling.paneID])
+    }
+
+    @Test
+    func processExitReplacesLastPaneInOwnerWorkspaceWhenAnotherWorkspaceIsActive() async throws {
+        let activePaneID = PaneID()
+        let ownerPaneID = PaneID()
+        let activeTab = TerminalTab(
+            title: "Active",
+            pane: TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp/active")
+        )
+        let ownerTab = TerminalTab(
+            title: "Owner",
+            pane: TerminalPaneDescriptor(id: ownerPaneID, cwd: "/tmp/owner")
+        )
+        let activeWorkspace = Workspace(
+            name: "Active",
+            tabs: [activeTab],
+            activeTabID: activeTab.id
+        )
+        let ownerWorkspace = Workspace(
+            name: "Owner",
+            tabs: [ownerTab],
+            activeTabID: ownerTab.id
+        )
+        let initialStore = try WorkspaceStore(
+            workspaces: [activeWorkspace, ownerWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: initialStore,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let activeSurface = try #require(coordinator.activeSurfaceForTesting)
+        let ownerSurface = try #require(coordinator.surfaceForTesting(id: ownerPaneID))
+        let window = try #require(coordinator.activeWindowForTesting)
+
+        persistence.reset()
+        ownerSurface.scheduleRuntimeCloseForTesting(processAlive: false)
+        await Task.yield()
+
+        let store = coordinator.workspaceStoreForTesting
+        let owner = try #require(store.workspace(id: ownerWorkspace.id))
+        let replacementPaneID = try #require(owner.tabs.first?.activePaneID)
+        let replacement = try #require(coordinator.surfaceForTesting(id: replacementPaneID))
+        #expect(persistence.snapshots == [store])
+        #expect(owner.tabs.count == 1)
+        #expect(replacement.paneID != ownerSurface.paneID)
+        #expect(coordinator.surfaceForTesting(id: activePaneID) === activeSurface)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(window.firstResponder === activeSurface)
     }
 
     @Test

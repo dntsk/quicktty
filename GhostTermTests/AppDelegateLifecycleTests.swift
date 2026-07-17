@@ -40,6 +40,28 @@ private final class WorkspaceSelectionMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class WorkspaceMenuActionTarget: NSObject {
+    private(set) var invocations: [String] = []
+    private(set) var selectedIndices: [Int] = []
+
+    @objc func createWorkspace() {
+        invocations.append("new")
+    }
+
+    @objc func renameWorkspace() {
+        invocations.append("rename")
+    }
+
+    @objc func deleteWorkspace() {
+        invocations.append("delete")
+    }
+
+    @objc func activateWorkspace(_ sender: NSMenuItem) {
+        selectedIndices.append((sender.representedObject as? NSNumber)?.intValue ?? -1)
+    }
+}
+
+@MainActor
 private final class SplitPaneMenuActionTarget: NSObject {
     private(set) var splitRightInvocationCount = 0
     private(set) var splitDownInvocationCount = 0
@@ -762,6 +784,168 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func workspaceMenuInstallerCreatesManagementAndSelectionItemsThatDispatchOnce() throws {
+        let target = WorkspaceMenuActionTarget()
+        let mainMenu = AppDelegate.installWorkspaceMenuItems(
+            in: nil,
+            target: target,
+            createAction: #selector(WorkspaceMenuActionTarget.createWorkspace),
+            renameAction: #selector(WorkspaceMenuActionTarget.renameWorkspace),
+            deleteAction: #selector(WorkspaceMenuActionTarget.deleteWorkspace),
+            selectionAction: #selector(WorkspaceMenuActionTarget.activateWorkspace(_:))
+        )
+        let workspaceMenu = try #require(mainMenu.item(withTitle: "Workspace")?.submenu)
+        let managementItems = workspaceMenu.items.filter { !$0.isSeparatorItem }.prefix(3)
+        let selectionItems = workspaceMenu.items.filter {
+            $0.title.hasPrefix("Select Workspace ")
+        }
+
+        #expect(mainMenu.items.filter { $0.title == "Workspace" }.count == 1)
+        #expect(
+            managementItems.map(\.title) == [
+                "New Workspace…", "Rename Workspace…", "Delete Workspace…",
+            ])
+        #expect(workspaceMenu.items[3].isSeparatorItem)
+        #expect(selectionItems.count == 9)
+        #expect(workspaceMenu.items.count == 13)
+        #expect(
+            NSApp.sendAction(
+                managementItems[0].action!, to: managementItems[0].target, from: managementItems[0])
+        )
+        #expect(
+            NSApp.sendAction(
+                managementItems[1].action!, to: managementItems[1].target, from: managementItems[1])
+        )
+        #expect(
+            NSApp.sendAction(
+                managementItems[2].action!, to: managementItems[2].target, from: managementItems[2])
+        )
+        #expect(
+            NSApp.sendAction(
+                selectionItems[1].action!, to: selectionItems[1].target, from: selectionItems[1]))
+        #expect(target.invocations == ["new", "rename", "delete"])
+        #expect(target.selectedIndices == [2])
+    }
+
+    @Test
+    func workspaceMenuInstallerIsIdempotentAndRemovesViewShortcutDuplicates() throws {
+        let target = WorkspaceMenuActionTarget()
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+        let legacySelection = NSMenuItem(
+            title: "Select Workspace 1",
+            action: #selector(WorkspaceMenuActionTarget.activateWorkspace(_:)),
+            keyEquivalent: "1"
+        )
+        legacySelection.keyEquivalentModifierMask = [.command, .option]
+        legacySelection.target = target
+        viewMenu.addItem(legacySelection)
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        workspaceItem.submenu = NSMenu(title: "Workspace")
+        let duplicateWorkspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        duplicateWorkspaceItem.submenu = NSMenu(title: "Workspace")
+        mainMenu.addItem(workspaceItem)
+        mainMenu.addItem(duplicateWorkspaceItem)
+
+        for _ in 0..<2 {
+            AppDelegate.installWorkspaceMenuItems(
+                in: mainMenu,
+                target: target,
+                createAction: #selector(WorkspaceMenuActionTarget.createWorkspace),
+                renameAction: #selector(WorkspaceMenuActionTarget.renameWorkspace),
+                deleteAction: #selector(WorkspaceMenuActionTarget.deleteWorkspace),
+                selectionAction: #selector(WorkspaceMenuActionTarget.activateWorkspace(_:))
+            )
+        }
+
+        let workspaceMenu = try #require(mainMenu.item(withTitle: "Workspace")?.submenu)
+        let selectionItems = workspaceMenu.items.filter {
+            $0.title.hasPrefix("Select Workspace ")
+        }
+        #expect(mainMenu.items.filter { $0.title == "Workspace" }.count == 1)
+        #expect(viewMenu.items.allSatisfy { !$0.title.hasPrefix("Select Workspace ") })
+        #expect(selectionItems.count == 9)
+        #expect(
+            selectionItems.allSatisfy {
+                $0.keyEquivalentModifierMask == [.command, .option]
+                    && $0.action == #selector(WorkspaceMenuActionTarget.activateWorkspace(_:))
+                    && $0.target === target
+            })
+    }
+
+    @Test
+    func workspaceMenuValidationRequiresCoordinatorAndEligibleActiveWorkspace() {
+        let newItem = NSMenuItem(
+            title: "New Workspace…",
+            action: AppDelegate.newWorkspaceMenuItemAction,
+            keyEquivalent: ""
+        )
+        let renameItem = NSMenuItem(
+            title: "Rename Workspace…",
+            action: AppDelegate.renameWorkspaceMenuItemAction,
+            keyEquivalent: ""
+        )
+        let deleteItem = NSMenuItem(
+            title: "Delete Workspace…",
+            action: AppDelegate.deleteWorkspaceMenuItemAction,
+            keyEquivalent: ""
+        )
+
+        #expect(
+            !AppDelegate.validateWorkspaceMenuItem(
+                newItem,
+                coordinatorAvailable: false,
+                hasActiveWorkspace: false,
+                canDeleteActiveWorkspace: false
+            ))
+        #expect(
+            AppDelegate.validateWorkspaceMenuItem(
+                newItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: false,
+                canDeleteActiveWorkspace: false
+            ))
+        #expect(
+            !AppDelegate.validateWorkspaceMenuItem(
+                renameItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: false,
+                canDeleteActiveWorkspace: true
+            ))
+        #expect(
+            AppDelegate.validateWorkspaceMenuItem(
+                renameItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: true,
+                canDeleteActiveWorkspace: false
+            ))
+        #expect(
+            !AppDelegate.validateWorkspaceMenuItem(
+                deleteItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: false,
+                canDeleteActiveWorkspace: true
+            ))
+        #expect(
+            !AppDelegate.validateWorkspaceMenuItem(
+                deleteItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: true,
+                canDeleteActiveWorkspace: false
+            ))
+        #expect(
+            AppDelegate.validateWorkspaceMenuItem(
+                deleteItem,
+                coordinatorAvailable: true,
+                hasActiveWorkspace: true,
+                canDeleteActiveWorkspace: true
+            ))
+    }
+
+    @Test
     func workspaceSelectionMenuItemsUseExactCommandOptionDigitsWithoutCollidingWithTabs()
         throws
     {
@@ -774,7 +958,10 @@ struct AppDelegateLifecycleTests {
         mainMenu.addItem(viewItem)
         let foreignModifiedDigit = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: "1")
         foreignModifiedDigit.keyEquivalentModifierMask = [.command, .option, .shift]
+        let foreignShortcut = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: "p")
+        foreignShortcut.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(foreignModifiedDigit)
+        viewMenu.addItem(foreignShortcut)
 
         AppDelegate.installTabSelectionMenuItems(
             in: mainMenu,
@@ -789,7 +976,8 @@ struct AppDelegateLifecycleTests {
             )
         }
 
-        let workspaceItems = viewMenu.items.filter { $0.title.hasPrefix("Select Workspace ") }
+        let workspaceMenu = try #require(mainMenu.item(withTitle: "Workspace")?.submenu)
+        let workspaceItems = workspaceMenu.items.filter { $0.title.hasPrefix("Select Workspace ") }
         let tabItems = viewMenu.items.filter { $0.title.hasPrefix("Select Tab ") }
         #expect(workspaceItems.count == 9)
         #expect(tabItems.count == 9)
@@ -805,6 +993,8 @@ struct AppDelegateLifecycleTests {
         }
         #expect(foreignModifiedDigit.keyEquivalentModifierMask == [.command, .option, .shift])
         #expect(viewMenu.items.contains { $0 === foreignModifiedDigit })
+        #expect(viewMenu.items.contains { $0 === foreignShortcut })
+        #expect(viewMenu.items.allSatisfy { !$0.title.hasPrefix("Select Workspace ") })
 
         let secondWorkspace = try #require(workspaceItems.dropFirst().first)
         let ninthTab = try #require(tabItems.last)

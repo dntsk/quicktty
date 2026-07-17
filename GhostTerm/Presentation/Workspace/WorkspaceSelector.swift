@@ -18,11 +18,24 @@ final class WorkspaceSelector: NSView {
     var onRenameWorkspace: (() -> Void)?
     var onDeleteWorkspace: (() -> Void)?
 
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 22)
+    }
+
     private let button = NSButton(frame: .zero)
     private let workspaceMenu = NSMenu()
     private var menuPresenter: ((NSMenu, NSButton) -> Void)?
     private var workspaceNames: [String] = []
     private var activeWorkspaceID: WorkspaceID?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else { return nil }
+        let buttonPoint = convert(point, to: button)
+        guard button.bounds.contains(buttonPoint) else {
+            return super.hitTest(point)
+        }
+        return button.hitTest(buttonPoint) ?? button
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -43,7 +56,9 @@ final class WorkspaceSelector: NSView {
         NSLayoutConstraint.activate([
             button.leadingAnchor.constraint(equalTo: leadingAnchor),
             button.trailingAnchor.constraint(equalTo: trailingAnchor),
-            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.topAnchor.constraint(equalTo: topAnchor),
+            button.bottomAnchor.constraint(equalTo: bottomAnchor),
+            button.heightAnchor.constraint(equalToConstant: 22),
         ])
 
         workspaceMenu.autoenablesItems = false

@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installSplitPaneMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
-            installWorkspaceSelectionMenuItems()
+            installWorkspaceMenuItems()
             installPaneNavigationMenuItems()
             installToggleBroadcastMenuItem()
 
@@ -214,6 +214,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
     static let workspaceSelectionMenuItemAction = #selector(AppDelegate.activateWorkspace(_:))
+    static let newWorkspaceMenuItemAction = #selector(AppDelegate.createWorkspace)
+    static let renameWorkspaceMenuItemAction = #selector(AppDelegate.renameWorkspace)
+    static let deleteWorkspaceMenuItemAction = #selector(AppDelegate.deleteWorkspace)
     static let previousPaneMenuItemAction = #selector(AppDelegate.focusPreviousPane)
     static let nextPaneMenuItemAction = #selector(AppDelegate.focusNextPane)
     static let focusLeftPaneMenuItemAction = #selector(AppDelegate.focusLeftPane)
@@ -606,6 +609,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .subtracting(.capsLock)
     }
 
+    private static func workspaceMenu(in mainMenu: NSMenu) -> NSMenu {
+        let workspaceItems = mainMenu.items.filter { $0.title == "Workspace" }
+        if let workspaceItem = workspaceItems.first {
+            let menu = workspaceItem.submenu ?? NSMenu(title: "Workspace")
+            workspaceItem.submenu = menu
+            for duplicate in workspaceItems.dropFirst() {
+                mainMenu.removeItem(duplicate)
+            }
+            return menu
+        }
+
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "Workspace")
+        workspaceItem.submenu = menu
+        mainMenu.addItem(workspaceItem)
+        return menu
+    }
+
+    private static func canonicalWorkspaceManagementMenuItem(
+        in menu: NSMenu,
+        title: String,
+        target: AnyObject,
+        action: Selector
+    ) -> NSMenuItem {
+        let canonicalItems = menu.items.filter { $0.title == title }
+        let item =
+            canonicalItems.first ?? NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.title = title
+        item.action = action
+        item.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            menu.removeItem(duplicate)
+        }
+        return item
+    }
+
+    private static func canonicalWorkspaceSelectionSeparator(in menu: NSMenu) -> NSMenuItem {
+        let tag = -1_001
+        let canonicalItems = menu.items.filter { $0.tag == tag }
+        let item = canonicalItems.first ?? NSMenuItem.separator()
+        item.tag = tag
+        for duplicate in canonicalItems.dropFirst() {
+            menu.removeItem(duplicate)
+        }
+        return item
+    }
+
+    private static func removeLegacyWorkspaceSelectionItems(
+        from mainMenu: NSMenu,
+        excluding workspaceMenu: NSMenu
+    ) {
+        for menuItem in mainMenu.items {
+            guard let submenu = menuItem.submenu, submenu !== workspaceMenu else { continue }
+            for item in submenu.items
+            where item.title.hasPrefix("Select Workspace ")
+                || ((1...9).contains(Int(item.keyEquivalent) ?? 0)
+                    && normalizedShortcutModifiers(for: item) == [.command, .option])
+            {
+                submenu.removeItem(item)
+            }
+        }
+    }
+
     private static func viewMenu(in mainMenu: NSMenu) -> NSMenu {
         if let viewItem = mainMenu.item(withTitle: "View") {
             if let existingViewMenu = viewItem.submenu {
@@ -691,22 +757,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @discardableResult
+    static func installWorkspaceMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        createAction: Selector = newWorkspaceMenuItemAction,
+        renameAction: Selector = renameWorkspaceMenuItemAction,
+        deleteAction: Selector = deleteWorkspaceMenuItemAction,
+        selectionAction: Selector = workspaceSelectionMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = workspaceMenu(in: mainMenu)
+        let managementItems = [
+            canonicalWorkspaceManagementMenuItem(
+                in: menu,
+                title: "New Workspace…",
+                target: target,
+                action: createAction
+            ),
+            canonicalWorkspaceManagementMenuItem(
+                in: menu,
+                title: "Rename Workspace…",
+                target: target,
+                action: renameAction
+            ),
+            canonicalWorkspaceManagementMenuItem(
+                in: menu,
+                title: "Delete Workspace…",
+                target: target,
+                action: deleteAction
+            ),
+        ]
+        _ = installWorkspaceSelectionMenuItems(
+            in: mainMenu,
+            target: target,
+            action: selectionAction
+        )
+        let selectionItems = (1...9).compactMap { index in
+            menu.item(withTitle: "Select Workspace \(index)")
+        }
+        let separator = canonicalWorkspaceSelectionSeparator(in: menu)
+        let orderedItems = managementItems + [separator] + selectionItems
+        for item in orderedItems where menu.items.contains(where: { $0 === item }) {
+            menu.removeItem(item)
+        }
+        for item in orderedItems {
+            menu.addItem(item)
+        }
+        return mainMenu
+    }
+
+    @discardableResult
     static func installWorkspaceSelectionMenuItems(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
         action: Selector = workspaceSelectionMenuItemAction
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
-        let viewMenu = viewMenu(in: mainMenu)
+        let menu = workspaceMenu(in: mainMenu)
+        removeLegacyWorkspaceSelectionItems(from: mainMenu, excluding: menu)
 
         for index in 1...9 {
-            let canonicalItems = viewMenu.items.filter {
+            let canonicalItems = menu.items.filter {
                 $0.title == "Select Workspace \(index)"
                     || ($0.keyEquivalent == "\(index)"
                         && normalizedShortcutModifiers(for: $0) == [.command, .option])
             }
             guard let canonicalItem = canonicalItems.first else {
-                viewMenu.addItem(
+                menu.addItem(
                     makeWorkspaceSelectionMenuItem(index: index, target: target, action: action))
                 continue
             }
@@ -718,23 +835,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             canonicalItem.representedObject = NSNumber(value: index)
             canonicalItem.target = target
             for duplicate in canonicalItems.dropFirst() {
-                viewMenu.removeItem(duplicate)
+                menu.removeItem(duplicate)
             }
         }
         return mainMenu
     }
 
+    static func validateWorkspaceMenuItem(
+        _ menuItem: NSMenuItem,
+        coordinatorAvailable: Bool,
+        hasActiveWorkspace: Bool,
+        canDeleteActiveWorkspace: Bool
+    ) -> Bool {
+        switch menuItem.action {
+        case newWorkspaceMenuItemAction:
+            return coordinatorAvailable
+        case renameWorkspaceMenuItemAction:
+            return coordinatorAvailable && hasActiveWorkspace
+        case deleteWorkspaceMenuItemAction:
+            return coordinatorAvailable && hasActiveWorkspace && canDeleteActiveWorkspace
+        default:
+            return true
+        }
+    }
+
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard menuItem.action == Self.toggleBroadcastMenuItemAction else { return true }
-        return Self.validateToggleBroadcastMenuItem(
+        if menuItem.action == Self.toggleBroadcastMenuItemAction {
+            return Self.validateToggleBroadcastMenuItem(
+                menuItem,
+                canToggleBroadcast: windowCoordinator?.canToggleBroadcast ?? false,
+                isBroadcastingActiveTab: windowCoordinator?.isBroadcastingActiveTab ?? false
+            )
+        }
+        return Self.validateWorkspaceMenuItem(
             menuItem,
-            canToggleBroadcast: windowCoordinator?.canToggleBroadcast ?? false,
-            isBroadcastingActiveTab: windowCoordinator?.isBroadcastingActiveTab ?? false
+            coordinatorAvailable: windowCoordinator != nil,
+            hasActiveWorkspace: windowCoordinator?.hasActiveWorkspace ?? false,
+            canDeleteActiveWorkspace: windowCoordinator?.canDeleteActiveWorkspace ?? false
         )
     }
 
     @objc private func createNewTab() {
         windowCoordinator?.createNewTab()
+    }
+
+    @objc private func createWorkspace() {
+        windowCoordinator?.createWorkspace()
+    }
+
+    @objc private func renameWorkspace() {
+        windowCoordinator?.renameActiveWorkspace()
+    }
+
+    @objc private func deleteWorkspace() {
+        windowCoordinator?.deleteActiveWorkspace()
     }
 
     @objc private func openConfiguration() {
@@ -925,8 +1079,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func installWorkspaceSelectionMenuItems() {
-        let mainMenu = Self.installWorkspaceSelectionMenuItems(in: NSApp.mainMenu, target: self)
+    private func installWorkspaceMenuItems() {
+        let mainMenu = Self.installWorkspaceMenuItems(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
