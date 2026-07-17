@@ -216,6 +216,15 @@ struct TerminalTab: Codable, Equatable, Sendable {
     }
 
     @discardableResult
+    mutating func updateWorkingDirectory(_ cwd: String, for paneID: PaneID) -> Bool {
+        guard let descriptorIndex = paneDescriptors.firstIndex(where: { $0.id == paneID }) else {
+            return false
+        }
+        paneDescriptors[descriptorIndex].cwd = cwd
+        return true
+    }
+
+    @discardableResult
     mutating func activatePane(_ paneID: PaneID) -> Bool {
         guard root.contains(paneID) else { return false }
         activePaneID = paneID

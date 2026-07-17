@@ -108,6 +108,58 @@ struct WorkspaceStore: Codable, Equatable, Sendable {
         workspaces[workspaceIndex].rename(to: trimmedName)
     }
 
+    @discardableResult
+    mutating func deleteWorkspace(_ workspaceID: WorkspaceID) throws -> Workspace {
+        guard let workspaceIndex = index(of: workspaceID) else {
+            throw WorkspaceError.workspaceNotFound(workspaceID)
+        }
+        guard workspaces.count > 1 else {
+            throw WorkspaceError.cannotDeleteLastWorkspace
+        }
+
+        if workspaceID == activeWorkspaceID {
+            resetVisibleBroadcasting()
+        }
+        let removedWorkspace = workspaces.remove(at: workspaceIndex)
+        if workspaceID == activeWorkspaceID {
+            activeWorkspaceID = workspaces[min(workspaceIndex, workspaces.count - 1)].id
+        }
+        return removedWorkspace
+    }
+
+    mutating func reorderTabs(_ orderedTabIDs: [TabID], in workspaceID: WorkspaceID) throws {
+        guard let workspaceIndex = index(of: workspaceID) else {
+            throw WorkspaceError.workspaceNotFound(workspaceID)
+        }
+
+        let currentTabs = workspaces[workspaceIndex].tabs
+        let currentTabIDs = currentTabs.map(\.id)
+        let orderedTabIDSet = Set(orderedTabIDs)
+        guard orderedTabIDs.count == currentTabIDs.count,
+            orderedTabIDSet.count == orderedTabIDs.count,
+            orderedTabIDSet == Set(currentTabIDs)
+        else {
+            throw WorkspaceError.invalidTabOrder(workspaceID: workspaceID)
+        }
+        guard orderedTabIDs != currentTabIDs else { return }
+
+        workspaces[workspaceIndex].tabs = orderedTabIDs.compactMap { orderedTabID in
+            currentTabs.first { $0.id == orderedTabID }
+        }
+    }
+
+    mutating func updateWorkingDirectory(_ cwd: String, for paneID: PaneID) throws {
+        guard let location = paneDescriptorLocation(for: paneID) else {
+            throw WorkspaceError.paneNotFound(paneID)
+        }
+        guard !cwd.isEmpty, (cwd as NSString).isAbsolutePath else {
+            throw WorkspaceError.invalidWorkingDirectory(cwd)
+        }
+
+        _ = workspaces[location.workspaceIndex].tabs[location.tabIndex]
+            .updateWorkingDirectory(cwd, for: paneID)
+    }
+
     mutating func addTab(_ tab: TerminalTab, to workspaceID: WorkspaceID) throws {
         guard let workspaceIndex = index(of: workspaceID) else {
             throw WorkspaceError.workspaceNotFound(workspaceID)
@@ -298,6 +350,19 @@ struct WorkspaceStore: Codable, Equatable, Sendable {
                 tab.root.contains(paneID)
             }
         }
+    }
+
+    private func paneDescriptorLocation(for paneID: PaneID) -> (
+        workspaceIndex: Int,
+        tabIndex: Int
+    )? {
+        for workspaceIndex in workspaces.indices {
+            for tabIndex in workspaces[workspaceIndex].tabs.indices
+            where workspaces[workspaceIndex].tabs[tabIndex].paneDescriptor(for: paneID) != nil {
+                return (workspaceIndex, tabIndex)
+            }
+        }
+        return nil
     }
 
     private var visibleTabID: TabID? {

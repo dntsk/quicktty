@@ -3,6 +3,10 @@ enum WorkspaceError: Error, Equatable, Sendable {
     case duplicateWorkspaceName
     case duplicateWorkspaceID(WorkspaceID)
     case workspaceNotFound(WorkspaceID)
+    case cannotDeleteLastWorkspace
+    case invalidTabOrder(workspaceID: WorkspaceID)
+    case paneNotFound(PaneID)
+    case invalidWorkingDirectory(String)
     case tabNotFound(TabID)
     case tabAlreadyOwned(TabID)
     case paneAlreadyOwned(PaneID)

@@ -770,6 +770,304 @@ struct WorkspaceStoreTests {
         #expect(decoded == command)
     }
 
+    @Test
+    func deletingEmptyWorkspaceReturnsItsSnapshot() throws {
+        let firstID = workspaceID(1)
+        let emptyID = workspaceID(2)
+        let firstTab = makeTab(1)
+        let emptyWorkspace = Workspace(id: emptyID, name: "Empty")
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstID, name: "First", tabs: [firstTab]),
+                emptyWorkspace,
+            ],
+            activeWorkspaceID: firstID
+        )
+
+        let removed = try store.deleteWorkspace(emptyID)
+
+        #expect(removed == emptyWorkspace)
+        #expect(store.workspaces.map(\.id) == [firstID])
+        #expect(store.activeWorkspaceID == firstID)
+    }
+
+    @Test
+    func deletingPopulatedWorkspaceReturnsAllPersistentTabState() throws {
+        let firstID = workspaceID(1)
+        let removedID = workspaceID(2)
+        let nestedTab = try makeNestedTab(2)
+        let removedWorkspace = Workspace(
+            id: removedID,
+            name: "Removed",
+            tabs: [nestedTab],
+            activeTabID: nestedTab.id
+        )
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstID, name: "First"),
+                removedWorkspace,
+            ],
+            activeWorkspaceID: firstID
+        )
+
+        let removed = try store.deleteWorkspace(removedID)
+
+        #expect(removed == removedWorkspace)
+        #expect(removed.tabs.first?.root == nestedTab.root)
+        #expect(removed.tabs.first?.paneDescriptors == nestedTab.paneDescriptors)
+    }
+
+    @Test
+    func deletingActiveFirstWorkspaceSelectsTheNextWorkspace() throws {
+        let firstID = workspaceID(1)
+        let secondID = workspaceID(2)
+        let thirdID = workspaceID(3)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstID, name: "First"),
+                Workspace(id: secondID, name: "Second"),
+                Workspace(id: thirdID, name: "Third"),
+            ],
+            activeWorkspaceID: firstID
+        )
+
+        _ = try store.deleteWorkspace(firstID)
+
+        #expect(store.workspaces.map(\.id) == [secondID, thirdID])
+        #expect(store.activeWorkspaceID == secondID)
+    }
+
+    @Test
+    func deletingActiveMiddleWorkspaceSelectsTheNextWorkspace() throws {
+        let firstID = workspaceID(1)
+        let middleID = workspaceID(2)
+        let thirdID = workspaceID(3)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstID, name: "First"),
+                Workspace(id: middleID, name: "Middle"),
+                Workspace(id: thirdID, name: "Third"),
+            ],
+            activeWorkspaceID: middleID
+        )
+
+        _ = try store.deleteWorkspace(middleID)
+
+        #expect(store.workspaces.map(\.id) == [firstID, thirdID])
+        #expect(store.activeWorkspaceID == thirdID)
+    }
+
+    @Test
+    func deletingActiveLastWorkspaceSelectsThePreviousWorkspace() throws {
+        let firstID = workspaceID(1)
+        let secondID = workspaceID(2)
+        let lastID = workspaceID(3)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstID, name: "First"),
+                Workspace(id: secondID, name: "Second"),
+                Workspace(id: lastID, name: "Last"),
+            ],
+            activeWorkspaceID: lastID
+        )
+
+        _ = try store.deleteWorkspace(lastID)
+
+        #expect(store.workspaces.map(\.id) == [firstID, secondID])
+        #expect(store.activeWorkspaceID == secondID)
+    }
+
+    @Test
+    func deletingBackgroundWorkspacePreservesActiveWorkspaceAndBroadcast() throws {
+        let activeID = workspaceID(1)
+        let backgroundID = workspaceID(2)
+        let activeTab = makeTab(1)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: activeID, name: "Active", tabs: [activeTab]),
+                Workspace(id: backgroundID, name: "Background"),
+            ],
+            activeWorkspaceID: activeID
+        )
+        try store.setBroadcasting(true, for: activeTab.id, in: activeID)
+
+        _ = try store.deleteWorkspace(backgroundID)
+
+        #expect(store.activeWorkspaceID == activeID)
+        #expect(store.tab(id: activeTab.id)?.isBroadcasting == true)
+    }
+
+    @Test
+    func deletingActiveWorkspaceResetsOutgoingVisibleBroadcast() throws {
+        let activeID = workspaceID(1)
+        let replacementID = workspaceID(2)
+        let activeTab = makeTab(1)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: activeID, name: "Active", tabs: [activeTab]),
+                Workspace(id: replacementID, name: "Replacement"),
+            ],
+            activeWorkspaceID: activeID
+        )
+        try store.setBroadcasting(true, for: activeTab.id, in: activeID)
+
+        let removed = try store.deleteWorkspace(activeID)
+
+        #expect(removed.tabs.first?.isBroadcasting == false)
+        #expect(store.activeWorkspaceID == replacementID)
+    }
+
+    @Test
+    func deletingUnknownOrFinalWorkspaceFailsWithoutMutation() throws {
+        var store = WorkspaceStore()
+        let finalWorkspaceID = store.activeWorkspaceID
+        let beforeFinalFailure = store
+
+        expectError(.cannotDeleteLastWorkspace) {
+            try store.deleteWorkspace(finalWorkspaceID)
+        }
+        #expect(store == beforeFinalFailure)
+
+        let missingID = workspaceID(999)
+        let beforeMissingFailure = store
+        expectError(.workspaceNotFound(missingID)) {
+            try store.deleteWorkspace(missingID)
+        }
+        #expect(store == beforeMissingFailure)
+    }
+
+    @Test
+    func reorderTabsPreservesExactTabValuesAndSelections() throws {
+        let workspaceID = workspaceID(1)
+        let first = try makeNestedTab(1, isBroadcasting: true)
+        let second = makeTab(2)
+        let third = makeTab(3)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    name: "Default",
+                    tabs: [first, second, third],
+                    activeTabID: first.id
+                )
+            ],
+            activeWorkspaceID: workspaceID
+        )
+
+        try store.reorderTabs([third.id, first.id, second.id], in: workspaceID)
+
+        #expect(store.workspace(id: workspaceID)?.tabs == [third, first, second])
+        #expect(store.workspace(id: workspaceID)?.activeTabID == first.id)
+        #expect(store.activeWorkspaceID == workspaceID)
+    }
+
+    @Test
+    func reorderTabsRejectsInvalidPermutationsWithoutMutation() throws {
+        let targetWorkspaceID = workspaceID(1)
+        let otherWorkspaceID = workspaceID(2)
+        let first = makeTab(1)
+        let second = makeTab(2)
+        let foreign = makeTab(3)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: targetWorkspaceID, name: "Default", tabs: [first, second]),
+                Workspace(id: otherWorkspaceID, name: "Other", tabs: [foreign]),
+            ],
+            activeWorkspaceID: targetWorkspaceID
+        )
+
+        for invalidOrder in [
+            [first.id, first.id],
+            [first.id],
+            [first.id, foreign.id],
+        ] {
+            let beforeFailure = store
+            expectError(.invalidTabOrder(workspaceID: targetWorkspaceID)) {
+                try store.reorderTabs(invalidOrder, in: targetWorkspaceID)
+            }
+            #expect(store == beforeFailure)
+        }
+    }
+
+    @Test
+    func reorderingTabsToTheSameOrderIsAcceptedWithoutMutation() throws {
+        let workspaceID = workspaceID(1)
+        let first = makeTab(1)
+        let second = makeTab(2)
+        var store = try WorkspaceStore(
+            workspaces: [Workspace(id: workspaceID, name: "Default", tabs: [first, second])],
+            activeWorkspaceID: workspaceID
+        )
+        let beforeReorder = store
+
+        try store.reorderTabs([first.id, second.id], in: workspaceID)
+
+        #expect(store == beforeReorder)
+    }
+
+    @Test
+    func updatingWorkingDirectoryChangesOnlyTheMatchingDescriptor() throws {
+        let firstWorkspaceID = workspaceID(1)
+        let secondWorkspaceID = workspaceID(2)
+        let nestedTab = try makeNestedTab(1)
+        let otherTab = makeTab(2)
+        let targetPaneID = try #require(nestedTab.paneDescriptors.first?.id)
+        let untouchedPaneID = try #require(nestedTab.paneDescriptors.last?.id)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstWorkspaceID, name: "First", tabs: [nestedTab]),
+                Workspace(id: secondWorkspaceID, name: "Second", tabs: [otherTab]),
+            ],
+            activeWorkspaceID: secondWorkspaceID
+        )
+        let beforeUpdate = store
+
+        try store.updateWorkingDirectory("/Users/example/updated", for: targetPaneID)
+
+        let updatedTab = try #require(store.tab(id: nestedTab.id))
+        #expect(updatedTab.paneDescriptor(for: targetPaneID)?.cwd == "/Users/example/updated")
+        #expect(
+            updatedTab.paneDescriptor(for: untouchedPaneID)
+                == nestedTab.paneDescriptor(for: untouchedPaneID)
+        )
+        #expect(updatedTab.root == nestedTab.root)
+        #expect(updatedTab.activePaneID == nestedTab.activePaneID)
+        #expect(updatedTab.isBroadcasting == nestedTab.isBroadcasting)
+        #expect(
+            store.workspace(id: secondWorkspaceID) == beforeUpdate.workspace(id: secondWorkspaceID))
+        #expect(store.activeWorkspaceID == secondWorkspaceID)
+    }
+
+    @Test
+    func updatingWorkingDirectoryRejectsUnknownPaneWithoutMutation() throws {
+        let workspaceID = workspaceID(1)
+        var store = try makeStore(workspaceID: workspaceID, tabs: [makeTab(1)], active: tabID(1))
+        let missingPaneID = paneID(999)
+        let beforeFailure = store
+
+        expectError(.paneNotFound(missingPaneID)) {
+            try store.updateWorkingDirectory("/tmp", for: missingPaneID)
+        }
+
+        #expect(store == beforeFailure)
+    }
+
+    @Test
+    func updatingWorkingDirectoryRejectsRelativeAndEmptyPathsWithoutMutation() throws {
+        let workspaceID = workspaceID(1)
+        let tab = makeTab(1)
+        let paneID = try #require(tab.paneDescriptors.first?.id)
+        var store = try makeStore(workspaceID: workspaceID, tabs: [tab], active: tab.id)
+
+        for cwd in ["relative/path", ""] {
+            let beforeFailure = store
+            expectError(.invalidWorkingDirectory(cwd)) {
+                try store.updateWorkingDirectory(cwd, for: paneID)
+            }
+            #expect(store == beforeFailure)
+        }
+    }
+
     private func makeStore(
         workspaceID: WorkspaceID,
         tabs: [TerminalTab],
