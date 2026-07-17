@@ -394,56 +394,127 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func tabBarSingleSelectedPlainMouseDownActivatesAndSelectsBeforeForwarding() throws {
+    func tabBarKeepsMountedItemAndNativeSelectionDuringBeginMouseDown() throws {
         let tabs = Self.makeTabs(count: 3)
-        let tabBar = TabBarViewController()
-        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        let collectionView = tabBar.collectionViewForTesting
         let item = tabBar.tabItemForTesting(at: 2)
+        let background = item.backgroundViewForTesting
         let forwardingResponder = MouseDownForwardingResponder()
-        item.backgroundViewForTesting.nextResponder = forwardingResponder
+        let originalNextResponder = background.nextResponder
+        defer { background.nextResponder = originalNextResponder }
+        background.nextResponder = forwardingResponder
+        let reloadGeneration = tabBar.dataReloadGenerationForTesting
+        var selectedIDsWhileForwarded: [TabID] = []
+        var nativeSelectionWhileForwarded: Set<IndexPath> = []
+        var reloadGenerationWhileForwarded: Int?
+        var backgroundWindowWhileForwarded: NSWindow?
+        var activatedTabIDs: [TabID] = []
+        var activatedTabIDsWhileForwarded: [TabID] = []
+        tabBar.onActivateTab = { tabID in
+            activatedTabIDs.append(tabID)
+            tabBar.apply(tabs: tabs, activeTabID: tabID, destinations: [])
+        }
+        forwardingResponder.onMouseDown = {
+            selectedIDsWhileForwarded = tabBar.selectedTabIDsInOrderForTesting
+            nativeSelectionWhileForwarded = collectionView.selectionIndexPaths
+            reloadGenerationWhileForwarded = tabBar.dataReloadGenerationForTesting
+            backgroundWindowWhileForwarded = background.window
+            activatedTabIDsWhileForwarded = activatedTabIDs
+        }
 
-        item.backgroundViewForTesting.mouseDown(with: try Self.mouseDownEvent())
+        background.mouseDown(with: try Self.mouseDownEvent())
 
+        #expect(collectionView.isSelectable)
+        #expect(collectionView.allowsMultipleSelection)
         #expect(forwardingResponder.mouseDownCount == 1)
+        #expect(selectedIDsWhileForwarded == [tabs[2].id])
+        #expect(nativeSelectionWhileForwarded == [IndexPath(item: 2, section: 0)])
+        #expect(reloadGenerationWhileForwarded == reloadGeneration)
+        #expect(backgroundWindowWhileForwarded === fixture.window)
+        #expect(activatedTabIDsWhileForwarded.isEmpty)
+        #expect(activatedTabIDs == [tabs[2].id])
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration + 1)
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[2].id])
         #expect(tabBar.activeTabIDForTesting == tabs[2].id)
     }
 
     @Test
-    func tabBarModifierMouseDownSelectsBeforeForwarding() throws {
+    func tabBarModifierMouseDownSynchronizesNativeSelectionBeforeForwarding() throws {
         let tabs = Self.makeTabs(count: 3)
-        let tabBar = TabBarViewController()
-        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
-        let item = tabBar.tabItemForTesting(at: 2)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        let collectionView = tabBar.collectionViewForTesting
+        let background = tabBar.tabItemForTesting(at: 2).backgroundViewForTesting
         let forwardingResponder = MouseDownForwardingResponder()
-        var selectedIDsWhileForwarded: [TabID] = []
+        let originalNextResponder = background.nextResponder
+        defer { background.nextResponder = originalNextResponder }
+        background.nextResponder = forwardingResponder
+        let reloadGeneration = tabBar.dataReloadGenerationForTesting
+        var nativeSelectionWhileForwarded: Set<IndexPath> = []
+        var activatedTabIDs: [TabID] = []
+        var activatedTabIDsWhileForwarded: [TabID] = []
+        tabBar.onActivateTab = { activatedTabIDs.append($0) }
         forwardingResponder.onMouseDown = {
-            selectedIDsWhileForwarded = tabBar.selectedTabIDsInOrderForTesting
+            nativeSelectionWhileForwarded = collectionView.selectionIndexPaths
+            activatedTabIDsWhileForwarded = activatedTabIDs
         }
-        item.backgroundViewForTesting.nextResponder = forwardingResponder
 
-        item.backgroundViewForTesting.mouseDown(
-            with: try Self.mouseDownEvent(modifierFlags: [.command])
-        )
+        background.mouseDown(with: try Self.mouseDownEvent(modifierFlags: [.command]))
 
         #expect(forwardingResponder.mouseDownCount == 1)
-        #expect(selectedIDsWhileForwarded == [tabs[0].id, tabs[2].id])
+        #expect(
+            nativeSelectionWhileForwarded == [
+                IndexPath(item: 0, section: 0),
+                IndexPath(item: 2, section: 0),
+            ])
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration + 1)
+        #expect(activatedTabIDsWhileForwarded.isEmpty)
+        #expect(activatedTabIDs == [tabs[2].id])
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[2].id])
         #expect(tabBar.activeTabIDForTesting == tabs[2].id)
+    }
+
+    @Test
+    func tabBarClearSelectionSynchronizesNativeIndexesAfterReload() {
+        let tabs = Self.makeTabs(count: 3)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        let collectionView = tabBar.collectionViewForTesting
+
+        tabBar.beginSelectionForTesting(tabs[2].id, gesture: .commandClick)
+        tabBar.finishSelectionForTesting()
+        tabBar.clearSelectionAfterMove()
+
+        #expect(collectionView.selectionIndexPaths.isEmpty)
+        #expect(tabBar.selectedTabIDsInOrderForTesting.isEmpty)
     }
 
     @Test
     func tabBarPlainMouseDownOnMultiSelectedTabCollapsesAfterForwardingWithoutDrag() throws {
         let tabs = Self.makeTabs(count: 5)
-        let tabBar = TabBarViewController()
-        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
-        try Self.selectMultipleTabs([1, 3], in: tabBar)
-        let draggedItem = tabBar.tabItemForTesting(at: 1)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        Self.selectMultipleTabs([1, 3], in: tabBar, tabs: tabs)
+        let background = tabBar.tabItemForTesting(at: 1).backgroundViewForTesting
         let forwardingResponder = MouseDownForwardingResponder()
-        draggedItem.backgroundViewForTesting.nextResponder = forwardingResponder
+        let originalNextResponder = background.nextResponder
+        defer { background.nextResponder = originalNextResponder }
+        background.nextResponder = forwardingResponder
+        var selectedIDsWhileForwarded: [TabID] = []
+        forwardingResponder.onMouseDown = {
+            selectedIDsWhileForwarded = tabBar.selectedTabIDsInOrderForTesting
+        }
 
-        draggedItem.backgroundViewForTesting.mouseDown(with: try Self.mouseDownEvent())
+        background.mouseDown(with: try Self.mouseDownEvent())
 
         #expect(forwardingResponder.mouseDownCount == 1)
+        #expect(selectedIDsWhileForwarded == [tabs[0].id, tabs[1].id, tabs[3].id])
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[1].id])
         #expect(tabBar.activeTabIDForTesting == tabs[1].id)
     }
@@ -451,17 +522,20 @@ struct WorkspacePresentationTests {
     @Test
     func tabBarPlainMouseDownOnMultiSelectedTabPreservesBlockWhenDragBeginsWhileForwarded() throws {
         let tabs = Self.makeTabs(count: 5)
-        let tabBar = TabBarViewController()
-        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
-        try Self.selectMultipleTabs([1, 3], in: tabBar)
-        let draggedItem = tabBar.tabItemForTesting(at: 1)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        Self.selectMultipleTabs([1, 3], in: tabBar, tabs: tabs)
+        let background = tabBar.tabItemForTesting(at: 1).backgroundViewForTesting
         let forwardingResponder = MouseDownForwardingResponder()
+        let originalNextResponder = background.nextResponder
+        defer { background.nextResponder = originalNextResponder }
+        background.nextResponder = forwardingResponder
         forwardingResponder.onMouseDown = {
             tabBar.recordDragSessionStartForTesting()
         }
-        draggedItem.backgroundViewForTesting.nextResponder = forwardingResponder
 
-        draggedItem.backgroundViewForTesting.mouseDown(with: try Self.mouseDownEvent())
+        background.mouseDown(with: try Self.mouseDownEvent())
 
         #expect(forwardingResponder.mouseDownCount == 1)
         #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[1].id, tabs[3].id])
@@ -544,7 +618,7 @@ struct WorkspacePresentationTests {
         let tabBar = TabBarViewController()
         tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
         let collectionView = tabBar.collectionViewForTesting
-        try Self.selectMultipleTabs([1, 3], in: tabBar)
+        Self.selectMultipleTabs([1, 3], in: tabBar, tabs: tabs)
         var reorderedOrders: [[TabID]] = []
         tabBar.onReorderTabs = {
             reorderedOrders.append($0)
@@ -657,12 +731,38 @@ struct WorkspacePresentationTests {
         #expect(reorderedOrders.isEmpty)
     }
 
-    private static func selectMultipleTabs(_ indexes: [Int], in tabBar: TabBarViewController) throws
-    {
+    private static func makeMountedTabBar(
+        tabs: [TerminalTab],
+        activeTabID: TabID
+    ) -> (tabBar: TabBarViewController, window: NSWindow) {
+        let tabBar = TabBarViewController()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: TabBarViewController.itemHeight),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        guard let contentView = window.contentView else {
+            preconditionFailure("Expected test window content view")
+        }
+        let tabBarView = tabBar.view
+        tabBarView.frame = contentView.bounds
+        tabBarView.autoresizingMask = [.width, .height]
+        contentView.addSubview(tabBarView)
+        tabBar.apply(tabs: tabs, activeTabID: activeTabID, destinations: [])
+        contentView.layoutSubtreeIfNeeded()
+        tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+        return (tabBar, window)
+    }
+
+    private static func selectMultipleTabs(
+        _ indexes: [Int],
+        in tabBar: TabBarViewController,
+        tabs: [TerminalTab]
+    ) {
         for index in indexes {
-            tabBar.tabItemForTesting(at: index).backgroundViewForTesting.mouseDown(
-                with: try mouseDownEvent(modifierFlags: [.command])
-            )
+            tabBar.beginSelectionForTesting(tabs[index].id, gesture: .commandClick)
+            tabBar.finishSelectionForTesting()
         }
     }
 

@@ -67,6 +67,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
     private var dragSessionGeneration = 0
+    private var dataReloadGeneration = 0
+    private var hasAppliedPresentation = false
+    private var lastAppliedActiveTabID: TabID?
 
     override func loadView() {
         let rootView = NSView()
@@ -85,7 +88,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         collectionView.collectionViewLayout = collectionViewLayout
         collectionView.dataSource = self
         collectionView.delegate = self
-        collectionView.isSelectable = false
+        collectionView.isSelectable = true
+        collectionView.allowsMultipleSelection = true
         collectionView.backgroundColors = [.clear]
         collectionView.register(
             TabItemView.self,
@@ -113,7 +117,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     func applyChromePalette(_ palette: GhosttyChromePalette) {
         chromePalette = palette
         guard isViewLoaded else { return }
-        collectionView.reloadData()
+        reloadCollectionView()
     }
 
     func apply(
@@ -121,16 +125,25 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         activeTabID: TabID?,
         destinations: [WorkspaceDestination]
     ) {
+        let previousTabs = self.tabs
+        let previousDestinations = self.destinations
+        let previousSelection = selection
         self.tabs = tabs
         self.destinations = destinations
         selection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
+        lastAppliedActiveTabID = selection.activeTabID
         updateLayoutMetrics()
-        collectionView.reloadData()
+        guard
+            !hasAppliedPresentation || previousTabs != tabs || previousDestinations != destinations
+                || previousSelection != selection
+        else { return }
+        hasAppliedPresentation = true
+        reloadCollectionView()
     }
 
     func clearSelectionAfterMove() {
         selection.clearSelectionAfterMove()
-        collectionView.reloadData()
+        reloadCollectionView()
     }
 
     #if DEBUG
@@ -154,6 +167,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             dragSessionGeneration
         }
 
+        var dataReloadGenerationForTesting: Int {
+            dataReloadGeneration
+        }
+
         var collectionViewForTesting: NSCollectionView {
             loadViewIfNeeded()
             return collectionView
@@ -161,15 +178,23 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         func tabItemForTesting(at index: Int) -> TabItemView {
             loadViewIfNeeded()
+            collectionView.layoutSubtreeIfNeeded()
             guard tabs.indices.contains(index),
-                let item = self.collectionView(
-                    collectionView,
-                    itemForRepresentedObjectAt: IndexPath(item: index, section: 0)
+                let item = collectionView.item(
+                    at: IndexPath(item: index, section: 0)
                 ) as? TabItemView
             else {
                 preconditionFailure("Expected tab item is unavailable")
             }
             return item
+        }
+
+        func beginSelectionForTesting(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
+            beginSelection(tabID, gesture: gesture)
+        }
+
+        func finishSelectionForTesting() {
+            finishSelection()
         }
 
         func recordDragSessionStartForTesting() {
@@ -213,8 +238,11 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             dragSessionGenerationProvider: { [weak self] in
                 self?.dragSessionGeneration ?? 0
             },
-            selectHandler: { [weak self] gesture in
-                self?.select(tab.id, gesture: gesture)
+            beginSelectionHandler: { [weak self] gesture in
+                self?.beginSelection(tab.id, gesture: gesture)
+            },
+            finishSelectionHandler: { [weak self] in
+                self?.finishSelection()
             },
             closeHandler: { [weak self] in
                 self?.onCloseTab?(tab.id)
@@ -297,7 +325,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         tabs = reorderedIDs.compactMap { tabID in
             tabs.first { $0.id == tabID }
         }
-        collectionView.reloadData()
+        reloadCollectionView()
         return true
     }
 
@@ -318,19 +346,39 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         return draggedID
     }
 
-    private func select(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
-        let previousActiveID = selection.activeTabID
+    private func beginSelection(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
         selection.select(tabID, gesture: gesture)
+        synchronizeNativeSelection()
+    }
+
+    private func finishSelection() {
+        let activeTabID = selection.activeTabID
+        let shouldActivate = activeTabID != lastAppliedActiveTabID
+        reloadCollectionView()
+        lastAppliedActiveTabID = activeTabID
+        guard shouldActivate, let activeTabID else { return }
+        onActivateTab?(activeTabID)
+    }
+
+    private func reloadCollectionView() {
+        dataReloadGeneration += 1
         collectionView.reloadData()
-        if selection.activeTabID != previousActiveID, let activeTabID = selection.activeTabID {
-            onActivateTab?(activeTabID)
-        }
+        collectionView.layoutSubtreeIfNeeded()
+        synchronizeNativeSelection()
+    }
+
+    private func synchronizeNativeSelection() {
+        collectionView.selectionIndexPaths = Set(
+            selection.selectedTabIDs.compactMap { tabID in
+                tabs.firstIndex { $0.id == tabID }.map { IndexPath(item: $0, section: 0) }
+            }
+        )
     }
 
     func contextMenu(for tabID: TabID) -> NSMenu {
         if !selection.selectedTabIDs.contains(tabID) {
             selection.select(tabID, gesture: .click)
-            collectionView.reloadData()
+            reloadCollectionView()
             onActivateTab?(tabID)
         }
 

@@ -110,7 +110,8 @@ final class TabItemView: NSCollectionViewItem {
         isBroadcasting: Bool,
         chromePalette: GhosttyChromePalette,
         dragSessionGenerationProvider: @escaping () -> Int,
-        selectHandler: @escaping (TabSelectionModel.Gesture) -> Void,
+        beginSelectionHandler: @escaping (TabSelectionModel.Gesture) -> Void,
+        finishSelectionHandler: @escaping () -> Void,
         closeHandler: @escaping () -> Void,
         menuProvider: @escaping () -> NSMenu
     ) {
@@ -122,7 +123,8 @@ final class TabItemView: NSCollectionViewItem {
         backgroundView.isPartOfMultiSelection = isPartOfMultiSelection
         backgroundView.chromePalette = chromePalette
         backgroundView.dragSessionGenerationProvider = dragSessionGenerationProvider
-        backgroundView.selectHandler = selectHandler
+        backgroundView.beginSelectionHandler = beginSelectionHandler
+        backgroundView.finishSelectionHandler = finishSelectionHandler
         backgroundView.menuProvider = menuProvider
         self.closeHandler = closeHandler
         view.toolTip = title
@@ -207,7 +209,8 @@ final class TabItemBackgroundView: NSView {
             onHoverChanged?()
         }
     }
-    var selectHandler: ((TabSelectionModel.Gesture) -> Void)?
+    var beginSelectionHandler: ((TabSelectionModel.Gesture) -> Void)?
+    var finishSelectionHandler: (() -> Void)?
     var dragSessionGenerationProvider: () -> Int = { 0 }
     var menuProvider: (() -> NSMenu)?
     var onHoverChanged: (() -> Void)?
@@ -283,15 +286,18 @@ final class TabItemBackgroundView: NSView {
             gesture = .click
         }
         guard gesture == .click, isPartOfMultiSelection else {
-            selectHandler?(gesture)
+            beginSelectionHandler?(gesture)
             super.mouseDown(with: event)
+            finishSelectionHandler?()
             return
         }
 
         let dragSessionGeneration = dragSessionGenerationProvider()
         super.mouseDown(with: event)
-        guard dragSessionGeneration == dragSessionGenerationProvider() else { return }
-        selectHandler?(.click)
+        if dragSessionGeneration == dragSessionGenerationProvider() {
+            beginSelectionHandler?(.click)
+        }
+        finishSelectionHandler?()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
