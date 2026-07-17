@@ -673,7 +673,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             self?.moveTabs(tabIDs, to: workspaceID)
         }
         workspaceViewController.onReorderTabs = { [weak self] tabIDs in
-            self?.reorderTabs(tabIDs)
+            guard let self else { return false }
+            return reorderTabs(tabIDs)
         }
     }
 
@@ -1106,16 +1107,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
     }
 
-    private func reorderTabs(_ orderedTabIDs: [TabID]) {
+    private func reorderTabs(_ orderedTabIDs: [TabID]) -> Bool {
         let workspaceID = workspaceStore.activeWorkspaceID
         var candidate = workspaceStore
         do {
             try candidate.reorderTabs(orderedTabIDs, in: workspaceID)
         } catch {
-            return
+            return false
         }
-        guard commitWorkspaceStore(candidate) else { return }
+        guard candidate != workspaceStore, commitWorkspaceStore(candidate) else { return false }
         refreshWorkspacePresentation(focusTerminal: false)
+        return true
     }
 
     private func requestCloseTab(_ tabID: TabID) {

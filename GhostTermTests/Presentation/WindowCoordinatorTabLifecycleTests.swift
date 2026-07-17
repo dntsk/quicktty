@@ -97,7 +97,10 @@ struct WindowCoordinatorTabLifecycleTests {
         persistence.expectSingleFinalSnapshot(from: coordinator)
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onReorderTabs?([secondTabID, firstTabID])
+        #expect(
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?([secondTabID, firstTabID])
+                == true
+        )
         persistence.expectSingleFinalSnapshot(from: coordinator)
 
         persistence.reset()
@@ -128,7 +131,10 @@ struct WindowCoordinatorTabLifecycleTests {
         let expectedOrder = workspace.tabs.map(\.id).reversed()
 
         persistence.reset()
-        coordinator.workspaceViewControllerForTesting.onReorderTabs?(Array(expectedOrder))
+        #expect(
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(Array(expectedOrder))
+                == true
+        )
 
         #expect(
             coordinator.workspaceStoreForTesting.workspace(id: workspace.id)?.tabs.map(\.id)
@@ -299,8 +305,12 @@ struct WindowCoordinatorTabLifecycleTests {
             coordinator.workspaceStoreForTesting.activeWorkspaceID
         )
         coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(WorkspaceID())
-        coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs)
-        coordinator.workspaceViewControllerForTesting.onReorderTabs?([activeTabID])
+        #expect(
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs) == false
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.onReorderTabs?([activeTabID]) == false
+        )
 
         #expect(persistence.snapshots.isEmpty)
     }

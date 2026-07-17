@@ -109,6 +109,7 @@ final class TabItemView: NSCollectionViewItem {
         isPartOfMultiSelection: Bool,
         isBroadcasting: Bool,
         chromePalette: GhosttyChromePalette,
+        dragSessionGenerationProvider: @escaping () -> Int,
         selectHandler: @escaping (TabSelectionModel.Gesture) -> Void,
         closeHandler: @escaping () -> Void,
         menuProvider: @escaping () -> NSMenu
@@ -120,6 +121,7 @@ final class TabItemView: NSCollectionViewItem {
         backgroundView.isSelected = isSelected
         backgroundView.isPartOfMultiSelection = isPartOfMultiSelection
         backgroundView.chromePalette = chromePalette
+        backgroundView.dragSessionGenerationProvider = dragSessionGenerationProvider
         backgroundView.selectHandler = selectHandler
         backgroundView.menuProvider = menuProvider
         self.closeHandler = closeHandler
@@ -206,6 +208,7 @@ final class TabItemBackgroundView: NSView {
         }
     }
     var selectHandler: ((TabSelectionModel.Gesture) -> Void)?
+    var dragSessionGenerationProvider: () -> Int = { 0 }
     var menuProvider: (() -> NSMenu)?
     var onHoverChanged: (() -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
@@ -279,10 +282,16 @@ final class TabItemBackgroundView: NSView {
         } else {
             gesture = .click
         }
-        if gesture != .click || !isPartOfMultiSelection {
+        guard gesture == .click, isPartOfMultiSelection else {
             selectHandler?(gesture)
+            super.mouseDown(with: event)
+            return
         }
+
+        let dragSessionGeneration = dragSessionGenerationProvider()
         super.mouseDown(with: event)
+        guard dragSessionGeneration == dragSessionGenerationProvider() else { return }
+        selectHandler?(.click)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

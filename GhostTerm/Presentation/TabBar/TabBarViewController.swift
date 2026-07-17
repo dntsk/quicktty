@@ -58,7 +58,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
-    var onReorderTabs: (([TabID]) -> Void)?
+    var onReorderTabs: (([TabID]) -> Bool)?
 
     private let collectionView = NSCollectionView()
     private let collectionViewLayout = NSCollectionViewFlowLayout()
@@ -66,6 +66,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var destinations: [WorkspaceDestination] = []
     private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
+    private var dragSessionGeneration = 0
 
     override func loadView() {
         let rootView = NSView()
@@ -141,8 +142,16 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             selection.selectedTabIDsInOrder
         }
 
+        var orderedTabIDsForTesting: [TabID] {
+            selection.orderedTabIDs
+        }
+
         var activeTabIDForTesting: TabID? {
             selection.activeTabID
+        }
+
+        var dragSessionGenerationForTesting: Int {
+            dragSessionGeneration
         }
 
         var collectionViewForTesting: NSCollectionView {
@@ -161,6 +170,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
                 preconditionFailure("Expected tab item is unavailable")
             }
             return item
+        }
+
+        func recordDragSessionStartForTesting() {
+            recordDragSessionStart()
         }
     #endif
 
@@ -197,6 +210,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             isPartOfMultiSelection: isPartOfMultiSelection,
             isBroadcasting: tab.isBroadcasting,
             chromePalette: chromePalette,
+            dragSessionGenerationProvider: { [weak self] in
+                self?.dragSessionGeneration ?? 0
+            },
             selectHandler: { [weak self] gesture in
                 self?.select(tab.id, gesture: gesture)
             },
@@ -234,6 +250,15 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
     func collectionView(
         _ collectionView: NSCollectionView,
+        draggingSession session: NSDraggingSession,
+        willBeginAt screenPoint: NSPoint,
+        forItemsAt indexPaths: Set<IndexPath>
+    ) {
+        recordDragSessionStart()
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
         validateDrop draggingInfo: any NSDraggingInfo,
         proposedIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
         dropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>
@@ -256,19 +281,28 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             let draggedID = localDraggedTabID(from: draggingInfo)
         else { return false }
 
+        let previousSelection = selection
         if !selection.selectedTabIDs.contains(draggedID) {
             selection.select(draggedID, gesture: .click)
         }
         let currentOrder = selection.orderedTabIDs
         let reorderedIDs = selection.reorderSelection(to: indexPath.item)
         guard reorderedIDs != currentOrder else { return true }
+        guard onReorderTabs?(reorderedIDs) == true else {
+            selection = previousSelection
+            return false
+        }
+        guard tabs.map(\.id) != reorderedIDs else { return true }
 
         tabs = reorderedIDs.compactMap { tabID in
             tabs.first { $0.id == tabID }
         }
-        onReorderTabs?(reorderedIDs)
         collectionView.reloadData()
         return true
+    }
+
+    private func recordDragSessionStart() {
+        dragSessionGeneration += 1
     }
 
     private func localDraggedTabID(from draggingInfo: any NSDraggingInfo) -> TabID? {

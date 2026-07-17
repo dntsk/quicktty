@@ -14,7 +14,7 @@ final class WorkspaceViewController: NSViewController {
     var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
-    var onReorderTabs: (([TabID]) -> Void)?
+    var onReorderTabs: (([TabID]) -> Bool)?
 
     let workspaceSelector = WorkspaceSelector()
     let tabBarViewController = TabBarViewController()
@@ -110,7 +110,7 @@ final class WorkspaceViewController: NSViewController {
             self?.onMoveToWorkspace?(tabIDs, workspaceID)
         }
         tabBarViewController.onReorderTabs = { [weak self] orderedIDs in
-            self?.onReorderTabs?(orderedIDs)
+            self?.onReorderTabs?(orderedIDs) ?? false
         }
     }
 
