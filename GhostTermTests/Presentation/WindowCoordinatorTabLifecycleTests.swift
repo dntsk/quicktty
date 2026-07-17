@@ -590,29 +590,43 @@ struct WindowCoordinatorTabLifecycleTests {
         defer { bridge.shutdown() }
 
         do {
+            let persistence = WorkspacePersistenceRecorder()
             let coordinator = WindowCoordinator(
                 ghosttyBridge: bridge,
-                surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+                surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+                persistWorkspaceStore: { persistence.snapshots.append($0) }
             )
             defer { coordinator.prepareForBridgeShutdownForTesting() }
             try coordinator.start()
+            let window = try #require(coordinator.windowForTesting)
             let exitedSurface = try #require(coordinator.activeSurfaceForTesting)
 
+            persistence.reset()
             exitedSurface.scheduleRuntimeCloseForTesting(processAlive: false)
             await Task.yield()
 
             let replacement = try #require(coordinator.activeSurfaceForTesting)
+            #expect(persistence.snapshots.count == 1)
+            let snapshot = try #require(persistence.snapshots.first)
             #expect(replacement.paneID != exitedSurface.paneID)
             #expect(bridge.activeSurfaceIDs == [replacement.paneID])
             #expect(coordinator.surfaceIDsForTesting == [replacement.paneID])
+            #expect(!bridge.activeSurfaceIDs.contains(exitedSurface.paneID))
+            #expect(
+                snapshot.workspaces.flatMap(\.tabs).flatMap(\.root.leaves)
+                    == [replacement.paneID]
+            )
+            #expect(!snapshot.workspaces.flatMap(\.tabs).isEmpty)
             #expect(
                 coordinator.workspaceStoreForTesting.workspaces.flatMap(\.tabs).map(\.activePaneID)
                     == [replacement.paneID]
             )
+            #expect(window.firstResponder === replacement)
 
             exitedSurface.scheduleRuntimeCloseForTesting(processAlive: false)
             await Task.yield()
 
+            #expect(persistence.snapshots == [snapshot])
             #expect(bridge.activeSurfaceIDs == [replacement.paneID])
             #expect(coordinator.surfaceIDsForTesting == [replacement.paneID])
         }
@@ -620,12 +634,15 @@ struct WindowCoordinatorTabLifecycleTests {
 
     @Test
     func finalProcessExitReportsReplacementCreationFailureWithoutClosingCoordinator() async throws {
+        let initialSurfaceContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
         var errors: [Error] = []
         let coordinator = WindowCoordinator(
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
             onError: { errors.append($0) }
         )
         defer { coordinator.prepareForBridgeShutdownForTesting() }
@@ -633,14 +650,18 @@ struct WindowCoordinatorTabLifecycleTests {
         let window = try #require(coordinator.windowForTesting)
         let exitedSurface = try #require(coordinator.activeSurfaceForTesting)
 
+        persistence.reset()
         bridge.failNextSurfaceCreationForTesting()
         exitedSurface.scheduleRuntimeCloseForTesting(processAlive: false)
         await Task.yield()
 
+        #expect(persistence.snapshots.count == 1)
+        let snapshot = try #require(persistence.snapshots.first)
         #expect(!exitedSurface.isActive)
         #expect(bridge.activeSurfaceIDs.isEmpty)
         #expect(coordinator.surfaceIDsForTesting.isEmpty)
-        #expect(coordinator.workspaceStoreForTesting.workspaces.allSatisfy { $0.tabs.isEmpty })
+        #expect(snapshot.workspaces.allSatisfy { $0.tabs.isEmpty })
+        #expect(coordinator.workspaceStoreForTesting == snapshot)
         #expect(errors.count == 1)
         let error = try #require(errors.first as? GhosttyBridgeError)
         guard case .surfaceCreationFailed(let failedPaneID) = error else {
@@ -648,6 +669,20 @@ struct WindowCoordinatorTabLifecycleTests {
             return
         }
         #expect(failedPaneID != exitedSurface.paneID)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialSurfaceContextCount
+        )
+
+        exitedSurface.scheduleRuntimeCloseForTesting(processAlive: false)
+        await Task.yield()
+
+        #expect(errors.count == 1)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == snapshot)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialSurfaceContextCount
+        )
         #expect(window.isVisible)
         #expect(coordinator.windowForTesting === window)
         #expect(window.delegate === coordinator)
@@ -770,6 +805,55 @@ struct WindowCoordinatorTabLifecycleTests {
             bridge.surfaceConfigurationForTesting(id: secondSurface.paneID)?.workingDirectory
                 == "/tmp/live"
         )
+    }
+
+    @Test
+    func workspacePersistenceSnapshotOverlaysPendingWorkingDirectoryWithoutDelivery() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/startup",
+                command: "exec /bin/cat"
+            ),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tab = activeTab(of: coordinator)
+
+        persistence.reset()
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/immediate"))
+
+        let pendingSnapshot = coordinator.workspaceStoreForPersistence
+        let pendingDescriptor = try #require(
+            pendingSnapshot.tab(id: tab.id)?.paneDescriptor(for: surface.paneID)
+        )
+        #expect(pendingDescriptor.cwd == "/tmp/immediate")
+        #expect(
+            activeTab(of: coordinator).paneDescriptor(for: surface.paneID)?.cwd == "/tmp/startup"
+        )
+        #expect(persistence.snapshots.isEmpty)
+
+        let finalState = AppDelegate.applicationState(
+            ApplicationState(workspaceStore: coordinator.workspaceStoreForTesting),
+            merging: pendingSnapshot,
+            normalWindowFrame: nil
+        )
+        #expect(
+            finalState.workspaceStore.tab(id: tab.id)?.paneDescriptor(for: surface.paneID)?.cwd
+                == "/tmp/immediate"
+        )
+
+        await Task.yield()
+
+        #expect(
+            activeTab(of: coordinator).paneDescriptor(for: surface.paneID)?.cwd == "/tmp/immediate"
+        )
+        persistence.expectSingleFinalSnapshot(from: coordinator)
     }
 
     @Test

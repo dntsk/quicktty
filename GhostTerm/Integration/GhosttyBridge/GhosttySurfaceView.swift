@@ -167,6 +167,11 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private(set) var isActive = false
     private(set) var currentWorkingDirectory: String?
 
+    var latestWorkingDirectoryForPersistence: String? {
+        callbackContextOwnership?.takeUnretainedValue().latestWorkingDirectory
+            ?? currentWorkingDirectory
+    }
+
     #if DEBUG
         private var inputObservations: [GhosttySurfaceInputObservation] = []
         private var interpretedTextObservations: [String] = []
@@ -1666,6 +1671,10 @@ final class SurfaceCallbackContext: Sendable {
 
     var pendingWriteCount: Int {
         state.withLock { $0.writes.count }
+    }
+
+    var latestWorkingDirectory: String? {
+        state.withLock { $0.pendingWorkingDirectory }
     }
 
     func registerClipboardRead(

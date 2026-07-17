@@ -67,6 +67,10 @@ extension GhosttyBridgeTests {
         #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/first"))
         #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/second"))
         #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/final"))
+        #expect(surface.latestWorkingDirectoryForPersistence == "/tmp/final")
+        #expect(
+            bridge.latestWorkingDirectoriesForPersistence == [surface.paneID: "/tmp/final"]
+        )
         await Task.yield()
 
         #expect(surface.currentWorkingDirectory == "/tmp/final")
@@ -270,19 +274,25 @@ extension GhosttyBridgeTests {
         var observedPaneID: PaneID?
         var observedWorkingDirectory: String?
         var currentWorkingDirectoryAtObservation: String?
+        var observationCount = 0
         bridge.surfaceWorkingDirectoryHandler = { id, workingDirectory in
             observedPaneID = id
             observedWorkingDirectory = workingDirectory
             currentWorkingDirectoryAtObservation = surface.currentWorkingDirectory
+            observationCount += 1
         }
 
         #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/live"))
+        #expect(surface.latestWorkingDirectoryForPersistence == "/tmp/live")
+        #expect(bridge.latestWorkingDirectoriesForPersistence == [paneID: "/tmp/live"])
+        #expect(observationCount == 0)
         await Task.yield()
 
         #expect(observedPaneID == paneID)
         #expect(observedWorkingDirectory == "/tmp/live")
         #expect(currentWorkingDirectoryAtObservation == "/tmp/live")
         #expect(surface.currentWorkingDirectory == "/tmp/live")
+        #expect(observationCount == 1)
     }
 
     @Test

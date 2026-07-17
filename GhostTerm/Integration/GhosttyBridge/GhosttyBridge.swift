@@ -193,6 +193,14 @@ final class GhosttyBridge {
         surfaces.count
     }
 
+    var latestWorkingDirectoriesForPersistence: [PaneID: String] {
+        Dictionary(
+            uniqueKeysWithValues: surfaces.compactMap { paneID, surface in
+                surface.latestWorkingDirectoryForPersistence.map { (paneID, $0) }
+            }
+        )
+    }
+
     init(
         configURL: URL? = nil,
         runtimeActionHandler: RuntimeActionHandler? = nil,

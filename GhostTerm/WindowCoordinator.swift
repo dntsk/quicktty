@@ -45,7 +45,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var presentationMode: PresentationMode { presentationController.mode }
 
-    var workspaceStoreForPersistence: WorkspaceStore { workspaceStore }
+    var workspaceStoreForPersistence: WorkspaceStore {
+        var candidate = workspaceStore
+        for (paneID, workingDirectory) in ghosttyBridge.latestWorkingDirectoriesForPersistence
+        where !workingDirectory.isEmpty && (workingDirectory as NSString).isAbsolutePath {
+            try? candidate.updateWorkingDirectory(workingDirectory, for: paneID)
+        }
+        return candidate
+    }
 
     var isBroadcastingActiveTab: Bool {
         activeTab?.isBroadcasting ?? false
@@ -404,6 +411,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshPresentation: Bool,
         surfaceContext: GhosttySurfaceConfiguration.Context = .newTab
     ) throws {
+        var candidate = workspaceStore
+        let prepared = try prepareShellTab(
+            in: workspaceID ?? candidate.activeWorkspaceID,
+            candidate: &candidate,
+            surfaceContext: surfaceContext
+        )
+        surfaces[prepared.paneID] = prepared.surface
+        _ = commitWorkspaceStore(candidate)
+        if refreshPresentation {
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+    }
+
+    private func prepareShellTab(
+        in workspaceID: WorkspaceID,
+        candidate: inout WorkspaceStore,
+        surfaceContext: GhosttySurfaceConfiguration.Context
+    ) throws -> (paneID: PaneID, surface: GhosttySurfaceView) {
         let paneID = PaneID()
         var tabConfiguration = surfaceConfiguration
         tabConfiguration.context = surfaceContext
@@ -413,14 +438,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 ?? FileManager.default.homeDirectoryForCurrentUser.path,
             startupCommand: surfaceConfiguration.command.map(StartupCommand.custom) ?? .shell
         )
-        try createTab(
+        let surface = try prepareTab(
             title: "Shell",
             paneID: paneID,
             descriptor: descriptor,
             configuration: tabConfiguration,
-            in: workspaceID ?? workspaceStore.activeWorkspaceID,
-            refreshPresentation: refreshPresentation
+            in: workspaceID,
+            candidate: &candidate
         )
+        return (paneID, surface)
     }
 
     private func createConfigurationTab(
@@ -459,6 +485,30 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         in workspaceID: WorkspaceID,
         refreshPresentation: Bool
     ) throws {
+        var candidate = workspaceStore
+        let surface = try prepareTab(
+            title: title,
+            paneID: paneID,
+            descriptor: descriptor,
+            configuration: configuration,
+            in: workspaceID,
+            candidate: &candidate
+        )
+        surfaces[paneID] = surface
+        _ = commitWorkspaceStore(candidate)
+        if refreshPresentation {
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+    }
+
+    private func prepareTab(
+        title: String,
+        paneID: PaneID,
+        descriptor: TerminalPaneDescriptor,
+        configuration: GhosttySurfaceConfiguration,
+        in workspaceID: WorkspaceID,
+        candidate: inout WorkspaceStore
+    ) throws -> GhosttySurfaceView {
         let surface = try ghosttyBridge.makeSurface(
             id: paneID,
             configuration: configuration
@@ -466,7 +516,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
         }
         let tab = TerminalTab(title: title, pane: descriptor)
-        var candidate = workspaceStore
 
         do {
             try candidate.addTab(tab, to: workspaceID)
@@ -476,11 +525,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             throw error
         }
 
-        surfaces[paneID] = surface
-        _ = commitWorkspaceStore(candidate)
-        if refreshPresentation {
-            refreshWorkspacePresentation(focusTerminal: true)
-        }
+        return surface
     }
 
     private static func posixShellQuoted(_ value: String) -> String {
@@ -1246,27 +1291,46 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     paneID: id
                 ),
                 to: &candidate
-            )) != nil,
-            removeSurface(id: id, closeBridgeSurface: closeBridgeSurface)
+            )) != nil
         else {
             return
         }
+
+        let shouldCreateReplacement =
+            createsReplacement
+            && surfaces.count == 1
+            && candidate.workspaces.allSatisfy({ $0.tabs.isEmpty })
+            && !isCreatingReplacementShell
+        if shouldCreateReplacement {
+            isCreatingReplacementShell = true
+            defer { isCreatingReplacementShell = false }
+            do {
+                let replacement = try prepareShellTab(
+                    in: candidate.activeWorkspaceID,
+                    candidate: &candidate,
+                    surfaceContext: .newTab
+                )
+                guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else {
+                    ghosttyBridge.closeSurface(id: replacement.paneID)
+                    return
+                }
+                surfaces[replacement.paneID] = replacement.surface
+                _ = commitWorkspaceStore(candidate)
+                refreshWorkspacePresentation(focusTerminal: true)
+            } catch {
+                guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else {
+                    return
+                }
+                _ = commitWorkspaceStore(candidate)
+                refreshWorkspacePresentation(focusTerminal: true)
+                onError(error)
+            }
+            return
+        }
+
+        guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else { return }
         guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
-
-        guard createsReplacement,
-            surfaces.isEmpty,
-            workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }),
-            !isCreatingReplacementShell
-        else { return }
-
-        isCreatingReplacementShell = true
-        defer { isCreatingReplacementShell = false }
-        do {
-            try createShellTab()
-        } catch {
-            onError(error)
-        }
     }
 }
 
