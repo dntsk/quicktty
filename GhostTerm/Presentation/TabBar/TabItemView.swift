@@ -106,6 +106,7 @@ final class TabItemView: NSCollectionViewItem {
         tabIndex: Int,
         isActive: Bool,
         isSelected: Bool,
+        isPartOfMultiSelection: Bool,
         isBroadcasting: Bool,
         chromePalette: GhosttyChromePalette,
         selectHandler: @escaping (TabSelectionModel.Gesture) -> Void,
@@ -117,6 +118,7 @@ final class TabItemView: NSCollectionViewItem {
         self.isBroadcasting = isBroadcasting
         backgroundView.isActive = isActive
         backgroundView.isSelected = isSelected
+        backgroundView.isPartOfMultiSelection = isPartOfMultiSelection
         backgroundView.chromePalette = chromePalette
         backgroundView.selectHandler = selectHandler
         backgroundView.menuProvider = menuProvider
@@ -154,6 +156,12 @@ final class TabItemView: NSCollectionViewItem {
         )
     }
 
+    #if DEBUG
+        var backgroundViewForTesting: TabItemBackgroundView {
+            backgroundView
+        }
+    #endif
+
     @objc private func closeTab() {
         closeHandler?()
     }
@@ -186,6 +194,7 @@ final class TabItemBackgroundView: NSView {
     var isSelected = false {
         didSet { needsDisplay = true }
     }
+    var isPartOfMultiSelection = false
     var chromePalette = GhosttyChromePalette.fallback {
         didSet { needsDisplay = true }
     }
@@ -270,7 +279,9 @@ final class TabItemBackgroundView: NSView {
         } else {
             gesture = .click
         }
-        selectHandler?(gesture)
+        if gesture != .click || !isPartOfMultiSelection {
+            selectHandler?(gesture)
+        }
         super.mouseDown(with: event)
     }
 

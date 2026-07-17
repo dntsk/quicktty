@@ -150,8 +150,17 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             return collectionView
         }
 
-        func selectForTesting(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
-            select(tabID, gesture: gesture)
+        func tabItemForTesting(at index: Int) -> TabItemView {
+            loadViewIfNeeded()
+            guard tabs.indices.contains(index),
+                let item = self.collectionView(
+                    collectionView,
+                    itemForRepresentedObjectAt: IndexPath(item: index, section: 0)
+                ) as? TabItemView
+            else {
+                preconditionFailure("Expected tab item is unavailable")
+            }
+            return item
         }
     #endif
 
@@ -177,11 +186,15 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             preconditionFailure("TabItemView registration is invalid")
         }
         let tab = tabs[indexPath.item]
+        let isPartOfMultiSelection =
+            selection.selectedTabIDs.count > 1
+            && selection.selectedTabIDs.contains(tab.id)
         item.configure(
             title: tab.title,
             tabIndex: indexPath.item,
             isActive: selection.activeTabID == tab.id,
             isSelected: selection.selectedTabIDs.contains(tab.id),
+            isPartOfMultiSelection: isPartOfMultiSelection,
             isBroadcasting: tab.isBroadcasting,
             chromePalette: chromePalette,
             selectHandler: { [weak self] gesture in

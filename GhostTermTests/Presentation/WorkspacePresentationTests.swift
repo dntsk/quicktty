@@ -372,42 +372,43 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func tabItemSelectsBeforeForwardingMouseDownToTheResponderChain() throws {
-        let background = TabItemBackgroundView()
+    func tabBarSingleSelectedPlainMouseDownActivatesAndSelectsBeforeForwarding() throws {
+        let tabs = Self.makeTabs(count: 3)
+        let tabBar = TabBarViewController()
+        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+        let item = tabBar.tabItemForTesting(at: 2)
         let forwardingResponder = MouseDownForwardingResponder()
-        var gestures: [TabSelectionModel.Gesture] = []
-        background.selectHandler = { gestures.append($0) }
-        background.nextResponder = forwardingResponder
-        let event = try #require(
-            NSEvent.mouseEvent(
-                with: .leftMouseDown,
-                location: .zero,
-                modifierFlags: [.command],
-                timestamp: 0,
-                windowNumber: 0,
-                context: nil,
-                eventNumber: 0,
-                clickCount: 1,
-                pressure: 1
-            )
-        )
+        item.backgroundViewForTesting.nextResponder = forwardingResponder
 
-        background.mouseDown(with: event)
+        item.backgroundViewForTesting.mouseDown(with: try Self.mouseDownEvent())
 
-        #expect(gestures == [.commandClick])
         #expect(forwardingResponder.mouseDownCount == 1)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[2].id])
+        #expect(tabBar.activeTabIDForTesting == tabs[2].id)
     }
 
     @Test
-    func tabBarAcceptsLocalSelectedBlockAndUpdatesDisplayedOrderOnce() throws {
+    func tabBarPlainMouseDownOnMultiSelectedTabPreservesBlockForDragAndForwards() throws {
         let tabs = Self.makeTabs(count: 5)
         let tabBar = TabBarViewController()
         tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+
+        tabBar.tabItemForTesting(at: 1).backgroundViewForTesting.mouseDown(
+            with: try Self.mouseDownEvent(modifierFlags: [.command]))
+        tabBar.tabItemForTesting(at: 3).backgroundViewForTesting.mouseDown(
+            with: try Self.mouseDownEvent(modifierFlags: [.command]))
+
+        let draggedItem = tabBar.tabItemForTesting(at: 1)
+        let forwardingResponder = MouseDownForwardingResponder()
+        draggedItem.backgroundViewForTesting.nextResponder = forwardingResponder
+        draggedItem.backgroundViewForTesting.mouseDown(with: try Self.mouseDownEvent())
+
         let collectionView = tabBar.collectionViewForTesting
-        tabBar.selectForTesting(tabs[1].id, gesture: .commandClick)
-        tabBar.selectForTesting(tabs[3].id, gesture: .commandClick)
         var reorderedOrders: [[TabID]] = []
         tabBar.onReorderTabs = { reorderedOrders.append($0) }
+        #expect(forwardingResponder.mouseDownCount == 1)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[1].id, tabs[3].id])
+        #expect(tabBar.activeTabIDForTesting == tabs[3].id)
 
         #expect(
             tabBar.collectionView(
@@ -506,6 +507,24 @@ struct WorkspacePresentationTests {
         )
         #expect(tabBar.displayedTabsForTesting.map(\.id) == tabs.map(\.id))
         #expect(reorderedOrders.isEmpty)
+    }
+
+    private static func mouseDownEvent(
+        modifierFlags: NSEvent.ModifierFlags = []
+    ) throws -> NSEvent {
+        try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: .zero,
+                modifierFlags: modifierFlags,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
     }
 
     private static func makeTabs(count: Int) -> [TerminalTab] {
