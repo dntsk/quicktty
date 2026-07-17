@@ -212,7 +212,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         if workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }) {
-            try createShellTab(refreshPresentation: false)
+            try createShellTab(refreshPresentation: false, surfaceContext: .window)
         } else {
             try restoreWorkspaceSurfaces()
         }
@@ -347,12 +347,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func createShellTab(
         in workspaceID: WorkspaceID? = nil,
-        refreshPresentation: Bool
+        refreshPresentation: Bool,
+        surfaceContext: GhosttySurfaceConfiguration.Context = .newTab
     ) throws {
         let destinationWorkspaceID = workspaceID ?? workspaceStore.activeWorkspaceID
         let paneID = PaneID()
         var tabConfiguration = surfaceConfiguration
-        tabConfiguration.context = .newTab
+        tabConfiguration.context = surfaceContext
         let surface = try ghosttyBridge.makeSurface(
             id: paneID,
             configuration: tabConfiguration

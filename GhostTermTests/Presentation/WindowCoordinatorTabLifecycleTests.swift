@@ -798,9 +798,17 @@ struct WindowCoordinatorTabLifecycleTests {
             #expect(emptyBridge.activeSurfaceIDs == [defaultSurface.paneID])
             #expect(
                 emptyBridge.surfaceConfigurationForTesting(id: defaultSurface.paneID)?.context
-                    == .newTab
+                    == .window
             )
             #expect(emptyCoordinator.activeWindowForTesting?.firstResponder === defaultSurface)
+
+            emptyCoordinator.createNewTab()
+
+            let newTabSurface = try #require(emptyCoordinator.activeSurfaceForTesting)
+            #expect(
+                emptyBridge.surfaceConfigurationForTesting(id: newTabSurface.paneID)?.context
+                    == .newTab
+            )
         }
 
         let backgroundPaneID = PaneID()
