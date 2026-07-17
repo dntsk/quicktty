@@ -967,6 +967,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             requestCloseTab(tabID)
         }
 
+        func closeTabImmediatelyForTesting(_ tabID: TabID) {
+            guard let tab = workspaceStore.tab(id: tabID) else { return }
+            closeTab(tabID, paneIDs: tab.root.leaves)
+        }
+
+        func presentMoveToNewWorkspaceForTesting(_ tabIDs: [TabID]) {
+            presentMoveToNewWorkspace(tabIDs)
+        }
+
+        var createWorkspaceControllerForTesting: CreateWorkspaceController? {
+            createWorkspaceController
+        }
+
         func surfaceDidRequestCloseForTesting(id: PaneID, processAlive: Bool) {
             surfaceDidRequestClose(id: id, processAlive: processAlive)
         }

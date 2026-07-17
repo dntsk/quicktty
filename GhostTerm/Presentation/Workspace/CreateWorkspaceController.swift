@@ -134,6 +134,13 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
         }
     }
 
+    #if DEBUG
+        func submitForTesting(name: String) {
+            nameField.stringValue = name
+            createWorkspace()
+        }
+    #endif
+
     @objc private func createWorkspace() {
         let name: String
         do {

@@ -71,7 +71,7 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
-    func workspacePersistenceReportsTabAndSplitMutationsExactlyOnce() throws {
+    func workspacePersistenceReportsTabActivationCloseAndReorderExactlyOnce() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let persistence = WorkspacePersistenceRecorder()
@@ -81,22 +81,32 @@ struct WindowCoordinatorTabLifecycleTests {
             persistWorkspaceStore: { persistence.snapshots.append($0) }
         )
         defer { coordinator.prepareForBridgeShutdownForTesting() }
-
         try coordinator.start()
-
-        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
-        persistence.reset()
-
         coordinator.createNewTab()
-        try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/ghostterm-config"))
-        try coordinator.splitActivePaneForTesting(axis: .horizontal)
 
-        #expect(persistence.snapshots.count == 3)
-        #expect(persistence.snapshots.last == coordinator.workspaceStoreForPersistence)
+        let tabs = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )?.tabs
+        )
+        let firstTabID = tabs[0].id
+        let secondTabID = tabs[1].id
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onActivateTab?(firstTabID)
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onReorderTabs?([secondTabID, firstTabID])
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+
+        persistence.reset()
+        coordinator.closeTabImmediatelyForTesting(secondTabID)
+        persistence.expectSingleFinalSnapshot(from: coordinator)
     }
 
     @Test
-    func workspacePersistenceIgnoresNoOpAndFailedCandidates() throws {
+    func workspacePersistenceReportsPaneFocusAndProcessExitExactlyOnce() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let persistence = WorkspacePersistenceRecorder()
@@ -107,30 +117,217 @@ struct WindowCoordinatorTabLifecycleTests {
         )
         defer { coordinator.prepareForBridgeShutdownForTesting() }
         try coordinator.start()
-        persistence.reset()
-
-        let activeTabID = activeTab(of: coordinator).id
-        coordinator.activateTab(at: 1)
-        coordinator.activateTabForTesting(activeTabID)
-        coordinator.workspaceViewControllerForTesting.onActivateTab?(activeTabID)
         try coordinator.splitActivePaneForTesting(axis: .horizontal)
-        persistence.reset()
+        let exitingPaneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
 
+        persistence.reset()
+        coordinator.focusNextPane()
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+
+        persistence.reset()
+        coordinator.surfaceDidRequestCloseForTesting(id: exitingPaneID, processAlive: false)
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+    }
+
+    @Test
+    func workspacePersistenceReportsSplitResizeAndEqualizeExactlyOnce() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
         guard case .split(let splitID, _, _, _, _) = activeTab(of: coordinator).root else {
             Issue.record("Expected a split")
             return
         }
-        let orderedTabIDs = try #require(
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.invokeResizeForTesting(
+            splitID: splitID,
+            ratio: 0.8
+        )
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.invokeEqualizeForTesting(splitID: splitID)
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+    }
+
+    @Test
+    func workspacePersistenceReportsWorkspaceActivationExactlyOnce() throws {
+        let firstWorkspace = Workspace(name: "First")
+        let secondWorkspace = Workspace(name: "Second")
+        let store = try WorkspaceStore(
+            workspaces: [firstWorkspace, secondWorkspace],
+            activeWorkspaceID: firstWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(secondWorkspace.id)
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+    }
+
+    @Test
+    func workspacePersistenceReportsMoveToNewWorkspaceThroughNameSheetExactlyOnce() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let tabID = activeTab(of: coordinator).id
+
+        persistence.reset()
+        coordinator.presentMoveToNewWorkspaceForTesting([tabID])
+        let sheet = try #require(coordinator.createWorkspaceControllerForTesting)
+        sheet.submitForTesting(name: "Moved")
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+    }
+
+    @Test
+    func workspacePersistenceReportsMoveToExistingWorkspaceAndBroadcastExactlyOnce() throws {
+        let sourceWorkspace = Workspace(name: "Source")
+        let destinationWorkspace = Workspace(name: "Destination")
+        let store = try WorkspaceStore(
+            workspaces: [sourceWorkspace, destinationWorkspace],
+            activeWorkspaceID: sourceWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let tabID = activeTab(of: coordinator).id
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onMoveToWorkspace?(
+            [tabID],
+            destinationWorkspace.id
+        )
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onToggleBroadcast?()
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+    }
+
+    @Test
+    func workspacePersistenceIgnoresNoOpTabWorkspaceAndReorderCallbacks() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.createNewTab()
+        let workspace = try #require(
             coordinator.workspaceStoreForTesting.workspace(
                 id: coordinator.workspaceStoreForTesting.activeWorkspaceID
-            )?.tabs.map(\.id)
+            )
         )
+        let activeTabID = try #require(workspace.activeTabID)
+        let orderedTabIDs = workspace.tabs.map(\.id)
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onActivateTab?(activeTabID)
+        coordinator.workspaceViewControllerForTesting.onActivateTab?(TabID())
+        coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(
+            coordinator.workspaceStoreForTesting.activeWorkspaceID
+        )
+        coordinator.workspaceViewControllerForTesting.onActivateWorkspace?(WorkspaceID())
+        coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs)
+        coordinator.workspaceViewControllerForTesting.onReorderTabs?([activeTabID])
+
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test
+    func workspacePersistenceIgnoresSinglePaneFocusAndEquivalentSplitRatio() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.focusNextPane()
+        coordinator.focusPane(direction: .left)
+        #expect(persistence.snapshots.isEmpty)
+
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        guard case .split(let splitID, _, _, _, _) = activeTab(of: coordinator).root else {
+            Issue.record("Expected a split")
+            return
+        }
+        persistence.reset()
         coordinator.workspaceViewControllerForTesting.invokeResizeForTesting(
             splitID: splitID,
             ratio: 0.5
         )
-        coordinator.workspaceViewControllerForTesting.invokeEqualizeForTesting(splitID: splitID)
-        coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs)
+
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test
+    func workspacePersistenceIgnoresInvalidAndFailedTransactionalMutations() throws {
+        let sourceWorkspace = Workspace(name: "Source")
+        let destinationWorkspace = Workspace(name: "Destination")
+        let store = try WorkspaceStore(
+            workspaces: [sourceWorkspace, destinationWorkspace],
+            activeWorkspaceID: sourceWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onCloseTab?(TabID())
+        coordinator.workspaceViewControllerForTesting.onMoveToWorkspace?(
+            [TabID()],
+            destinationWorkspace.id
+        )
         coordinator.failNextSplitMutationForTesting()
         #expect(throws: SplitCoordinatorError.self) {
             try coordinator.splitActivePaneForTesting(axis: .horizontal)
@@ -1291,5 +1488,9 @@ private final class WorkspacePersistenceRecorder {
 
     func reset() {
         snapshots = []
+    }
+
+    func expectSingleFinalSnapshot(from coordinator: WindowCoordinator) {
+        #expect(snapshots == [coordinator.workspaceStoreForPersistence])
     }
 }
