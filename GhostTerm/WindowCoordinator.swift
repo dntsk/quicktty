@@ -471,7 +471,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     ) throws {
         let absoluteConfigURL = configURL.standardizedFileURL
         let workingDirectory = absoluteConfigURL.deletingLastPathComponent().path
-        let command = "exec \(configEditor) \(Self.posixShellQuoted(absoluteConfigURL.path))"
+        let command = "\(configEditor) \(Self.posixShellQuoted(absoluteConfigURL.path))"
         let paneID = PaneID()
         var tabConfiguration = surfaceConfiguration
         tabConfiguration.workingDirectory = workingDirectory

@@ -40,7 +40,7 @@ struct WindowCoordinatorTabLifecycleTests {
         let workspace = try #require(store.workspace(id: store.activeWorkspaceID))
         let configTab = try #require(workspace.tabs.last)
         let expectedCommand =
-            "exec \(editor) '\(configURL.path.replacingOccurrences(of: "'", with: "'\\''"))'"
+            "\(editor) '\(configURL.path.replacingOccurrences(of: "'", with: "'\\''"))'"
 
         #expect(configSurface !== existingSurface)
         #expect(bridge.activeSurfaceCount == 2)
@@ -65,9 +65,44 @@ struct WindowCoordinatorTabLifecycleTests {
             bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.command
                 == expectedCommand
         )
+        #expect(!expectedCommand.hasPrefix("exec "))
         #expect(
             bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.initialInput == nil)
         #expect(coordinator.activeWindowForTesting?.firstResponder === configSurface)
+    }
+
+    @Test
+    func openConfigurationUsesDefaultNanoWithoutExecPrefix() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config")
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        try coordinator.openConfiguration(at: configURL)
+
+        let configSurface = try #require(coordinator.activeSurfaceForTesting)
+        let command = try #require(
+            bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.command
+        )
+        #expect(command == "nano '\(configURL.path)'")
+        #expect(!command.hasPrefix("exec "))
+        let store = coordinator.workspaceStoreForTesting
+        let workspace = try #require(store.workspace(id: store.activeWorkspaceID))
+        #expect(
+            workspace.tabs.last?.paneDescriptor(for: configSurface.paneID)?.startupCommand
+                == .custom(command)
+        )
     }
 
     @Test
