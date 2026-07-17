@@ -475,6 +475,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             isPlainCommandDigit(event)
         }
 
+        func isOpenConfigurationShortcutForTesting(_ event: NSEvent) -> Bool {
+            isOpenConfigurationShortcut(event)
+        }
+
         func isSplitPaneShortcutForTesting(_ event: NSEvent) -> Bool {
             isSplitPaneShortcut(event)
         }
@@ -931,6 +935,7 @@ extension GhosttySurfaceView {
 
         guard
             !isPlainCommandT(event),
+            !isOpenConfigurationShortcut(event),
             !isBroadcastShortcut(event),
             !isPlainCommandDigit(event),
             !isSplitPaneShortcut(event),
@@ -989,6 +994,10 @@ extension GhosttySurfaceView {
     private func isPlainCommandT(_ event: NSEvent) -> Bool {
         event.charactersIgnoringModifiers?.lowercased() == "t"
             && isPlainCommandShortcut(event)
+    }
+
+    private func isOpenConfigurationShortcut(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers == "," && isPlainCommandShortcut(event)
     }
 
     private func isBroadcastShortcut(_ event: NSEvent) -> Bool {

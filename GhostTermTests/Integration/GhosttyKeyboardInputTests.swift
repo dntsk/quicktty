@@ -250,6 +250,82 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func commandCommaReturnsToAppKitBeforeGhosttyBindingsWhileModifiedCommaRemainsBindable()
+        throws
+    {
+        let config = try KeyboardShortcutConfig(
+            contents: "keybind = cmd+Comma=ignore\n"
+                + "keybind = cmd+shift+Comma=ignore\n"
+                + "keybind = cmd+opt+Comma=ignore\n"
+                + "keybind = cmd+ctrl+Comma=ignore\n"
+        )
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        let commandComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43
+        )
+        let commandCapsLockComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .capsLock],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 2
+        )
+        let commandShiftComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .shift],
+            characters: "<",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 3
+        )
+        let commandOptionComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 4
+        )
+        let commandControlComma = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .control],
+            characters: ",",
+            charactersIgnoringModifiers: ",",
+            keyCode: 43,
+            timestamp: 5
+        )
+
+        #expect(surface.isOpenConfigurationShortcutForTesting(commandComma))
+        #expect(surface.isOpenConfigurationShortcutForTesting(commandCapsLockComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandShiftComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandOptionComma))
+        #expect(!surface.isOpenConfigurationShortcutForTesting(commandControlComma))
+
+        let initialRouteCount = bridge.inputObservationsForTesting.count
+        #expect(!surface.performKeyEquivalent(with: commandComma))
+        #expect(!surface.performKeyEquivalent(with: commandCapsLockComma))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
+        #expect(surface.inputObservationsForTesting.isEmpty)
+
+        #expect(surface.performKeyEquivalent(with: commandShiftComma))
+        #expect(surface.performKeyEquivalent(with: commandOptionComma))
+        #expect(surface.performKeyEquivalent(with: commandControlComma))
+        #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 3)
+    }
+
+    @Test
     func commandBReturnsToAppKitBeforeGhosttyBindingsWhileModifiedBRemainsBindable() throws {
         let config = try KeyboardShortcutConfig(
             contents: "keybind = cmd+KeyB=ignore\n"

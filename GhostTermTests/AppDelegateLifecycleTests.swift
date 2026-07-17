@@ -13,6 +13,15 @@ private final class NewTabMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class OpenConfigurationMenuActionTarget: NSObject {
+    private(set) var invocationCount = 0
+
+    @objc func openConfiguration() {
+        invocationCount += 1
+    }
+}
+
+@MainActor
 private final class TabSelectionMenuActionTarget: NSObject {
     private(set) var selectedIndices: [Int] = []
 
@@ -120,6 +129,43 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func startupWorkspaceSelectionFollowsConfigWithoutChangingSavedFrame() throws {
+        let paneID = PaneID()
+        let tab = TerminalTab(
+            title: "Saved",
+            pane: TerminalPaneDescriptor(id: paneID, cwd: "/tmp/saved")
+        )
+        let workspace = Workspace(name: "Saved", tabs: [tab], activeTabID: tab.id)
+        let savedStore = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let frame = try #require(NormalWindowFrame(x: 12, y: 34, width: 900, height: 600))
+        let applicationState = ApplicationState(
+            workspaceStore: savedStore,
+            normalWindowFrame: frame
+        )
+        var restoringConfig = GhostTermConfig()
+        restoringConfig.restoreWorkspaces = true
+        var freshConfig = restoringConfig
+        freshConfig.restoreWorkspaces = false
+
+        #expect(
+            AppDelegate.initialWorkspaceStore(
+                applicationState: applicationState,
+                config: restoringConfig
+            ) == savedStore
+        )
+        #expect(
+            AppDelegate.initialWorkspaceStore(
+                applicationState: applicationState,
+                config: freshConfig
+            ) != savedStore
+        )
+        #expect(applicationState.normalWindowFrame == frame)
+    }
+
+    @Test
     func newTabMenuItemUsesCommandTAndAppDelegateAction() {
         let delegate = AppDelegate()
         let item = AppDelegate.makeNewTabMenuItem(target: delegate)
@@ -129,6 +175,88 @@ struct AppDelegateLifecycleTests {
         #expect(item.keyEquivalentModifierMask == [.command])
         #expect(item.target === delegate)
         #expect(item.action == AppDelegate.newTabMenuItemAction)
+    }
+
+    @Test
+    func openConfigurationMenuItemUsesCommandCommaAndAppDelegateAction() {
+        let delegate = AppDelegate()
+        let item = AppDelegate.makeOpenConfigurationMenuItem(target: delegate)
+
+        #expect(item.title == "Open Configuration…")
+        #expect(item.keyEquivalent == ",")
+        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(item.target === delegate)
+        #expect(item.action == AppDelegate.openConfigurationMenuItemAction)
+    }
+
+    @Test
+    func openConfigurationMenuInstallerCreatesApplicationMenuAndDispatchesAction() throws {
+        let target = OpenConfigurationMenuActionTarget()
+        let mainMenu = AppDelegate.installOpenConfigurationMenuItem(
+            in: nil,
+            target: target,
+            action: #selector(OpenConfigurationMenuActionTarget.openConfiguration)
+        )
+        let applicationMenu = mainMenu.item(withTitle: "GhostTerm")?.submenu
+        let item = try #require(applicationMenu?.item(withTitle: "Open Configuration…"))
+
+        #expect(applicationMenu?.items.count == 1)
+        #expect(item.action == #selector(OpenConfigurationMenuActionTarget.openConfiguration))
+        #expect(item.keyEquivalent == ",")
+        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(item.target === target)
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        #expect(target.invocationCount == 1)
+    }
+
+    @Test
+    func openConfigurationMenuInstallerIsIdempotentAndPreservesForeignModifiedCommas() throws {
+        let target = OpenConfigurationMenuActionTarget()
+        let mainMenu = NSMenu()
+        let applicationItem = NSMenuItem(title: "GhostTerm", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "GhostTerm")
+        applicationItem.submenu = applicationMenu
+        mainMenu.addItem(applicationItem)
+        let commandComma = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: ",")
+        commandComma.keyEquivalentModifierMask = [.command]
+        let titledDuplicate = NSMenuItem(
+            title: "Open Configuration…",
+            action: nil,
+            keyEquivalent: "x"
+        )
+        let commandShiftComma = NSMenuItem(title: "Shift", action: nil, keyEquivalent: ",")
+        commandShiftComma.keyEquivalentModifierMask = [.command, .shift]
+        let commandOptionComma = NSMenuItem(title: "Option", action: nil, keyEquivalent: ",")
+        commandOptionComma.keyEquivalentModifierMask = [.command, .option]
+        let commandControlComma = NSMenuItem(title: "Control", action: nil, keyEquivalent: ",")
+        commandControlComma.keyEquivalentModifierMask = [.command, .control]
+        [
+            commandComma,
+            titledDuplicate,
+            commandShiftComma,
+            commandOptionComma,
+            commandControlComma,
+        ].forEach(applicationMenu.addItem)
+
+        for _ in 0..<2 {
+            AppDelegate.installOpenConfigurationMenuItem(
+                in: mainMenu,
+                target: target,
+                action: #selector(OpenConfigurationMenuActionTarget.openConfiguration)
+            )
+        }
+
+        let item = try #require(applicationMenu.item(withTitle: "Open Configuration…"))
+        #expect(applicationMenu.items.count == 4)
+        #expect(applicationMenu.items.filter { $0.title == "Open Configuration…" }.count == 1)
+        #expect(item === commandComma)
+        #expect(item.action == #selector(OpenConfigurationMenuActionTarget.openConfiguration))
+        #expect(item.keyEquivalent == ",")
+        #expect(item.keyEquivalentModifierMask == [.command])
+        #expect(item.target === target)
+        #expect(applicationMenu.items.contains { $0 === commandShiftComma })
+        #expect(applicationMenu.items.contains { $0 === commandOptionComma })
+        #expect(applicationMenu.items.contains { $0 === commandControlComma })
     }
 
     @Test

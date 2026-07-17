@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 presentationMode: config.presentationMode,
                 normalWindowFrame: applicationState.normalWindowFrame,
                 quakeConfiguration: quakeConfiguration(for: config),
+                initialWorkspaceStore: Self.initialWorkspaceStore(
+                    applicationState: applicationState,
+                    config: config
+                ),
                 persistPresentationMode: { [weak self] mode in
                     do {
                         try self?.configController?.updatePresentationMode(mode)
@@ -55,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             windowCoordinator.applyConfiguration(config)
             try windowCoordinator.start()
             installNewTabMenuItem()
+            installOpenConfigurationMenuItem()
             installSplitPaneMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
@@ -125,6 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return updatedState
     }
 
+    static func initialWorkspaceStore(
+        applicationState: ApplicationState,
+        config: GhostTermConfig
+    ) -> WorkspaceStore {
+        config.restoreWorkspaces ? applicationState.workspaceStore : WorkspaceStore()
+    }
+
     static func shouldTerminateAfterLastWindowClosed(
         isRunningHostedTests: Bool,
         presentationMode: PresentationMode?
@@ -134,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
+    static let openConfigurationMenuItemAction = #selector(AppDelegate.openConfiguration)
     static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
@@ -186,6 +199,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || (item.keyEquivalent.lowercased() == "t"
                 && item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
                     == [.command])
+    }
+
+    static func makeOpenConfigurationMenuItem(
+        target: AnyObject,
+        action: Selector = openConfigurationMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Open Configuration…", action: action, keyEquivalent: ",")
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installOpenConfigurationMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = openConfigurationMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let applicationMenu = applicationMenu(in: mainMenu)
+        let canonicalItems = applicationMenu.items.filter(isCanonicalOpenConfigurationMenuItem)
+        guard let canonicalItem = canonicalItems.first else {
+            applicationMenu.addItem(makeOpenConfigurationMenuItem(target: target, action: action))
+            return mainMenu
+        }
+
+        canonicalItem.title = "Open Configuration…"
+        canonicalItem.action = action
+        canonicalItem.keyEquivalent = ","
+        canonicalItem.keyEquivalentModifierMask = [.command]
+        canonicalItem.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            applicationMenu.removeItem(duplicate)
+        }
+        return mainMenu
+    }
+
+    private static func isCanonicalOpenConfigurationMenuItem(_ item: NSMenuItem) -> Bool {
+        item.title == "Open Configuration…"
+            || (item.keyEquivalent == ","
+                && normalizedShortcutModifiers(for: item) == [.command])
     }
 
     static func makeSplitPaneMenuItem(
@@ -442,6 +496,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 && normalizedShortcutModifiers(for: item) == [.command])
     }
 
+    private static func applicationMenu(in mainMenu: NSMenu) -> NSMenu {
+        if let applicationItem = mainMenu.item(withTitle: "GhostTerm") {
+            if let existingApplicationMenu = applicationItem.submenu {
+                return existingApplicationMenu
+            }
+            let newApplicationMenu = NSMenu(title: "GhostTerm")
+            applicationItem.submenu = newApplicationMenu
+            return newApplicationMenu
+        }
+
+        let applicationItem = NSMenuItem(title: "GhostTerm", action: nil, keyEquivalent: "")
+        let newApplicationMenu = NSMenu(title: "GhostTerm")
+        applicationItem.submenu = newApplicationMenu
+        mainMenu.insertItem(applicationItem, at: 0)
+        return newApplicationMenu
+    }
+
     private static func fileMenu(in mainMenu: NSMenu) -> NSMenu {
         if let fileItem = mainMenu.item(withTitle: "File") {
             if let existingFileMenu = fileItem.submenu {
@@ -544,6 +615,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func createNewTab() {
         windowCoordinator?.createNewTab()
+    }
+
+    @objc private func openConfiguration() {
+        guard let configURL = configController?.configURL else { return }
+        do {
+            try windowCoordinator?.openConfiguration(at: configURL)
+        } catch {
+            logConfigurationError(error)
+        }
     }
 
     @objc private func splitRight() {
@@ -660,6 +740,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installNewTabMenuItem() {
         let mainMenu = Self.installNewTabMenuItem(in: NSApp.mainMenu, target: self)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installOpenConfigurationMenuItem() {
+        let mainMenu = Self.installOpenConfigurationMenuItem(in: NSApp.mainMenu, target: self)
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }

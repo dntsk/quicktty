@@ -23,6 +23,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
     private var isCreatingReplacementShell = false
     private var activeHotKey = HotKeyDescriptor(key: .f12)
+    private var configEditor = "nano"
 
     #if DEBUG
         private var failsNextSplitMutationForTesting = false
@@ -345,44 +346,99 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         try createShellTab(in: workspaceID, refreshPresentation: true)
     }
 
+    func openConfiguration(at configURL: URL) throws {
+        try createConfigurationTab(
+            at: configURL,
+            in: workspaceStore.activeWorkspaceID
+        )
+    }
+
     private func createShellTab(
         in workspaceID: WorkspaceID? = nil,
         refreshPresentation: Bool,
         surfaceContext: GhosttySurfaceConfiguration.Context = .newTab
     ) throws {
-        let destinationWorkspaceID = workspaceID ?? workspaceStore.activeWorkspaceID
         let paneID = PaneID()
         var tabConfiguration = surfaceConfiguration
         tabConfiguration.context = surfaceContext
-        let surface = try ghosttyBridge.makeSurface(
-            id: paneID,
-            configuration: tabConfiguration
-        ) { [weak self] paneID, processAlive in
-            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-        }
-        let startupCommand = surfaceConfiguration.command.map(StartupCommand.custom) ?? .shell
         let descriptor = TerminalPaneDescriptor(
             id: paneID,
             cwd: surfaceConfiguration.workingDirectory
                 ?? FileManager.default.homeDirectoryForCurrentUser.path,
-            startupCommand: startupCommand
+            startupCommand: surfaceConfiguration.command.map(StartupCommand.custom) ?? .shell
         )
-        let tab = TerminalTab(title: "Shell", pane: descriptor)
-        var updatedStore = workspaceStore
+        try createTab(
+            title: "Shell",
+            paneID: paneID,
+            descriptor: descriptor,
+            configuration: tabConfiguration,
+            in: workspaceID ?? workspaceStore.activeWorkspaceID,
+            refreshPresentation: refreshPresentation
+        )
+    }
+
+    private func createConfigurationTab(
+        at configURL: URL,
+        in workspaceID: WorkspaceID
+    ) throws {
+        let absoluteConfigURL = configURL.standardizedFileURL
+        let workingDirectory = absoluteConfigURL.deletingLastPathComponent().path
+        let command = "exec \(configEditor) \(Self.posixShellQuoted(absoluteConfigURL.path))"
+        let paneID = PaneID()
+        var tabConfiguration = surfaceConfiguration
+        tabConfiguration.workingDirectory = workingDirectory
+        tabConfiguration.command = command
+        tabConfiguration.initialInput = nil
+        tabConfiguration.context = .newTab
+        let descriptor = TerminalPaneDescriptor(
+            id: paneID,
+            cwd: workingDirectory,
+            startupCommand: .custom(command)
+        )
+        try createTab(
+            title: "Config",
+            paneID: paneID,
+            descriptor: descriptor,
+            configuration: tabConfiguration,
+            in: workspaceID,
+            refreshPresentation: true
+        )
+    }
+
+    private func createTab(
+        title: String,
+        paneID: PaneID,
+        descriptor: TerminalPaneDescriptor,
+        configuration: GhosttySurfaceConfiguration,
+        in workspaceID: WorkspaceID,
+        refreshPresentation: Bool
+    ) throws {
+        let surface = try ghosttyBridge.makeSurface(
+            id: paneID,
+            configuration: configuration
+        ) { [weak self] paneID, processAlive in
+            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+        }
+        let tab = TerminalTab(title: title, pane: descriptor)
+        var candidate = workspaceStore
 
         do {
-            try updatedStore.addTab(tab, to: destinationWorkspaceID)
-            try updatedStore.activateTab(tab.id, in: destinationWorkspaceID)
+            try candidate.addTab(tab, to: workspaceID)
+            try candidate.activateTab(tab.id, in: workspaceID)
         } catch {
             ghosttyBridge.closeSurface(id: paneID)
             throw error
         }
 
         surfaces[paneID] = surface
-        workspaceStore = updatedStore
+        workspaceStore = candidate
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
         }
+    }
+
+    private static func posixShellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func restoreWorkspaceSurfaces() throws {
@@ -425,6 +481,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     func applyConfiguration(_ config: GhostTermConfig) {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         activeHotKey = config.globalToggle
+        configEditor = config.configEditor
         let geometry =
             QuakeWindowGeometry(
                 heightFraction: config.quakeHeight,
@@ -826,6 +883,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         func activateTabForTesting(_ tabID: TabID) {
             try? workspaceStore.activateTab(tabID, in: workspaceStore.activeWorkspaceID)
             refreshWorkspacePresentation(focusTerminal: true)
+        }
+
+        func openConfigurationForTesting(
+            at configURL: URL,
+            in workspaceID: WorkspaceID
+        ) throws {
+            try createConfigurationTab(at: configURL, in: workspaceID)
         }
 
         func splitActivePaneForTesting(axis: SplitAxis) throws {

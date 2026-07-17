@@ -7,6 +7,119 @@ import Testing
 @MainActor
 struct WindowCoordinatorTabLifecycleTests {
     @Test
+    func openConfigurationCreatesFocusedEditorTabWithQuotedPathAndLatestEditor() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "GhostTerm Config's \(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config file")
+        let editor = "/bin/sh -c 'exec /bin/cat'"
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let existingSurface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceIDsBeforeOpening = coordinator.surfaceIDsForTesting
+        var initialConfig = GhostTermConfig()
+        initialConfig.configEditor = "nano"
+        coordinator.applyConfiguration(initialConfig)
+        var latestConfig = initialConfig
+        latestConfig.configEditor = editor
+        coordinator.applyConfiguration(latestConfig)
+
+        try coordinator.openConfiguration(at: configURL)
+
+        let configSurface = try #require(coordinator.activeSurfaceForTesting)
+        let store = coordinator.workspaceStoreForTesting
+        let workspace = try #require(store.workspace(id: store.activeWorkspaceID))
+        let configTab = try #require(workspace.tabs.last)
+        let expectedCommand =
+            "exec \(editor) '\(configURL.path.replacingOccurrences(of: "'", with: "'\\''"))'"
+
+        #expect(configSurface !== existingSurface)
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(coordinator.surfaceIDsForTesting.count == surfaceIDsBeforeOpening.count + 1)
+        #expect(coordinator.surfaceForTesting(id: existingSurface.paneID) === existingSurface)
+        #expect(configTab.title == "Config")
+        #expect(configTab.activePaneID == configSurface.paneID)
+        #expect(
+            configTab.paneDescriptor(for: configSurface.paneID)
+                == TerminalPaneDescriptor(
+                    id: configSurface.paneID,
+                    cwd: directory.path,
+                    startupCommand: .custom(expectedCommand)
+                )
+        )
+        #expect(bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.context == .newTab)
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.workingDirectory
+                == directory.path
+        )
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.command
+                == expectedCommand
+        )
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: configSurface.paneID)?.initialInput == nil)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === configSurface)
+    }
+
+    @Test
+    func openConfigurationRollsBackStoreAndRegistryForMissingDestinationWorkspace() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let storeBeforeFailure = coordinator.workspaceStoreForTesting
+        let surfaceIDsBeforeFailure = coordinator.surfaceIDsForTesting
+        let missingWorkspaceID = WorkspaceID()
+
+        #expect(throws: WorkspaceError.workspaceNotFound(missingWorkspaceID)) {
+            try coordinator.openConfigurationForTesting(
+                at: URL(fileURLWithPath: "/tmp/ghostterm-config"),
+                in: missingWorkspaceID
+            )
+        }
+
+        #expect(coordinator.workspaceStoreForTesting == storeBeforeFailure)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDsBeforeFailure)
+        #expect(bridge.activeSurfaceIDs == surfaceIDsBeforeFailure)
+    }
+
+    @Test
+    func openConfigurationRollsBackStoreAndRegistryWhenSurfaceCreationFails() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let storeBeforeFailure = coordinator.workspaceStoreForTesting
+        let surfaceIDsBeforeFailure = coordinator.surfaceIDsForTesting
+        bridge.failNextSurfaceCreationForTesting()
+
+        #expect(throws: GhosttyBridgeError.self) {
+            try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/ghostterm-config"))
+        }
+
+        #expect(coordinator.workspaceStoreForTesting == storeBeforeFailure)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDsBeforeFailure)
+        #expect(bridge.activeSurfaceIDs == surfaceIDsBeforeFailure)
+    }
+
+    @Test
     func createsDistinctLiveSurfacesAndSwitchesBetweenThem() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
