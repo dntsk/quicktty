@@ -106,6 +106,41 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func persistedTabReorderKeepsExistingSurfaces() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        let workspace = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )
+        )
+        let expectedOrder = workspace.tabs.map(\.id).reversed()
+
+        persistence.reset()
+        coordinator.workspaceViewControllerForTesting.onReorderTabs?(Array(expectedOrder))
+
+        #expect(
+            coordinator.workspaceStoreForTesting.workspace(id: workspace.id)?.tabs.map(\.id)
+                == Array(expectedOrder)
+        )
+        persistence.expectSingleFinalSnapshot(from: coordinator)
+        #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
+        #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
+        #expect(bridge.activeSurfaceIDs == coordinator.surfaceIDsForTesting)
+    }
+
+    @Test
     func workspacePersistenceReportsPaneFocusAndProcessExitExactlyOnce() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

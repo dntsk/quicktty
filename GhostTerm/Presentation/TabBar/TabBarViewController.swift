@@ -136,6 +136,23 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         var displayedTabsForTesting: [TerminalTab] {
             tabs
         }
+
+        var selectedTabIDsInOrderForTesting: [TabID] {
+            selection.selectedTabIDsInOrder
+        }
+
+        var activeTabIDForTesting: TabID? {
+            selection.activeTabID
+        }
+
+        var collectionViewForTesting: NSCollectionView {
+            loadViewIfNeeded()
+            return collectionView
+        }
+
+        func selectForTesting(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
+            select(tabID, gesture: gesture)
+        }
     #endif
 
     func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
@@ -196,6 +213,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         _ collectionView: NSCollectionView,
         pasteboardWriterForItemAt indexPath: IndexPath
     ) -> (any NSPasteboardWriting)? {
+        guard indexPath.section == 0, tabs.indices.contains(indexPath.item) else { return nil }
         let item = NSPasteboardItem()
         item.setString(tabs[indexPath.item].id.rawValue.uuidString, forType: .ghostTermTab)
         return item
@@ -207,8 +225,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         proposedIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
         dropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>
     ) -> NSDragOperation {
+        guard localDraggedTabID(from: draggingInfo) != nil else { return [] }
         dropOperation.pointee = .before
-        return draggingInfo.draggingSource as? NSCollectionView === collectionView ? .move : []
+        return .move
     }
 
     func collectionView(
@@ -217,18 +236,39 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         indexPath: IndexPath,
         dropOperation: NSCollectionView.DropOperation
     ) -> Bool {
-        guard let rawID = draggingInfo.draggingPasteboard.string(forType: .ghostTermTab),
-            let uuid = UUID(uuidString: rawID)
+        guard
+            dropOperation == .before,
+            indexPath.section == 0,
+            (0...tabs.count).contains(indexPath.item),
+            let draggedID = localDraggedTabID(from: draggingInfo)
         else { return false }
 
-        let draggedID = TabID(rawValue: uuid)
         if !selection.selectedTabIDs.contains(draggedID) {
             selection.select(draggedID, gesture: .click)
         }
+        let currentOrder = selection.orderedTabIDs
         let reorderedIDs = selection.reorderSelection(to: indexPath.item)
+        guard reorderedIDs != currentOrder else { return true }
+
+        tabs = reorderedIDs.compactMap { tabID in
+            tabs.first { $0.id == tabID }
+        }
         onReorderTabs?(reorderedIDs)
         collectionView.reloadData()
         return true
+    }
+
+    private func localDraggedTabID(from draggingInfo: any NSDraggingInfo) -> TabID? {
+        guard
+            let source = draggingInfo.draggingSource as? NSCollectionView,
+            source === collectionView,
+            let rawID = draggingInfo.draggingPasteboard.string(forType: .ghostTermTab),
+            let uuid = UUID(uuidString: rawID)
+        else { return nil }
+
+        let draggedID = TabID(rawValue: uuid)
+        guard tabs.contains(where: { $0.id == draggedID }) else { return nil }
+        return draggedID
     }
 
     private func select(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
@@ -340,7 +380,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 }
 
 extension NSPasteboard.PasteboardType {
-    fileprivate static let ghostTermTab = NSPasteboard.PasteboardType(
+    static let ghostTermTab = NSPasteboard.PasteboardType(
         "com.dntsk.GhostTerm.tab"
     )
 }

@@ -121,6 +121,45 @@ struct TabSelectionModelTests {
         #expect(model.activeTabID == ids[2])
     }
 
+    @Test
+    func reorderMovesSelectedBlockToBeginningAndPreservesActiveTab() {
+        let ids = [tabID(1), tabID(2), tabID(3), tabID(4)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[1])
+        model.select(ids[2], gesture: .commandClick)
+
+        let reordered = model.reorderSelection(to: 0)
+
+        #expect(reordered == [ids[1], ids[2], ids[0], ids[3]])
+        #expect(model.selectedTabIDsInOrder == [ids[1], ids[2]])
+        #expect(model.activeTabID == ids[2])
+    }
+
+    @Test
+    func reorderAdjustsDestinationForNonContiguousSelectedTabs() {
+        let ids = [tabID(1), tabID(2), tabID(3), tabID(4), tabID(5)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[1])
+        model.select(ids[3], gesture: .commandClick)
+
+        let reordered = model.reorderSelection(to: ids.count)
+
+        #expect(reordered == [ids[0], ids[2], ids[4], ids[1], ids[3]])
+        #expect(model.selectedTabIDsInOrder == [ids[1], ids[3]])
+        #expect(model.activeTabID == ids[3])
+    }
+
+    @Test
+    func reorderAtTheSelectedBlockEffectivePositionIsANoOp() {
+        let ids = [tabID(1), tabID(2), tabID(3), tabID(4)]
+        var model = TabSelectionModel(tabIDs: ids, activeTabID: ids[1])
+        model.select(ids[2], gesture: .commandClick)
+        let before = model
+
+        let reordered = model.reorderSelection(to: 3)
+
+        #expect(reordered == ids)
+        #expect(model == before)
+    }
+
     private func tabID(_ value: Int) -> TabID {
         TabID(
             rawValue: UUID(

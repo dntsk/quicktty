@@ -323,6 +323,200 @@ struct WorkspacePresentationTests {
         #expect(layout.sectionInset.bottom == 0)
     }
 
+    @Test
+    func tabBarOnlyValidatesCurrentLocalTabDragsBeforeItems() throws {
+        let tabs = [
+            TerminalTab(
+                title: "One",
+                pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+            ),
+            TerminalTab(
+                title: "Two",
+                pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+            ),
+        ]
+        let tabBar = TabBarViewController()
+        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+        let collectionView = try #require(tabBar.view.subviews.first as? NSCollectionView)
+
+        var proposedIndexPath = NSIndexPath(forItem: 1, inSection: 0)
+        var dropOperation = NSCollectionView.DropOperation.on
+        let validDrag = TabDraggingInfo(
+            source: collectionView,
+            payload: tabs[0].id.rawValue.uuidString
+        )
+        #expect(
+            tabBar.collectionView(
+                collectionView,
+                validateDrop: validDrag,
+                proposedIndexPath: &proposedIndexPath,
+                dropOperation: &dropOperation
+            ) == .move
+        )
+        #expect(dropOperation == .before)
+
+        for invalidDrag in [
+            TabDraggingInfo(source: nil, payload: tabs[0].id.rawValue.uuidString),
+            TabDraggingInfo(source: collectionView, payload: TabID().rawValue.uuidString),
+            TabDraggingInfo(source: collectionView, payload: "not-a-tab-id"),
+        ] {
+            #expect(
+                tabBar.collectionView(
+                    collectionView,
+                    validateDrop: invalidDrag,
+                    proposedIndexPath: &proposedIndexPath,
+                    dropOperation: &dropOperation
+                ) == []
+            )
+        }
+    }
+
+    @Test
+    func tabItemSelectsBeforeForwardingMouseDownToTheResponderChain() throws {
+        let background = TabItemBackgroundView()
+        let forwardingResponder = MouseDownForwardingResponder()
+        var gestures: [TabSelectionModel.Gesture] = []
+        background.selectHandler = { gestures.append($0) }
+        background.nextResponder = forwardingResponder
+        let event = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: .zero,
+                modifierFlags: [.command],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+
+        background.mouseDown(with: event)
+
+        #expect(gestures == [.commandClick])
+        #expect(forwardingResponder.mouseDownCount == 1)
+    }
+
+    @Test
+    func tabBarAcceptsLocalSelectedBlockAndUpdatesDisplayedOrderOnce() throws {
+        let tabs = Self.makeTabs(count: 5)
+        let tabBar = TabBarViewController()
+        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+        let collectionView = tabBar.collectionViewForTesting
+        tabBar.selectForTesting(tabs[1].id, gesture: .commandClick)
+        tabBar.selectForTesting(tabs[3].id, gesture: .commandClick)
+        var reorderedOrders: [[TabID]] = []
+        tabBar.onReorderTabs = { reorderedOrders.append($0) }
+
+        #expect(
+            tabBar.collectionView(
+                collectionView,
+                acceptDrop: TabDraggingInfo(
+                    source: collectionView,
+                    payload: tabs[1].id.rawValue.uuidString
+                ),
+                indexPath: IndexPath(item: tabs.count, section: 0),
+                dropOperation: .before
+            )
+        )
+
+        let expectedOrder = [tabs[2].id, tabs[4].id, tabs[0].id, tabs[1].id, tabs[3].id]
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == expectedOrder)
+        #expect(reorderedOrders == [expectedOrder])
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[0].id, tabs[1].id, tabs[3].id])
+        #expect(tabBar.activeTabIDForTesting == tabs[3].id)
+    }
+
+    @Test
+    func tabBarSelectsDraggedTabAndMovesItBeforeTheDropDestination() throws {
+        let tabs = Self.makeTabs(count: 3)
+        let tabBar = TabBarViewController()
+        tabBar.apply(tabs: tabs, activeTabID: tabs[0].id, destinations: [])
+        let collectionView = tabBar.collectionViewForTesting
+        var reorderedOrders: [[TabID]] = []
+        tabBar.onReorderTabs = { reorderedOrders.append($0) }
+        let expectedOrder = [tabs[2].id, tabs[0].id, tabs[1].id]
+
+        #expect(
+            tabBar.collectionView(
+                collectionView,
+                acceptDrop: TabDraggingInfo(
+                    source: collectionView,
+                    payload: tabs[2].id.rawValue.uuidString
+                ),
+                indexPath: IndexPath(item: 0, section: 0),
+                dropOperation: .before
+            )
+        )
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == expectedOrder)
+        #expect(reorderedOrders == [expectedOrder])
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tabs[2].id])
+        #expect(tabBar.activeTabIDForTesting == tabs[2].id)
+    }
+
+    @Test
+    func tabBarRejectsInvalidDropsAndDoesNotNotifyForEffectiveNoOp() throws {
+        let tabs = Self.makeTabs(count: 3)
+        let tabBar = TabBarViewController()
+        tabBar.apply(tabs: tabs, activeTabID: tabs[1].id, destinations: [])
+        let collectionView = tabBar.collectionViewForTesting
+        let validDrag = TabDraggingInfo(
+            source: collectionView,
+            payload: tabs[1].id.rawValue.uuidString
+        )
+        var reorderedOrders: [[TabID]] = []
+        tabBar.onReorderTabs = { reorderedOrders.append($0) }
+
+        for (indexPath, dropOperation) in [
+            (IndexPath(item: 0, section: 1), NSCollectionView.DropOperation.before),
+            (IndexPath(item: tabs.count + 1, section: 0), .before),
+            (IndexPath(item: 1, section: 0), .on),
+        ] {
+            #expect(
+                !tabBar.collectionView(
+                    collectionView,
+                    acceptDrop: validDrag,
+                    indexPath: indexPath,
+                    dropOperation: dropOperation
+                )
+            )
+        }
+        for invalidDrag in [
+            TabDraggingInfo(source: nil, payload: tabs[1].id.rawValue.uuidString),
+            TabDraggingInfo(source: collectionView, payload: TabID().rawValue.uuidString),
+        ] {
+            #expect(
+                !tabBar.collectionView(
+                    collectionView,
+                    acceptDrop: invalidDrag,
+                    indexPath: IndexPath(item: 0, section: 0),
+                    dropOperation: .before
+                )
+            )
+        }
+
+        #expect(
+            tabBar.collectionView(
+                collectionView,
+                acceptDrop: validDrag,
+                indexPath: IndexPath(item: 2, section: 0),
+                dropOperation: .before
+            )
+        )
+        #expect(tabBar.displayedTabsForTesting.map(\.id) == tabs.map(\.id))
+        #expect(reorderedOrders.isEmpty)
+    }
+
+    private static func makeTabs(count: Int) -> [TerminalTab] {
+        (1...count).map { index in
+            TerminalTab(
+                title: "Tab \(index)",
+                pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+            )
+        }
+    }
+
     private func containsNewTabControl(in view: NSView) -> Bool {
         if view.identifier?.rawValue == "new-tab-button"
             || (view as? NSButton)?.accessibilityLabel() == "New Tab"
@@ -331,4 +525,58 @@ struct WorkspacePresentationTests {
         }
         return view.subviews.contains { containsNewTabControl(in: $0) }
     }
+}
+
+@MainActor
+private final class MouseDownForwardingResponder: NSResponder {
+    private(set) var mouseDownCount = 0
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownCount += 1
+    }
+}
+
+private final class TabDraggingInfo: NSObject, @MainActor NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingSource: Any?
+
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .move }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSequenceNumber: Int { 0 }
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+
+    @MainActor
+    init(source: AnyObject?, payload: String?) {
+        draggingSource = source
+        draggingPasteboard = NSPasteboard(
+            name: NSPasteboard.Name("GhostTermTests.TabDraggingInfo.\(UUID().uuidString)")
+        )
+        super.init()
+        draggingPasteboard.clearContents()
+        if let payload {
+            draggingPasteboard.setString(payload, forType: .ghostTermTab)
+        }
+    }
+
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+
+    override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? {
+        nil
+    }
+
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions,
+        for view: NSView?,
+        classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+        using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {}
+
+    func resetSpringLoading() {}
 }

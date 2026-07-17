@@ -42,6 +42,47 @@ struct StateStoreTests {
     }
 
     @Test
+    func savedTabOrderRoundTrips() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let first = TerminalTab(
+            id: Self.tabID(201),
+            title: "First",
+            pane: TerminalPaneDescriptor(id: Self.paneID(201), cwd: fixture.homeURL.path)
+        )
+        let second = TerminalTab(
+            id: Self.tabID(202),
+            title: "Second",
+            pane: TerminalPaneDescriptor(id: Self.paneID(202), cwd: fixture.homeURL.path)
+        )
+        let third = TerminalTab(
+            id: Self.tabID(203),
+            title: "Third",
+            pane: TerminalPaneDescriptor(id: Self.paneID(203), cwd: fixture.homeURL.path)
+        )
+        let workspace = Workspace(
+            id: Self.workspaceID(201),
+            name: "Ordered",
+            tabs: [first, second, third],
+            activeTabID: second.id
+        )
+        var workspaceStore = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let expectedOrder = [third.id, first.id, second.id]
+        try workspaceStore.reorderTabs(expectedOrder, in: workspace.id)
+        let store = try fixture.makeStore()
+
+        try store.saveNow(ApplicationState(workspaceStore: workspaceStore))
+
+        let restored = try store.load()
+        #expect(
+            restored.workspaceStore.workspace(id: workspace.id)?.tabs.map(\.id) == expectedOrder)
+        #expect(restored.workspaceStore.workspace(id: workspace.id)?.activeTabID == second.id)
+    }
+
+    @Test
     func decodingIgnoresUnknownFieldsThroughoutVersionOneSnapshot() throws {
         var object = try jsonObject(Data(Self.versionOneFixture.utf8))
         object["futureTopLevel"] = true

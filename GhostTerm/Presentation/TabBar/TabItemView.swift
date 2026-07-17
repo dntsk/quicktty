@@ -179,7 +179,7 @@ final class TabItemView: NSCollectionViewItem {
 }
 
 @MainActor
-private final class TabItemBackgroundView: NSView {
+final class TabItemBackgroundView: NSView {
     var isActive = false {
         didSet { needsDisplay = true }
     }
@@ -271,6 +271,7 @@ private final class TabItemBackgroundView: NSView {
             gesture = .click
         }
         selectHandler?(gesture)
+        super.mouseDown(with: event)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

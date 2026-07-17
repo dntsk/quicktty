@@ -93,6 +93,7 @@ struct TabSelectionModel: Equatable, Sendable {
             remaining.count
         )
         remaining.insert(contentsOf: moving, at: insertionIndex)
+        guard remaining != orderedTabIDs else { return orderedTabIDs }
         orderedTabIDs = remaining
         return orderedTabIDs
     }
