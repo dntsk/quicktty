@@ -990,6 +990,24 @@ struct WorkspaceStoreTests {
     }
 
     @Test
+    func reorderTabsRejectsUnknownTabIDWithoutMutation() throws {
+        let workspaceID = workspaceID(1)
+        let first = makeTab(1)
+        let second = makeTab(2)
+        let unknown = tabID(999)
+        var store = try WorkspaceStore(
+            workspaces: [Workspace(id: workspaceID, name: "Default", tabs: [first, second])],
+            activeWorkspaceID: workspaceID
+        )
+        let beforeFailure = store
+
+        expectError(.invalidTabOrder(workspaceID: workspaceID)) {
+            try store.reorderTabs([first.id, unknown], in: workspaceID)
+        }
+        #expect(store == beforeFailure)
+    }
+
+    @Test
     func reorderingTabsToTheSameOrderIsAcceptedWithoutMutation() throws {
         let workspaceID = workspaceID(1)
         let first = makeTab(1)
