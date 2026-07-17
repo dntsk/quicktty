@@ -5,6 +5,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     typealias ModePersistence = @MainActor (PresentationMode) -> Void
     typealias QuakeHeightPersistence = @MainActor (Double) -> Void
     typealias NormalWindowFramePersistence = @MainActor (NormalWindowFrame) -> Void
+    typealias WorkspacePersistence = @MainActor (WorkspaceStore) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
 
     private let ghosttyBridge: GhosttyBridge
@@ -15,6 +16,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
     private let persistNormalWindowFrame: NormalWindowFramePersistence
+    private let persistWorkspaceStore: WorkspacePersistence
     private let onError: ErrorHandler
     private let workspaceViewController = WorkspaceViewController()
     private let splitCoordinator = SplitCoordinator()
@@ -43,6 +45,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var presentationMode: PresentationMode { presentationController.mode }
 
+    var workspaceStoreForPersistence: WorkspaceStore { workspaceStore }
+
     var isBroadcastingActiveTab: Bool {
         activeTab?.isBroadcasting ?? false
     }
@@ -58,6 +62,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
         initialWorkspaceStore: WorkspaceStore = WorkspaceStore(),
+        persistWorkspaceStore: @escaping WorkspacePersistence = { _ in },
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         persistPresentationMode: @escaping ModePersistence = { _ in },
         persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
@@ -91,6 +96,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceStore = initialWorkspaceStore
         self.confirmationPresenter = confirmationPresenter
         self.persistNormalWindowFrame = persistNormalWindowFrame
+        self.persistWorkspaceStore = persistWorkspaceStore
         self.onError = onError
         presentationController = try! PresentationController(
             contentViewController: workspaceViewController,
@@ -110,6 +116,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
             self?.surfaceDidBecomeFirstResponder(id: paneID)
+        }
+        ghosttyBridge.surfaceWorkingDirectoryHandler = { [weak self] paneID, workingDirectory in
+            self?.surfaceWorkingDirectoryDidChange(id: paneID, workingDirectory: workingDirectory)
         }
         ghosttyBridge.inputTargetProvider = { [weak self] sourcePaneID in
             guard let self else { return [sourcePaneID] }
@@ -134,8 +143,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     isolated deinit {
+        tearDownSurfaces()
         try? hotKeyController.unregister()
         ghosttyBridge.surfaceFocusHandler = nil
+        ghosttyBridge.surfaceWorkingDirectoryHandler = nil
         ghosttyBridge.inputTargetProvider = { [$0] }
         ghosttyBridge.clipboardConfirmationHandler = nil
         if normalWindowController.window?.delegate === self {
@@ -220,6 +231,33 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
+    @discardableResult
+    private func commitWorkspaceStore(_ candidate: WorkspaceStore) -> Bool {
+        guard candidate != workspaceStore else { return false }
+        workspaceStore = candidate
+        persistWorkspaceStore(workspaceStore)
+        return true
+    }
+
+    private func surfaceWorkingDirectoryDidChange(
+        id paneID: PaneID,
+        workingDirectory: String
+    ) {
+        guard !workingDirectory.isEmpty, (workingDirectory as NSString).isAbsolutePath,
+            surfaces[paneID] != nil
+        else {
+            return
+        }
+
+        var candidate = workspaceStore
+        do {
+            try candidate.updateWorkingDirectory(workingDirectory, for: paneID)
+        } catch {
+            return
+        }
+        _ = commitWorkspaceStore(candidate)
+    }
+
     func createNewTab() {
         do {
             try createShellTab()
@@ -288,7 +326,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         surfaces[paneID] = surface
-        workspaceStore = candidate
+        _ = commitWorkspaceStore(candidate)
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -298,10 +336,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             workspace.tabs.indices.contains(index - 1)
         else { return }
 
-        try? workspaceStore.activateTab(
-            workspace.tabs[index - 1].id,
-            in: workspaceStore.activeWorkspaceID
-        )
+        var candidate = workspaceStore
+        do {
+            try candidate.activateTab(
+                workspace.tabs[index - 1].id,
+                in: candidate.activeWorkspaceID
+            )
+        } catch {
+            return
+        }
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -315,12 +359,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             return
         }
 
+        var candidate = workspaceStore
         do {
-            try workspaceStore.setBroadcasting(
+            try candidate.setBroadcasting(
                 !tab.isBroadcasting,
                 for: tabID,
                 in: workspaceID
             )
+            guard commitWorkspaceStore(candidate) else { return }
             workspaceViewController.apply(workspaceStore)
             if let surface = activePaneID.flatMap({ surfaces[$0] }), let paneID = activePaneID {
                 focus(surface, paneID: paneID)
@@ -431,7 +477,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         surfaces[paneID] = surface
-        workspaceStore = candidate
+        _ = commitWorkspaceStore(candidate)
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
         }
@@ -524,12 +570,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private func configurePresentationCallbacks() {
         workspaceViewController.onActivateWorkspace = { [weak self] workspaceID in
             guard let self else { return }
-            try? workspaceStore.activateWorkspace(workspaceID)
+            var candidate = workspaceStore
+            do {
+                try candidate.activateWorkspace(workspaceID)
+            } catch {
+                return
+            }
+            guard commitWorkspaceStore(candidate) else { return }
             refreshWorkspacePresentation(focusTerminal: true)
         }
         workspaceViewController.onActivateTab = { [weak self] tabID in
             guard let self else { return }
-            try? workspaceStore.activateTab(tabID, in: workspaceStore.activeWorkspaceID)
+            var candidate = workspaceStore
+            do {
+                try candidate.activateTab(tabID, in: candidate.activeWorkspaceID)
+            } catch {
+                return
+            }
+            guard commitWorkspaceStore(candidate) else { return }
             refreshWorkspacePresentation(focusTerminal: true)
         }
         workspaceViewController.onCloseTab = { [weak self] tabID in
@@ -599,7 +657,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces[destinationPaneID] != nil
         else { return }
 
-        workspaceStore = candidate
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -676,7 +734,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         else {
             return
         }
-        workspaceStore = candidate
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: false)
     }
 
@@ -697,7 +755,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         else {
             return
         }
-        workspaceStore = candidate
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: false)
     }
 
@@ -718,7 +776,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         else {
             return
         }
-        workspaceStore = candidate
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: false)
     }
 
@@ -741,7 +799,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                         from: sourceWorkspaceID,
                         to: destinationID
                     )
-                    workspaceStore = updatedStore
+                    guard commitWorkspaceStore(updatedStore) else {
+                        return .success(())
+                    }
                     workspaceViewController.tabBarViewController.clearSelectionAfterMove()
                     refreshWorkspacePresentation(focusTerminal: true)
                     return .success(())
@@ -761,12 +821,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func moveTabs(_ tabIDs: [TabID], to destinationWorkspaceID: WorkspaceID) {
         let sourceWorkspaceID = workspaceStore.activeWorkspaceID
+        var candidate = workspaceStore
         do {
-            try workspaceStore.moveTabs(
+            try candidate.moveTabs(
                 tabIDs,
                 from: sourceWorkspaceID,
                 to: destinationWorkspaceID
             )
+            guard commitWorkspaceStore(candidate) else { return }
             workspaceViewController.tabBarViewController.clearSelectionAfterMove()
             refreshWorkspacePresentation(focusTerminal: true)
         } catch {
@@ -776,24 +838,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func reorderTabs(_ orderedTabIDs: [TabID]) {
         let workspaceID = workspaceStore.activeWorkspaceID
-        guard
-            let workspaceIndex = workspaceStore.workspaces.firstIndex(where: {
-                $0.id == workspaceID
-            })
-        else { return }
-        let workspace = workspaceStore.workspaces[workspaceIndex]
-        guard Set(orderedTabIDs) == Set(workspace.tabs.map(\.id)) else { return }
-        let tabsByID = Dictionary(uniqueKeysWithValues: workspace.tabs.map { ($0.id, $0) })
-
-        var workspaces = workspaceStore.workspaces
-        workspaces[workspaceIndex].tabs = orderedTabIDs.compactMap { tabsByID[$0] }
-        guard
-            let reorderedStore = try? WorkspaceStore(
-                workspaces: workspaces,
-                activeWorkspaceID: workspaceStore.activeWorkspaceID
-            )
-        else { return }
-        workspaceStore = reorderedStore
+        var candidate = workspaceStore
+        do {
+            try candidate.reorderTabs(orderedTabIDs, in: workspaceID)
+        } catch {
+            return
+        }
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: false)
     }
 
@@ -833,22 +884,30 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         return true
     }
 
-    private func closeOwningTab(_ tabID: TabID) {
+    @discardableResult
+    private func closeOwningTab(_ tabID: TabID) -> Bool {
         guard
             let owner = workspaceStore.workspaces.first(where: {
                 $0.tabs.contains(where: { $0.id == tabID })
             })
-        else { return }
-        _ = try? workspaceStore.closeTab(tabID, in: owner.id)
+        else { return false }
+        var candidate = workspaceStore
+        do {
+            try candidate.closeTab(tabID, in: owner.id)
+        } catch {
+            return false
+        }
+        return commitWorkspaceStore(candidate)
     }
 
-    private func closeOwningTab(containing paneID: PaneID) {
+    @discardableResult
+    private func closeOwningTab(containing paneID: PaneID) -> Bool {
         guard
             let tabID = workspaceStore.workspaces.lazy
                 .flatMap(\.tabs)
                 .first(where: { $0.root.contains(paneID) })?.id
-        else { return }
-        closeOwningTab(tabID)
+        else { return false }
+        return closeOwningTab(tabID)
     }
 
     #if DEBUG
@@ -881,7 +940,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         func activateTabForTesting(_ tabID: TabID) {
-            try? workspaceStore.activateTab(tabID, in: workspaceStore.activeWorkspaceID)
+            var candidate = workspaceStore
+            guard
+                (try? candidate.activateTab(tabID, in: candidate.activeWorkspaceID)) != nil,
+                commitWorkspaceStore(candidate)
+            else { return }
             refreshWorkspacePresentation(focusTerminal: true)
         }
 
@@ -911,20 +974,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         func setActiveTabBroadcastingForTesting(_ isBroadcasting: Bool) throws {
             let workspaceID = workspaceStore.activeWorkspaceID
             guard let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID else { return }
-            try workspaceStore.setBroadcasting(isBroadcasting, for: tabID, in: workspaceID)
+            var candidate = workspaceStore
+            try candidate.setBroadcasting(isBroadcasting, for: tabID, in: workspaceID)
+            _ = commitWorkspaceStore(candidate)
         }
 
         func prepareForBridgeShutdownForTesting() {
-            _ = activeWindow?.makeFirstResponder(nil)
-            workspaceViewController.displayTerminal(
-                root: nil,
-                surfaces: [:],
-                palette: ghosttyBridge.chromePalette,
-                onResize: { _, _ in },
-                onEqualize: { _ in }
-            )
-            activeWindow?.orderOut(nil)
-            closeActiveSurfaces()
+            tearDownSurfaces()
         }
 
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
@@ -989,6 +1045,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         else { return }
 
         persistNormalWindowFrame(frame)
+    }
+
+    private func tearDownSurfaces() {
+        _ = activeWindow?.makeFirstResponder(nil)
+        workspaceViewController.displayTerminal(
+            root: nil,
+            surfaces: [:],
+            palette: ghosttyBridge.chromePalette,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+        activeWindow?.orderOut(nil)
+        closeActiveSurfaces()
     }
 
     private func closeActiveSurfaces() {
@@ -1169,7 +1238,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         else {
             return
         }
-        workspaceStore = candidate
+        guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
 
         guard createsReplacement,

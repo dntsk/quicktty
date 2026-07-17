@@ -256,6 +256,36 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func pwdChangeUpdatesSurfaceBeforeBridgeObserver() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let surface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/initial",
+                command: "exec /bin/cat"
+            )
+        )
+        var observedPaneID: PaneID?
+        var observedWorkingDirectory: String?
+        var currentWorkingDirectoryAtObservation: String?
+        bridge.surfaceWorkingDirectoryHandler = { id, workingDirectory in
+            observedPaneID = id
+            observedWorkingDirectory = workingDirectory
+            currentWorkingDirectoryAtObservation = surface.currentWorkingDirectory
+        }
+
+        #expect(surface.scheduleWorkingDirectoryChangeForTesting("/tmp/live"))
+        await Task.yield()
+
+        #expect(observedPaneID == paneID)
+        #expect(observedWorkingDirectory == "/tmp/live")
+        #expect(currentWorkingDirectoryAtObservation == "/tmp/live")
+        #expect(surface.currentWorkingDirectory == "/tmp/live")
+    }
+
+    @Test
     func shutdownClosesSurfacesBeforeRuntimeAndRemainsIdempotent() throws {
         let initialAppContextCount = GhosttyBridge.callbackContextCountForTesting
         let initialSurfaceContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting

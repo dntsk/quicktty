@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     applicationState: applicationState,
                     config: config
                 ),
+                persistWorkspaceStore: { [weak self] workspaceStore in
+                    self?.workspaceStoreDidChange(workspaceStore)
+                },
                 persistPresentationMode: { [weak self] mode in
                     do {
                         try self?.configController?.updatePresentationMode(mode)
@@ -87,15 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         configController?.stop()
-        if var applicationState, let stateStore {
-            if let normalWindowFrame = windowCoordinator?.normalWindowFrame {
-                applicationState = Self.applicationState(
-                    applicationState,
-                    updatingNormalWindowFrame: normalWindowFrame
-                )
-            }
-            self.applicationState = applicationState
-            stateStore.scheduleSave(applicationState)
+        if let applicationState, let stateStore {
+            let finalState = Self.applicationState(
+                applicationState,
+                merging: windowCoordinator?.workspaceStoreForPersistence
+                    ?? applicationState.workspaceStore,
+                normalWindowFrame: windowCoordinator?.normalWindowFrame
+            )
+            self.applicationState = finalState
+            stateStore.scheduleSave(finalState)
             do {
                 try stateStore.flushPendingSave()
             } catch {
@@ -108,10 +111,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func workspaceStoreDidChange(_ workspaceStore: WorkspaceStore) {
-        guard var applicationState, let stateStore else { return }
-        applicationState.workspaceStore = workspaceStore
-        self.applicationState = applicationState
-        stateStore.scheduleSave(applicationState)
+        guard let applicationState, let stateStore else { return }
+        let updatedState = Self.applicationState(
+            applicationState,
+            updatingWorkspaceStore: workspaceStore
+        )
+        self.applicationState = updatedState
+        stateStore.scheduleSave(updatedState)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -123,10 +129,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func applicationState(
         _ applicationState: ApplicationState,
+        updatingWorkspaceStore workspaceStore: WorkspaceStore
+    ) -> ApplicationState {
+        var updatedState = applicationState
+        updatedState.workspaceStore = workspaceStore
+        return updatedState
+    }
+
+    static func applicationState(
+        _ applicationState: ApplicationState,
         updatingNormalWindowFrame normalWindowFrame: NormalWindowFrame
     ) -> ApplicationState {
         var updatedState = applicationState
         updatedState.normalWindowFrame = normalWindowFrame
+        return updatedState
+    }
+
+    static func applicationState(
+        _ applicationState: ApplicationState,
+        merging workspaceStore: WorkspaceStore,
+        normalWindowFrame: NormalWindowFrame?
+    ) -> ApplicationState {
+        var updatedState = Self.applicationState(
+            applicationState,
+            updatingWorkspaceStore: workspaceStore
+        )
+        if let normalWindowFrame {
+            updatedState = Self.applicationState(
+                updatedState,
+                updatingNormalWindowFrame: normalWindowFrame
+            )
+        }
         return updatedState
     }
 

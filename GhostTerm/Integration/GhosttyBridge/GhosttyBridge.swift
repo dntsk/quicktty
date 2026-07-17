@@ -152,6 +152,7 @@ final class GhosttyBridge {
     typealias RuntimeActionDeliveryCompletion = @MainActor @Sendable (Bool) -> Void
     typealias SurfaceCloseHandler = GhosttySurfaceCloseHandler
     typealias SurfaceFocusHandler = @MainActor (PaneID) -> Void
+    typealias SurfaceWorkingDirectoryHandler = @MainActor (PaneID, String) -> Void
     typealias InputTargetProvider = @MainActor (PaneID) -> [PaneID]
 
     private static let runtimeBootstrapResult =
@@ -167,6 +168,7 @@ final class GhosttyBridge {
 
     var clipboardConfirmationHandler: GhosttyClipboardConfirmationHandler?
     var surfaceFocusHandler: SurfaceFocusHandler?
+    var surfaceWorkingDirectoryHandler: SurfaceWorkingDirectoryHandler?
     var inputTargetProvider: InputTargetProvider = { [$0] }
 
     #if DEBUG
@@ -525,6 +527,12 @@ final class GhosttyBridge {
         switch event {
         case .close(let processAlive):
             surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+        case .pwdChanged(let workingDirectory):
+            surface.processCallbackEvent(
+                event,
+                confirmationHandler: clipboardConfirmationHandler
+            )
+            surfaceWorkingDirectoryHandler?(paneID, workingDirectory)
         default:
             surface.processCallbackEvent(
                 event,

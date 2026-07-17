@@ -397,6 +397,44 @@ struct StateStoreTests {
     }
 
     @Test
+    func debounceCoalescesRapidRatioFocusAndCWDWorkspaceSnapshots() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let scheduler = ManualStateStoreScheduler()
+        let recorder = StateStoreFileOperationRecorder()
+        let store = try fixture.makeStore(
+            schedule: scheduler.schedule,
+            fileOperations: recorder.operations
+        )
+        let firstPaneID = Self.paneID(91)
+        let secondPaneID = Self.paneID(92)
+        let ratioState = try makeRuntimeMutationState(
+            ratio: 0.7,
+            activePaneID: firstPaneID,
+            workingDirectory: "/tmp/ratio"
+        )
+        let focusState = try makeRuntimeMutationState(
+            ratio: 0.7,
+            activePaneID: secondPaneID,
+            workingDirectory: "/tmp/ratio"
+        )
+        let latestCWDState = try makeRuntimeMutationState(
+            ratio: 0.7,
+            activePaneID: secondPaneID,
+            workingDirectory: "/tmp/latest"
+        )
+
+        store.scheduleSave(ratioState)
+        store.scheduleSave(focusState)
+        store.scheduleSave(latestCWDState)
+        scheduler.runAllIncludingCanceled()
+
+        #expect(try StateMigration.decode(Data(contentsOf: fixture.stateURL)) == latestCWDState)
+        #expect(recorder.temporaryWriteCount == 1)
+        #expect(recorder.events == [.temporaryWrite, .fileSync, .move, .directorySync])
+    }
+
+    @Test
     func manualDebounceCoalescesToOneLatestPhysicalWrite() throws {
         let fixture = try StoreFixture()
         defer { fixture.remove() }
@@ -724,6 +762,43 @@ struct StateStoreTests {
                 y: 20,
                 width: 900,
                 height: 600
+            )
+        )
+    }
+
+    private func makeRuntimeMutationState(
+        ratio: Double,
+        activePaneID: PaneID,
+        workingDirectory: String
+    ) throws -> ApplicationState {
+        let firstPaneID = Self.paneID(91)
+        let secondPaneID = Self.paneID(92)
+        let tab = try TerminalTab(
+            id: Self.tabID(91),
+            title: "Runtime",
+            root: .split(
+                id: Self.uuid(91),
+                axis: .horizontal,
+                ratio: ratio,
+                first: .pane(firstPaneID),
+                second: .pane(secondPaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: firstPaneID, cwd: "/tmp/first"),
+                TerminalPaneDescriptor(id: secondPaneID, cwd: workingDirectory),
+            ],
+            activePaneID: activePaneID
+        )
+        let workspace = Workspace(
+            id: Self.workspaceID(91),
+            name: "Runtime",
+            tabs: [tab],
+            activeTabID: tab.id
+        )
+        return ApplicationState(
+            workspaceStore: try WorkspaceStore(
+                workspaces: [workspace],
+                activeWorkspaceID: workspace.id
             )
         )
     }

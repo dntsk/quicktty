@@ -71,6 +71,81 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func workspacePersistenceReportsTabAndSplitMutationsExactlyOnce() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
+        persistence.reset()
+
+        coordinator.createNewTab()
+        try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/ghostterm-config"))
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+
+        #expect(persistence.snapshots.count == 3)
+        #expect(persistence.snapshots.last == coordinator.workspaceStoreForPersistence)
+    }
+
+    @Test
+    func workspacePersistenceIgnoresNoOpAndFailedCandidates() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        persistence.reset()
+
+        let activeTabID = activeTab(of: coordinator).id
+        coordinator.activateTab(at: 1)
+        coordinator.activateTabForTesting(activeTabID)
+        coordinator.workspaceViewControllerForTesting.onActivateTab?(activeTabID)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        persistence.reset()
+
+        guard case .split(let splitID, _, _, _, _) = activeTab(of: coordinator).root else {
+            Issue.record("Expected a split")
+            return
+        }
+        let orderedTabIDs = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )?.tabs.map(\.id)
+        )
+        coordinator.workspaceViewControllerForTesting.invokeResizeForTesting(
+            splitID: splitID,
+            ratio: 0.5
+        )
+        coordinator.workspaceViewControllerForTesting.invokeEqualizeForTesting(splitID: splitID)
+        coordinator.workspaceViewControllerForTesting.onReorderTabs?(orderedTabIDs)
+        coordinator.failNextSplitMutationForTesting()
+        #expect(throws: SplitCoordinatorError.self) {
+            try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        }
+        #expect(throws: WorkspaceError.self) {
+            try coordinator.openConfigurationForTesting(
+                at: URL(fileURLWithPath: "/tmp/ghostterm-config"),
+                in: WorkspaceID()
+            )
+        }
+
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test
     func openConfigurationRollsBackStoreAndRegistryForMissingDestinationWorkspace() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -497,6 +572,115 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(
             bridge.surfaceConfigurationForTesting(id: secondSurface.paneID)?.workingDirectory
                 == "/tmp/live"
+        )
+    }
+
+    @Test
+    func workspacePersistenceTracksLiveCWDForActiveBackgroundAndStalePanes() async throws {
+        let backgroundPaneID = PaneID()
+        let activePaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(
+                id: backgroundPaneID,
+                cwd: "/tmp/background-start",
+                startupCommand: .custom("printf background")
+            )
+        )
+        let activeTab = TerminalTab(
+            title: "Active",
+            pane: TerminalPaneDescriptor(
+                id: activePaneID,
+                cwd: "/tmp/active-start",
+                startupCommand: .custom("printf active")
+            )
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let activeWorkspace = Workspace(
+            name: "Active",
+            tabs: [activeTab],
+            activeTabID: activeTab.id
+        )
+        let initialStore = try WorkspaceStore(
+            workspaces: [backgroundWorkspace, activeWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: initialStore,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+
+        #expect(persistence.snapshots.isEmpty)
+        let activeSurface = try #require(coordinator.surfaceForTesting(id: activePaneID))
+        let backgroundSurface = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
+        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/active-live"))
+        await Task.yield()
+
+        let activeDescriptor = try #require(
+            coordinator.workspaceStoreForPersistence.tab(id: activeTab.id)?
+                .paneDescriptor(for: activePaneID)
+        )
+        #expect(
+            activeDescriptor
+                == TerminalPaneDescriptor(
+                    id: activePaneID,
+                    cwd: "/tmp/active-live",
+                    startupCommand: .custom("printf active")
+                )
+        )
+        #expect(
+            coordinator.workspaceStoreForPersistence.tab(id: backgroundTab.id)?
+                .paneDescriptor(for: backgroundPaneID)
+                == backgroundTab.paneDescriptor(for: backgroundPaneID)
+        )
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
+        persistence.reset()
+
+        #expect(backgroundSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/background-live"))
+        await Task.yield()
+
+        #expect(
+            coordinator.workspaceStoreForPersistence.tab(id: backgroundTab.id)?
+                .paneDescriptor(for: backgroundPaneID)
+                == TerminalPaneDescriptor(
+                    id: backgroundPaneID,
+                    cwd: "/tmp/background-live",
+                    startupCommand: .custom("printf background")
+                )
+        )
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
+        persistence.reset()
+
+        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/active-live"))
+        await Task.yield()
+        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("relative"))
+        await Task.yield()
+        #expect(activeSurface.currentWorkingDirectory == "relative")
+        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting(""))
+        await Task.yield()
+        #expect(activeSurface.currentWorkingDirectory == "")
+        #expect(persistence.snapshots.isEmpty)
+
+        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/stale"))
+        bridge.closeSurface(id: activePaneID)
+        await Task.yield()
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(
+            coordinator.workspaceStoreForPersistence.tab(id: activeTab.id)?
+                .paneDescriptor(for: activePaneID)
+                == activeDescriptor
         )
     }
 
@@ -1098,5 +1282,14 @@ struct WindowCoordinatorTabLifecycleTests {
             }
             return ratio(in: first, splitID: splitID) ?? ratio(in: second, splitID: splitID)
         }
+    }
+}
+
+@MainActor
+private final class WorkspacePersistenceRecorder {
+    var snapshots: [WorkspaceStore] = []
+
+    func reset() {
+        snapshots = []
     }
 }

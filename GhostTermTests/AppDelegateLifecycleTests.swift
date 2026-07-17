@@ -166,6 +166,41 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func workspaceCallbackAndTerminationMergePreserveLatestWorkspaceAndFrame() throws {
+        let savedFrame = try #require(NormalWindowFrame(x: 1, y: 2, width: 800, height: 600))
+        let latestFrame = try #require(NormalWindowFrame(x: 12, y: 34, width: 900, height: 700))
+        let savedWorkspace = Workspace(name: "Saved")
+        let runtimeWorkspace = Workspace(name: "Runtime")
+        let savedStore = try WorkspaceStore(
+            workspaces: [savedWorkspace],
+            activeWorkspaceID: savedWorkspace.id
+        )
+        let runtimeStore = try WorkspaceStore(
+            workspaces: [runtimeWorkspace],
+            activeWorkspaceID: runtimeWorkspace.id
+        )
+        let savedState = ApplicationState(
+            workspaceStore: savedStore,
+            normalWindowFrame: savedFrame
+        )
+
+        let callbackState = AppDelegate.applicationState(
+            savedState,
+            updatingWorkspaceStore: runtimeStore
+        )
+        let terminationState = AppDelegate.applicationState(
+            callbackState,
+            merging: runtimeStore,
+            normalWindowFrame: latestFrame
+        )
+
+        #expect(callbackState.workspaceStore == runtimeStore)
+        #expect(callbackState.normalWindowFrame == savedFrame)
+        #expect(terminationState.workspaceStore == runtimeStore)
+        #expect(terminationState.normalWindowFrame == latestFrame)
+    }
+
+    @Test
     func newTabMenuItemUsesCommandTAndAppDelegateAction() {
         let delegate = AppDelegate()
         let item = AppDelegate.makeNewTabMenuItem(target: delegate)
