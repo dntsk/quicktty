@@ -135,11 +135,12 @@ struct WorkspacePresentationTests {
 
         let selector = controller.workspaceSelector
         let button = selector.buttonForTesting
+        let frameView = try #require(contentView.superview)
         let hitPoint = button.convert(
             NSPoint(x: button.bounds.midX, y: button.bounds.midY),
-            to: selector
+            to: frameView
         )
-        let hitView = selector.hitTest(hitPoint)
+        let hitView = contentView.hitTest(hitPoint)
 
         #expect(selector.frame.height > 0)
         #expect(selector.bounds.height > 0)

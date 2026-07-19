@@ -30,15 +30,6 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
     private var activeWorkspaceID: WorkspaceID?
     private var isMenuTracking = false
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else { return nil }
-        let buttonPoint = convert(point, to: button)
-        guard button.bounds.contains(buttonPoint) else {
-            return super.hitTest(point)
-        }
-        return button.hitTest(buttonPoint) ?? button
-    }
-
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
