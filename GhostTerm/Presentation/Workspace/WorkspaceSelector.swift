@@ -135,14 +135,11 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
             menuPresenter(workspaceMenu, button)
             return
         }
-        let didOpen = workspaceMenu.popUp(
+        workspaceMenu.popUp(
             positioning: nil,
             at: NSPoint(x: 0, y: button.bounds.height),
             in: button
         )
-        if !didOpen {
-            endMenuTracking()
-        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {

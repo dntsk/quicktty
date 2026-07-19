@@ -190,10 +190,11 @@ struct WorkspacePresentationTests {
             else { return }
             NSApp.sendAction(action, to: item.target, from: item)
             #expect(trackingStates == [true])
-            menu.delegate?.menuDidClose?(menu)
         }
 
         selector.performButtonActionForTesting()
+        #expect(trackingStates == [true])
+        selector.menuForTesting.delegate?.menuDidClose?(selector.menuForTesting)
 
         #expect(trackingStates == [true, false])
         #expect(trackingStatesDuringSelection == [true])
