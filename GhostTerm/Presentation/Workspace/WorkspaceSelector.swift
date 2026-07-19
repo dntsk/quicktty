@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class WorkspaceSelector: NSView {
+final class WorkspaceSelector: NSView, NSMenuDelegate {
     enum Action: Int, Hashable {
         case new = 1
         case rename
@@ -28,6 +28,7 @@ final class WorkspaceSelector: NSView {
     private var menuPresenter: ((NSMenu, NSButton) -> Void)?
     private var workspaceNames: [String] = []
     private var activeWorkspaceID: WorkspaceID?
+    private var isMenuTracking = false
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard bounds.contains(point) else { return nil }
@@ -63,6 +64,7 @@ final class WorkspaceSelector: NSView {
         ])
 
         workspaceMenu.autoenablesItems = false
+        workspaceMenu.delegate = self
     }
 
     func apply(workspaces: [Workspace], activeWorkspaceID: WorkspaceID) {
@@ -127,18 +129,42 @@ final class WorkspaceSelector: NSView {
     }
 
     @objc private func presentWorkspaceMenu(_: Any?) {
-        onMenuTrackingChanged?(true)
-        defer { onMenuTrackingChanged?(false) }
+        beginMenuTracking()
 
         if let menuPresenter {
             menuPresenter(workspaceMenu, button)
             return
         }
-        workspaceMenu.popUp(
+        let didOpen = workspaceMenu.popUp(
             positioning: nil,
             at: NSPoint(x: 0, y: button.bounds.height),
             in: button
         )
+        if !didOpen {
+            endMenuTracking()
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === workspaceMenu else { return }
+        beginMenuTracking()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === workspaceMenu else { return }
+        endMenuTracking()
+    }
+
+    private func beginMenuTracking() {
+        guard !isMenuTracking else { return }
+        isMenuTracking = true
+        onMenuTrackingChanged?(true)
+    }
+
+    private func endMenuTracking() {
+        guard isMenuTracking else { return }
+        isMenuTracking = false
+        onMenuTrackingChanged?(false)
     }
 
     @objc private func selectWorkspace(_ sender: NSMenuItem) {

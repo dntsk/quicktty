@@ -156,6 +156,7 @@ struct WorkspacePresentationTests {
         selector.menuPresenterForTesting = { menu, button in
             presentedMenu = menu
             presentedButton = button
+            menu.delegate?.menuDidClose?(menu)
         }
 
         selector.performButtonActionForTesting()
@@ -165,7 +166,7 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func workspaceSelectorBalancesMenuTrackingAroundTestPresenterAndDispatchesAction() throws {
+    func workspaceSelectorKeepsMenuTrackingUntilMenuDelegateClosesAndDispatchesAction() throws {
         let store = WorkspaceStore()
         let selectedID = store.activeWorkspaceID
         let selector = WorkspaceSelector()
@@ -182,10 +183,14 @@ struct WorkspacePresentationTests {
             activeWorkspaceID: store.activeWorkspaceID
         )
         selector.menuPresenterForTesting = { menu, _ in
+            menu.delegate?.menuWillOpen?(menu)
+            #expect(trackingStates == [true])
             guard let item = menu.items.first(where: { !$0.isSeparatorItem }),
                 let action = item.action
             else { return }
             NSApp.sendAction(action, to: item.target, from: item)
+            #expect(trackingStates == [true])
+            menu.delegate?.menuDidClose?(menu)
         }
 
         selector.performButtonActionForTesting()
