@@ -113,6 +113,21 @@ verify_bundle() {
     [ "$actual_bundle_identifier" = "$BUNDLE_IDENTIFIER" ] \
         || release_fail "unexpected CFBundleIdentifier: $actual_bundle_identifier"
 
+    actual_display_name=$(plist_value "$info_plist" CFBundleDisplayName) \
+        || release_fail 'CFBundleDisplayName is missing from archived app'
+    [ "$actual_display_name" = GhostTerm ] \
+        || release_fail "unexpected CFBundleDisplayName: $actual_display_name"
+
+    actual_bundle_name=$(plist_value "$info_plist" CFBundleName) \
+        || release_fail 'CFBundleName is missing from archived app'
+    [ "$actual_bundle_name" = GhostTerm ] \
+        || release_fail "unexpected CFBundleName: $actual_bundle_name"
+
+    actual_bundle_package_type=$(plist_value "$info_plist" CFBundlePackageType) \
+        || release_fail 'CFBundlePackageType is missing from archived app'
+    [ "$actual_bundle_package_type" = APPL ] \
+        || release_fail "unexpected CFBundlePackageType: $actual_bundle_package_type"
+
     actual_marketing_version=$(plist_value "$info_plist" CFBundleShortVersionString) \
         || release_fail 'CFBundleShortVersionString is missing from archived app'
     [ "$actual_marketing_version" = "$MARKETING_VERSION" ] \
@@ -133,10 +148,16 @@ verify_bundle() {
     [ "$actual_executable_name" = "$PRODUCT_NAME" ] \
         || release_fail "unexpected CFBundleExecutable: $actual_executable_name"
 
+    actual_icon_file=$(plist_value "$info_plist" CFBundleIconFile) \
+        || release_fail 'CFBundleIconFile is missing from archived app'
+    [ "$actual_icon_file" = AppIcon ] \
+        || release_fail "unexpected CFBundleIconFile: $actual_icon_file"
+
     actual_icon_name=$(plist_value "$info_plist" CFBundleIconName) \
         || release_fail 'CFBundleIconName is missing from archived app'
     [ "$actual_icon_name" = AppIcon ] \
         || release_fail "unexpected CFBundleIconName: $actual_icon_name"
+    require_regular_file "$resources_dir/AppIcon.icns"
     require_regular_file "$resources_dir/Assets.car"
 
     require_regular_file "$resources_dir/terminfo/78/xterm-ghostty"

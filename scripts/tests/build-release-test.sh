@@ -22,6 +22,27 @@ assert_missing() {
     [ ! -e "$1" ] && [ ! -L "$1" ] || fail "path should be absent: $1"
 }
 
+run_build_script_negative() {
+    env DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY= sh -c '
+        [ -z "${DEVELOPMENT_TEAM:-}" ] && [ -z "${CODE_SIGN_IDENTITY:-}" ] || {
+            printf "%s\n" "error: negative build invocation inherited signing configuration" >&2
+            exit 0
+        }
+        exec sh "$@"
+    ' sh "$build_script" "$@"
+}
+
+expect_build_script_failure() {
+    expected_message=$1
+    shift
+
+    if failure_output=$(run_build_script_negative "$@" 2>&1); then
+        fail "expected build script to fail: $*"
+    fi
+    printf '%s\n' "$failure_output" | grep -F -x "$expected_message" >/dev/null \
+        || fail "unexpected build script failure: $failure_output"
+}
+
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve test directory'
 repo_root=$(CDPATH= cd -P "$script_dir/../.." && pwd -P) || fail 'could not resolve repository root'
 helpers=$repo_root/scripts/release-helpers.sh
@@ -34,9 +55,15 @@ sh -n "$helpers"
 sh -n "$build_script"
 
 # These calls stop before tool discovery or any build/signing operation.
-expect_failure sh "$build_script" unexpected-option
-expect_failure sh "$build_script"
-expect_failure env APPLE_ID=unused sh "$build_script"
+DEVELOPMENT_TEAM=N8FS9YUZQA
+CODE_SIGN_IDENTITY='Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'
+export DEVELOPMENT_TEAM CODE_SIGN_IDENTITY
+expect_build_script_failure 'error: this script accepts no options or positional arguments' unexpected-option
+expect_build_script_failure 'error: DEVELOPMENT_TEAM must be set'
+APPLE_ID=unused
+export APPLE_ID
+expect_build_script_failure 'error: secret environment variable is not accepted: APPLE_ID'
+unset APPLE_ID
 
 . "$helpers"
 

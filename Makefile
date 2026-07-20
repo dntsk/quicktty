@@ -12,7 +12,7 @@ SWIFT_SOURCES := GhostTerm GhostTermTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test release format callback-contract lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release release-contract format callback-contract lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -31,13 +31,16 @@ release: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
 release:
 	./scripts/build-release.sh
 
+release-contract:
+	./scripts/tests/build-release-test.sh
+
 format:
 	swift format format --recursive --in-place $(SWIFT_SOURCES)
 
 callback-contract:
 	./scripts/check-runtime-callbacks.sh
 
-lint: callback-contract
+lint: release-contract callback-contract
 	swift format lint --recursive $(SWIFT_SOURCES)
 
 build: generate
