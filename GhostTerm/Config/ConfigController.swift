@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class ConfigController {
     typealias ReloadGhostty = @MainActor (URL) throws -> Void
+    typealias DiagnosticsHandler = @MainActor ([ConfigDiagnostic]) -> Void
 
     struct FileClient {
         let fileExists: @MainActor (URL) -> Bool
@@ -47,6 +48,7 @@ final class ConfigController {
     private let fileClient: FileClient
     private let reloadGhostty: ReloadGhostty
     private let onUpdate: @MainActor (GhostTermConfig) -> Void
+    private let onDiagnostics: DiagnosticsHandler
     private let onError: @MainActor (ConfigControllerError) -> Void
     private let watcherScheduler: ConfigFileWatcher.Scheduler?
     private let watcherEventSource: ConfigFileWatcher.EventSource
@@ -61,6 +63,7 @@ final class ConfigController {
         watcherEventSource: ConfigFileWatcher.EventSource = .production,
         reloadGhostty: @escaping ReloadGhostty,
         onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in },
+        onDiagnostics: @escaping DiagnosticsHandler = { _ in },
         onError: @escaping @MainActor (ConfigControllerError) -> Void = { _ in }
     ) {
         self.configURL = configURL
@@ -71,6 +74,7 @@ final class ConfigController {
         self.watcherEventSource = watcherEventSource
         self.reloadGhostty = reloadGhostty
         self.onUpdate = onUpdate
+        self.onDiagnostics = onDiagnostics
         self.onError = onError
     }
 
@@ -82,6 +86,7 @@ final class ConfigController {
         bundle: Bundle = .main,
         reloadGhostty: @escaping ReloadGhostty,
         onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in },
+        onDiagnostics: @escaping DiagnosticsHandler = { _ in },
         onError: @escaping @MainActor (ConfigControllerError) -> Void = { _ in }
     ) throws -> ConfigController {
         guard let starterURL = bundle.url(forResource: "default-config", withExtension: nil) else {
@@ -102,6 +107,7 @@ final class ConfigController {
             starterData: starterData,
             reloadGhostty: reloadGhostty,
             onUpdate: onUpdate,
+            onDiagnostics: onDiagnostics,
             onError: onError
         )
     }
@@ -206,9 +212,6 @@ final class ConfigController {
 
     private func apply(_ document: ConfigDocument) throws {
         let result = document.parse()
-        guard result.diagnostics.isEmpty else {
-            throw ConfigControllerError.invalidConfig(result.diagnostics)
-        }
 
         let previousConfig = activeConfig
         let previousDocument = activeDocument
@@ -254,6 +257,7 @@ final class ConfigController {
 
         activeDocument = document
         onUpdate(result.config)
+        onDiagnostics(result.diagnostics)
     }
 
     private static func atomicWrite(

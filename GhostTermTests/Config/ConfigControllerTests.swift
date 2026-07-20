@@ -61,22 +61,75 @@ struct ConfigControllerTests {
     }
 
     @Test
-    func invalidReloadRetainsLastValidConfigAndDoesNotCallBridge() throws {
+    func reloadAppliesValidAssignmentsAndReportsInvalidDiagnostics() throws {
         let fixture = try ConfigFixture()
         defer { fixture.remove() }
-        var reloadCount = 0
-        let controller = fixture.makeController(reloadGhostty: { _ in reloadCount += 1 })
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            font-family = Changed
+            ghostterm-presentation-mode = quake
+            ghostterm-quake-height = impossible
+            """.utf8
+        ).write(to: fixture.configURL)
+        var reloadURLs: [URL] = []
+        var reportedDiagnostics: [[ConfigDiagnostic]] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { reloadURLs.append($0) },
+            onDiagnostics: { reportedDiagnostics.append($0) }
+        )
+
         try controller.load()
-        let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
+
+        #expect(controller.activeConfig.presentationMode == .quake)
+        #expect(reloadURLs == [fixture.effectiveURL])
+        #expect(
+            try Data(contentsOf: fixture.effectiveURL)
+                == Data("copy-on-select = clipboard\nfont-family = Changed\n".utf8)
+        )
+        #expect(
+            reportedDiagnostics
+                == [
+                    [
+                        ConfigDiagnostic(
+                            line: 3,
+                            key: "ghostterm-quake-height",
+                            reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
+                        )
+                    ]
+                ]
+        )
+
+        try controller.reload()
+
+        #expect(reloadURLs == [fixture.effectiveURL])
+        #expect(reportedDiagnostics.count == 1)
+    }
+
+    @Test
+    func validReloadClearsPreviouslyReportedDiagnostics() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
         try Data("ghostterm-quake-height = impossible\n".utf8).write(to: fixture.configURL)
+        var reportedDiagnostics: [[ConfigDiagnostic]] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onDiagnostics: { reportedDiagnostics.append($0) }
+        )
+        try controller.load()
+        try Data("ghostterm-presentation-mode = quake\n".utf8).write(to: fixture.configURL)
 
-        #expect(throws: ConfigControllerError.self) {
-            try controller.reload()
-        }
+        try controller.reload()
 
-        #expect(controller.activeConfig == GhostTermConfig())
-        #expect(reloadCount == 1)
-        #expect(try Data(contentsOf: fixture.effectiveURL) == effectiveBefore)
+        #expect(reportedDiagnostics.count == 2)
+        #expect(reportedDiagnostics.last == [])
     }
 
     @Test
@@ -86,11 +139,13 @@ struct ConfigControllerTests {
         defer { fixture.remove() }
         let failureSwitch = ReloadFailureSwitch()
         var updates: [GhostTermConfig] = []
+        var reportedDiagnostics: [[ConfigDiagnostic]] = []
         let controller = fixture.makeController(
             reloadGhostty: { _ in
                 if failureSwitch.shouldFail { throw Failure.rejected }
             },
-            onUpdate: { updates.append($0) }
+            onUpdate: { updates.append($0) },
+            onDiagnostics: { reportedDiagnostics.append($0) }
         )
         try controller.load()
         let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
@@ -106,6 +161,7 @@ struct ConfigControllerTests {
         #expect(controller.activeConfig.presentationMode == .normal)
         #expect(try Data(contentsOf: fixture.effectiveURL) == effectiveBefore)
         #expect(updates.map(\.presentationMode) == [.normal])
+        #expect(reportedDiagnostics == [[]])
     }
 
     @Test
@@ -373,7 +429,8 @@ private struct ConfigFixture {
         watcherScheduler: ConfigFileWatcher.Scheduler? = nil,
         watcherEventSource: ConfigFileWatcher.EventSource = .production,
         reloadGhostty: @escaping ConfigController.ReloadGhostty,
-        onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in }
+        onUpdate: @escaping @MainActor (GhostTermConfig) -> Void = { _ in },
+        onDiagnostics: @escaping @MainActor ([ConfigDiagnostic]) -> Void = { _ in }
     ) -> ConfigController {
         ConfigController(
             configURL: configURL,
@@ -382,7 +439,8 @@ private struct ConfigFixture {
             watcherScheduler: watcherScheduler,
             watcherEventSource: watcherEventSource,
             reloadGhostty: reloadGhostty,
-            onUpdate: onUpdate
+            onUpdate: onUpdate,
+            onDiagnostics: onDiagnostics
         )
     }
 
