@@ -808,30 +808,29 @@ make test
 
 Manual: `Command+F12`, display under cursor, focus loss, rapid toggle, normal↔Quake, внешний монитор.
 
-### Task 13: Startup command confirmation и restore
+### Task 13: Safe workspace restore
+
+**Current MVP policy:** every restored pane starts a fresh shell. Saved custom startup commands remain descriptors in persisted state but are never executed automatically. Interactive custom-command confirmation is deferred to `docs/backlog.md`.
 
 **Files:**
-- Create: `GhostTerm/Presentation/Restore/StartupCommandConfirmationController.swift`
-- Create: `GhostTerm/Runtime/WorkspaceRuntimeController.swift`
-- Create: `GhostTermTests/Runtime/WorkspaceRuntimeControllerTests.swift`
 - Modify: `GhostTerm/Persistence/StateStore.swift`
 - Modify: `GhostTerm/WindowCoordinator.swift`
+- Test: `GhostTermTests/Presentation/WindowCoordinatorTabLifecycleTests.swift`
 
-**Step 1: Написать failing restore tests**
+**Step 1: Write restore tests**
 
 Проверить:
 
 - обычный shell запускается автоматически;
 - missing cwd silently заменяется home;
-- custom commands собираются в одно confirmation request;
-- approved commands запускаются;
-- rejected commands заменяются обычным shell в cwd;
+- pane с custom command всегда запускает обычный shell;
+- custom descriptor остаётся в persisted model;
 - IDs/layout сохраняются;
 - live process handles не сериализуются.
 
-**Step 2: Реализовать restore plan**
+**Step 2: Restore fresh shells transactionally**
 
-`WorkspaceRuntimeController` сначала строит pure `RestorePlan`, затем UI один раз подтверждает список custom commands, после чего bridge создаёт surfaces.
+`WindowCoordinator` создаёт новые surfaces по сохранённым pane descriptors, но очищает runtime command и initial input. При ошибке весь restore откатывается, а временные surfaces закрываются.
 
 **Step 3: Проверить**
 
@@ -840,7 +839,7 @@ make lint
 make test
 ```
 
-Manual: сохранить несколько workspaces, перезапустить app, подтвердить/отклонить commands.
+Manual: сохранить несколько workspaces с shell/custom descriptors, перезапустить app и убедиться, что каждая pane получила новый shell без выполнения custom commands.
 
 ## Milestone 5: themes, polish и release
 
