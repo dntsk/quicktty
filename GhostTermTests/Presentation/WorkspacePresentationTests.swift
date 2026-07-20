@@ -403,6 +403,68 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func configurationDiagnosticsBoundVisualOutputAndNormalizeMultilineMessages() throws {
+        let controller = WorkspaceViewController()
+        let window = Self.mountWorkspace(controller, size: NSSize(width: 180, height: 100))
+        defer { window.orderOut(nil) }
+        let messages = (1...10).map { index in
+            "line \(index): first\nsecond\r\nthird\rfourth "
+                + String(repeating: "very long diagnostic detail ", count: 120)
+        }
+
+        controller.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: messages)
+        )
+        Self.layoutWorkspace(controller, in: window)
+
+        let diagnosticView = try #require(
+            controller.configurationDiagnosticViewForTesting as? ConfigDiagnosticView)
+        let text = controller.configurationDiagnosticTextForTesting
+
+        #expect(diagnosticView.maximumNumberOfLinesForTesting == 10)
+        #expect(text.components(separatedBy: "\n").count == 10)
+        #expect(!text.contains("\r"))
+        #expect(text.contains("line 1: first second third fourth"))
+        #expect(diagnosticView.frame.height <= diagnosticView.maximumHeightForTesting)
+    }
+
+    @Test
+    func configurationDiagnosticsAnnounceOnlyChangedNonemptyPresentation() throws {
+        let controller = WorkspaceViewController()
+        let diagnosticView = try #require(
+            controller.configurationDiagnosticViewForTesting as? ConfigDiagnosticView)
+        let presentation = ConfigDiagnosticPresentation(
+            path: "/tmp/ghostterm/config",
+            messages: ["line 4: invalid quake height"]
+        )
+        let changedPresentation = ConfigDiagnosticPresentation(
+            path: "/tmp/ghostterm/config",
+            messages: ["line 9: unknown option"]
+        )
+        var announcements: [String] = []
+        diagnosticView.announcementObserverForTesting = { announcements.append($0) }
+
+        controller.applyConfigurationDiagnostics(nil)
+        controller.applyConfigurationDiagnostics(presentation)
+        controller.applyConfigurationDiagnostics(presentation)
+        controller.applyConfigurationDiagnostics(nil)
+        controller.applyConfigurationDiagnostics(nil)
+        controller.applyConfigurationDiagnostics(presentation)
+        controller.applyConfigurationDiagnostics(changedPresentation)
+        controller.applyConfigurationDiagnostics(changedPresentation)
+
+        #expect(announcements.count == 3)
+        #expect(announcements.allSatisfy { $0 == "Configuration diagnostics available" })
+        #expect(diagnosticView.isAccessibilityElement())
+        #expect(diagnosticView.accessibilityRole() == .group)
+        #expect(diagnosticView.accessibilityLabel() == "Configuration diagnostics")
+        #expect(
+            diagnosticView.accessibilityValue() as? String
+                == "/tmp/ghostterm/config\nline 9: unknown option"
+        )
+    }
+
+    @Test
     func configurationDiagnosticsPreserveMountedSplitSurfacesAndPassThroughHits() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -1092,9 +1154,12 @@ struct WorkspacePresentationTests {
         controller.view.layoutSubtreeIfNeeded()
     }
 
-    private static func mountWorkspace(_ controller: WorkspaceViewController) -> NSWindow {
+    private static func mountWorkspace(
+        _ controller: WorkspaceViewController,
+        size: NSSize = NSSize(width: 800, height: 600)
+    ) -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
