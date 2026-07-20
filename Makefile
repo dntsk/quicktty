@@ -36,6 +36,8 @@ release:
 release-contract:
 	./scripts/tests/build-release-test.sh
 
+notarize: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
+notarize: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
 notarize: export NOTARY_PROFILE := $(NOTARY_PROFILE)
 notarize: export DMG := $(abspath $(DMG))
 notarize:
@@ -44,6 +46,8 @@ notarize:
 notarize-contract:
 	./scripts/tests/notarize-dmg-test.sh
 
+signed-alpha: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
+signed-alpha: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
 signed-alpha: export NOTARY_PROFILE := $(NOTARY_PROFILE)
 signed-alpha: export DMG := $(abspath $(DMG))
 signed-alpha:

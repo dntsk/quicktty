@@ -30,6 +30,8 @@ run_notarize_negative() {
     env -i \
         PATH="$PATH" \
         TMPDIR="${TMPDIR:-/tmp}" \
+        DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+        CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}" \
         DMG="${DMG:-}" \
         NOTARY_PROFILE="${NOTARY_PROFILE:-}" \
         /bin/sh "$notarize_script" "$@"
@@ -53,10 +55,14 @@ repo_root=$(CDPATH= cd -P "$script_dir/../.." && pwd -P) || fail 'could not reso
 release_helpers=$repo_root/scripts/release-helpers.sh
 notarize_helpers=$repo_root/scripts/notarize-helpers.sh
 notarize_script=$repo_root/scripts/notarize-dmg.sh
+makefile=$repo_root/Makefile
+test_development_team=ABCDE12345
+test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"
 [ -f "$notarize_script" ] || fail "notarization script is missing: $notarize_script"
+[ -f "$makefile" ] || fail "Makefile is missing: $makefile"
 
 for shell_script in "$repo_root"/scripts/*.sh "$repo_root"/scripts/tests/*.sh; do
     [ -f "$shell_script" ] || continue
@@ -77,6 +83,27 @@ grep -F -x 'xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)' "$notariz
 grep -F -x '[ "$xcodebuild_path" = "$DEVELOPER_DIR/usr/bin/xcodebuild" ] \' \
     "$notarize_script" >/dev/null \
     || fail 'notarization script does not require full Xcode'
+grep -F -x 'release_validate_team "${DEVELOPMENT_TEAM:-}"' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not validate DEVELOPMENT_TEAM'
+grep -F -x 'release_validate_identity "${CODE_SIGN_IDENTITY:-}"' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not validate CODE_SIGN_IDENTITY'
+grep -F -x '    signature_has_exact_line "$notarize_signature_data" "Authority=$CODE_SIGN_IDENTITY" \' \
+    "$notarize_script" >/dev/null \
+    || fail 'notarization script does not check the supplied code-signing identity'
+grep -F -x '    signature_has_exact_line "$notarize_signature_data" "TeamIdentifier=$DEVELOPMENT_TEAM" \' \
+    "$notarize_script" >/dev/null \
+    || fail 'notarization script does not check the supplied development team'
+if grep -F -e EXPECTED_DEVELOPMENT_TEAM -e EXPECTED_CODE_SIGN_IDENTITY "$notarize_script" >/dev/null; then
+    fail 'notarization script hardcodes signing metadata'
+fi
+grep -F -x 'notarize: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)' "$makefile" >/dev/null \
+    || fail 'notarize target does not export DEVELOPMENT_TEAM'
+grep -F -x 'notarize: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)' "$makefile" >/dev/null \
+    || fail 'notarize target does not export CODE_SIGN_IDENTITY'
+grep -F -x 'signed-alpha: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)' "$makefile" >/dev/null \
+    || fail 'signed-alpha target does not export DEVELOPMENT_TEAM'
+grep -F -x 'signed-alpha: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)' "$makefile" >/dev/null \
+    || fail 'signed-alpha target does not export CODE_SIGN_IDENTITY'
 gatekeeper_assessment_line=$(grep -n -F -x \
     '"$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \' \
     "$notarize_script" | /usr/bin/cut -d: -f1)
@@ -103,11 +130,19 @@ final_hash_report_line=$(grep -n -F -x \
 
 DMG=
 NOTARY_PROFILE=ghostterm-notary
+DEVELOPMENT_TEAM=
+CODE_SIGN_IDENTITY=
 expect_notarize_failure 'error: this script accepts no options or positional arguments' unexpected-option
+expect_notarize_failure 'error: DEVELOPMENT_TEAM must be set'
+DEVELOPMENT_TEAM=$test_development_team
+expect_notarize_failure 'error: CODE_SIGN_IDENTITY must be set'
+CODE_SIGN_IDENTITY=$test_code_sign_identity
 expect_notarize_failure 'error: DMG must be set'
 if default_profile_output=$(env -i \
     PATH="$PATH" \
     TMPDIR="${TMPDIR:-/tmp}" \
+    DEVELOPMENT_TEAM="$test_development_team" \
+    CODE_SIGN_IDENTITY="$test_code_sign_identity" \
     DMG= \
     /bin/sh "$notarize_script" 2>&1)
 then
@@ -140,6 +175,8 @@ esac
 . "$notarize_helpers"
 
 notarize_validate_profile ghostterm-notary
+release_validate_team "$test_development_team"
+release_validate_identity "$test_code_sign_identity"
 expect_failure /bin/sh -c '. "$1"; . "$2"; notarize_validate_profile "bad profile"' sh \
     "$release_helpers" "$notarize_helpers"
 
@@ -216,6 +253,8 @@ printf '#!/bin/sh\n: >"$GHOSTTERM_MALICIOUS_MARKER"\nexit 99\n' >"$malicious_bin
 /bin/chmod +x "$malicious_bin/dirname"
 if PATH="$malicious_bin:/usr/bin:/bin" \
     GHOSTTERM_MALICIOUS_MARKER="$malicious_marker" \
+    DEVELOPMENT_TEAM= \
+    CODE_SIGN_IDENTITY= \
     DMG= \
     NOTARY_PROFILE= \
     /bin/sh "$notarize_script" unexpected-option >"$malicious_output" 2>&1

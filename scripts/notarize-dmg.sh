@@ -22,8 +22,6 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/notarize-helpers.sh"
 
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-EXPECTED_DEVELOPMENT_TEAM=N8FS9YUZQA
-EXPECTED_CODE_SIGN_IDENTITY='Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'
 
 require_executable_path() {
     [ -x "$1" ] || release_fail "required tool is not executable: $1"
@@ -74,10 +72,10 @@ verify_dmg_signature_metadata() {
     notarize_signature_data=$("$codesign_path" -d -vvv "$DMG" 2>&1) \
         || release_fail "could not display code-signature metadata: $DMG"
 
-    signature_has_exact_line "$notarize_signature_data" "Authority=$EXPECTED_CODE_SIGN_IDENTITY" \
-        || release_fail "signature authority does not match the expected Developer ID identity: $DMG"
-    signature_has_exact_line "$notarize_signature_data" "TeamIdentifier=$EXPECTED_DEVELOPMENT_TEAM" \
-        || release_fail "signature team does not match the expected Developer ID team: $DMG"
+    signature_has_exact_line "$notarize_signature_data" "Authority=$CODE_SIGN_IDENTITY" \
+        || release_fail "signature authority does not match CODE_SIGN_IDENTITY: $DMG"
+    signature_has_exact_line "$notarize_signature_data" "TeamIdentifier=$DEVELOPMENT_TEAM" \
+        || release_fail "signature team does not match DEVELOPMENT_TEAM: $DMG"
     signature_has_prefix "$notarize_signature_data" 'Timestamp=' \
         || release_fail "signature has no secure timestamp: $DMG"
 }
@@ -108,6 +106,8 @@ cleanup_notary_result_tmp() {
 
 release_require_no_arguments "$@"
 release_reject_secret_environment
+release_validate_team "${DEVELOPMENT_TEAM:-}"
+release_validate_identity "${CODE_SIGN_IDENTITY:-}"
 
 if [ "${NOTARY_PROFILE+x}" != x ]; then
     NOTARY_PROFILE=$NOTARY_PROFILE_DEFAULT
