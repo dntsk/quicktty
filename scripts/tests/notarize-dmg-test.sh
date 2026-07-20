@@ -77,6 +77,29 @@ grep -F -x 'xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)' "$notariz
 grep -F -x '[ "$xcodebuild_path" = "$DEVELOPER_DIR/usr/bin/xcodebuild" ] \' \
     "$notarize_script" >/dev/null \
     || fail 'notarization script does not require full Xcode'
+gatekeeper_assessment_line=$(grep -n -F -x \
+    '"$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+final_size_calculation_line=$(grep -n -F -x \
+    'dmg_size=$("$stat_path" -f '\''%z'\'' "$DMG") \' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+final_hash_calculation_line=$(grep -n -F -x \
+    'dmg_hash_output=$("$shasum_path" -a 256 "$DMG") \' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+final_size_report_line=$(grep -n -F -x \
+    'printf '\''Size: %s bytes\n'\'' "$dmg_size"' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+final_hash_report_line=$(grep -n -F -x \
+    'printf '\''SHA-256: %s\n'\'' "$dmg_hash"' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+[ "$final_size_calculation_line" -gt "$gatekeeper_assessment_line" ] \
+    || fail 'notarization script does not calculate the final DMG size after Gatekeeper assessment'
+[ "$final_hash_calculation_line" -gt "$gatekeeper_assessment_line" ] \
+    || fail 'notarization script does not calculate the final DMG SHA-256 after Gatekeeper assessment'
+[ "$final_size_report_line" -gt "$final_size_calculation_line" ] \
+    || fail 'notarization script does not report the final DMG size after calculating it'
+[ "$final_hash_report_line" -gt "$final_hash_calculation_line" ] \
+    || fail 'notarization script does not report the final DMG SHA-256 after calculating it'
 
 DMG=
 NOTARY_PROFILE=ghostterm-notary

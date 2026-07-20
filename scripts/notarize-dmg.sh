@@ -172,23 +172,7 @@ source_tree_state=$(release_source_tree_state "$repo_root" "$git_path") \
     || release_fail "DMG did not pass strict code-signature verification: $DMG"
 verify_dmg_signature_metadata
 
-dmg_size=$("$stat_path" -f '%z' "$DMG") \
-    || release_fail "could not determine DMG size: $DMG"
-dmg_hash_output=$("$shasum_path" -a 256 "$DMG") \
-    || release_fail "could not calculate DMG SHA-256: $DMG"
-dmg_hash=${dmg_hash_output%% *}
-case "$dmg_hash" in
-    ????????????????????????????????????????????????????????????????????????)
-        case "$dmg_hash" in
-            *[!0-9A-Fa-f]*) release_fail "could not calculate DMG SHA-256: $DMG" ;;
-        esac
-        ;;
-    *) release_fail "could not calculate DMG SHA-256: $DMG" ;;
-esac
-
 printf 'DMG: %s\n' "$DMG"
-printf 'Size: %s bytes\n' "$dmg_size"
-printf 'SHA-256: %s\n' "$dmg_hash"
 printf '%s\n' 'Stage: submitting DMG to Apple notary service and waiting for completion.'
 
 notary_result_tmp=$("$mktemp_path" "$release_dir/.GhostTerm-notary-result.XXXXXX") \
@@ -243,8 +227,23 @@ printf '%s\n' 'Stage: validating stapled notarization ticket.'
 "$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \
     || release_fail "Gatekeeper assessment failed: $DMG"
 
+dmg_size=$("$stat_path" -f '%z' "$DMG") \
+    || release_fail "could not determine final DMG size: $DMG"
+dmg_hash_output=$("$shasum_path" -a 256 "$DMG") \
+    || release_fail "could not calculate final DMG SHA-256: $DMG"
+dmg_hash=${dmg_hash_output%% *}
+case "$dmg_hash" in
+    ????????????????????????????????????????????????????????????????????????)
+        case "$dmg_hash" in
+            *[!0-9A-Fa-f]*) release_fail "could not calculate final DMG SHA-256: $DMG" ;;
+        esac
+        ;;
+    *) release_fail "could not calculate final DMG SHA-256: $DMG" ;;
+esac
+
 trap - 0 HUP INT TERM
 printf 'Notarized DMG: %s\n' "$DMG"
 printf 'Submission ID: %s\n' "$NOTARIZE_SUBMISSION_ID"
+printf 'Size: %s bytes\n' "$dmg_size"
 printf 'SHA-256: %s\n' "$dmg_hash"
 printf 'Evidence: %s\n' "$notary_result_path"
