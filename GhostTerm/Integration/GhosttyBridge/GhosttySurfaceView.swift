@@ -96,6 +96,39 @@ import Synchronization
     }
 #endif
 
+func conservativeMinimumSurfaceSize(
+    for size: ghostty_surface_size_s
+) -> (widthPixels: UInt32, heightPixels: UInt32) {
+    let fallback = (widthPixels: UInt32(40), heightPixels: UInt32(32))
+    let cellWidth = size.cell_width_px
+    let cellHeight = size.cell_height_px
+    guard cellWidth > 0, cellHeight > 0 else { return fallback }
+
+    let gridWidth = UInt32(size.columns).multipliedReportingOverflow(by: cellWidth)
+    let gridHeight = UInt32(size.rows).multipliedReportingOverflow(by: cellHeight)
+    guard !gridWidth.overflow, !gridHeight.overflow else { return fallback }
+
+    let widthOverhead = size.width_px.subtractingReportingOverflow(gridWidth.partialValue)
+    let heightOverhead = size.height_px.subtractingReportingOverflow(gridHeight.partialValue)
+    guard !widthOverhead.overflow, !heightOverhead.overflow else { return fallback }
+
+    let minimumGridWidth = cellWidth.multipliedReportingOverflow(by: 5)
+    let minimumGridHeight = cellHeight.multipliedReportingOverflow(by: 2)
+    guard !minimumGridWidth.overflow, !minimumGridHeight.overflow else { return fallback }
+
+    let minimumWidth = widthOverhead.partialValue
+        .addingReportingOverflow(minimumGridWidth.partialValue)
+    let minimumHeight = heightOverhead.partialValue
+        .addingReportingOverflow(minimumGridHeight.partialValue)
+    guard !minimumWidth.overflow, !minimumHeight.overflow else { return fallback }
+
+    // Remainder is treated as overhead to avoid under-estimating padding, even if that rejects a fitting boundary.
+    return (
+        widthPixels: minimumWidth.partialValue,
+        heightPixels: minimumHeight.partialValue
+    )
+}
+
 typealias GhosttySurfaceCloseHandler = @MainActor @Sendable (PaneID, Bool) -> Void
 typealias GhosttySurfaceInputRoute = @MainActor (PaneID, NSEvent) -> Void
 typealias GhosttySurfaceFocusRoute = @MainActor (PaneID) -> Void
@@ -649,11 +682,8 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         let width = UInt32(roundedWidth)
         let height = UInt32(roundedHeight)
-        let minimumSize = minimumSurfaceSize(for: ghostty_surface_size(surface))
-        guard
-            UInt64(width) >= minimumSize.widthPixels,
-            UInt64(height) >= minimumSize.heightPixels
-        else { return }
+        let minimumSize = conservativeMinimumSurfaceSize(for: ghostty_surface_size(surface))
+        guard width >= minimumSize.widthPixels, height >= minimumSize.heightPixels else { return }
 
         ghostty_surface_set_size(surface, width, height)
 
@@ -667,40 +697,6 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
                 to: &sizeRequestObservations
             )
         #endif
-    }
-
-    private func minimumSurfaceSize(
-        for size: ghostty_surface_size_s
-    ) -> (widthPixels: UInt64, heightPixels: UInt64) {
-        let fallback = (widthPixels: UInt64(40), heightPixels: UInt64(32))
-        let cellWidth = UInt64(size.cell_width_px)
-        let cellHeight = UInt64(size.cell_height_px)
-        guard cellWidth > 0, cellHeight > 0 else { return fallback }
-
-        let gridWidth = UInt64(size.columns).multipliedReportingOverflow(by: cellWidth)
-        let gridHeight = UInt64(size.rows).multipliedReportingOverflow(by: cellHeight)
-        guard !gridWidth.overflow, !gridHeight.overflow else { return fallback }
-
-        let widthOverhead = UInt64(size.width_px)
-            .subtractingReportingOverflow(gridWidth.partialValue)
-        let heightOverhead = UInt64(size.height_px)
-            .subtractingReportingOverflow(gridHeight.partialValue)
-        guard !widthOverhead.overflow, !heightOverhead.overflow else { return fallback }
-
-        let minimumGridWidth = cellWidth.multipliedReportingOverflow(by: 5)
-        let minimumGridHeight = cellHeight.multipliedReportingOverflow(by: 2)
-        guard !minimumGridWidth.overflow, !minimumGridHeight.overflow else { return fallback }
-
-        let minimumWidth = widthOverhead.partialValue
-            .addingReportingOverflow(minimumGridWidth.partialValue)
-        let minimumHeight = heightOverhead.partialValue
-            .addingReportingOverflow(minimumGridHeight.partialValue)
-        guard !minimumWidth.overflow, !minimumHeight.overflow else { return fallback }
-
-        return (
-            widthPixels: minimumWidth.partialValue,
-            heightPixels: minimumHeight.partialValue
-        )
     }
 
     #if DEBUG

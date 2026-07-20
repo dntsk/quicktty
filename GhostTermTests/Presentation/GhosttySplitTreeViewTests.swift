@@ -1,4 +1,6 @@
 import AppKit
+import Darwin
+import Foundation
 import Testing
 
 @testable import GhostTerm
@@ -50,11 +52,15 @@ struct GhosttySplitTreeViewTests {
 
     @Test
     func switchingPaneRootsReplacesTheActualHostedSurfaceView() async throws {
+        let fixture = try SizeSensitiveChildFixture()
+        defer { fixture.remove() }
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
+        try fixture.startReadyReader()
         let first = try bridge.makeSurface(
-            configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
+            configuration: GhosttySurfaceConfiguration(command: fixture.command)
         )
+        try await fixture.awaitReady(timeout: .seconds(10))
         let second = try bridge.makeSurface(
             configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
         )
@@ -69,9 +75,7 @@ struct GhosttySplitTreeViewTests {
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
-        layoutWorkspace(controller, in: window)
-        await Task.yield()
-        layoutWorkspace(controller, in: window)
+        await settleWorkspace(controller, in: window)
         #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
 
         controller.displayTerminal(
@@ -81,9 +85,7 @@ struct GhosttySplitTreeViewTests {
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
-        layoutWorkspace(controller, in: window)
-        await Task.yield()
-        layoutWorkspace(controller, in: window)
+        await settleWorkspace(controller, in: window)
         #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(second)])
 
         controller.displayTerminal(
@@ -93,26 +95,41 @@ struct GhosttySplitTreeViewTests {
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
-        layoutWorkspace(controller, in: window)
-        await Task.yield()
-        layoutWorkspace(controller, in: window)
+        await settleWorkspace(controller, in: window)
 
         #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
         #expect(!first.processExitedForTesting)
         #expect(!second.processExitedForTesting)
+        let firstObservations = first.sizeRequestObservationsForTesting
+        #expect(!firstObservations.isEmpty)
         #expect(
-            first.sizeRequestObservationsForTesting.allSatisfy {
+            firstObservations.allSatisfy {
                 $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
             })
+        let secondObservations = second.sizeRequestObservationsForTesting
+        #expect(!secondObservations.isEmpty)
         #expect(
-            second.sizeRequestObservationsForTesting.allSatisfy {
+            secondObservations.allSatisfy {
                 $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
             })
+    }
+
+    private func settleWorkspace(_ controller: WorkspaceViewController, in window: NSWindow) async {
+        for _ in 0..<4 {
+            layoutWorkspace(controller, in: window)
+            await Task.yield()
+            runMainLoopOnce()
+        }
+        layoutWorkspace(controller, in: window)
     }
 
     private func layoutWorkspace(_ controller: WorkspaceViewController, in window: NSWindow) {
         window.contentView?.layoutSubtreeIfNeeded()
         controller.view.layoutSubtreeIfNeeded()
+    }
+
+    private func runMainLoopOnce() {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 
     private func mountWorkspace(_ controller: WorkspaceViewController) -> NSWindow {
@@ -196,4 +213,126 @@ struct GhosttySplitTreeViewTests {
         #expect(controller.splitHostingControllerIdentifierForTesting == nil)
         #expect(controller.emptyWorkspaceLabelIsVisibleForTesting)
     }
+}
+
+private enum SizeSensitiveChildError: Error {
+    case fifoCreationFailed(Int32)
+    case childProcessFailed(Int32)
+    case eventStreamEnded
+    case timeout
+}
+
+@MainActor
+private final class SizeSensitiveChildFixture {
+    let directoryURL: URL
+    let command: String
+
+    private let readyFIFOURL: URL
+    private let readyReader = Process()
+    private let readyOutput = Pipe()
+    private let readyExits: AsyncStream<Int32>
+    private let readyExitContinuation: AsyncStream<Int32>.Continuation
+
+    init() throws {
+        directoryURL = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+        readyFIFOURL = directoryURL.appending(path: "ready.fifo")
+        let fifoResult = readyFIFOURL.path.withCString { path in
+            Darwin.mkfifo(path, mode_t(S_IRUSR | S_IWUSR))
+        }
+        guard fifoResult == 0 else {
+            throw SizeSensitiveChildError.fifoCreationFailed(errno)
+        }
+
+        let scriptURL = directoryURL.appending(path: "size-sensitive-child")
+        let script = """
+            #!/bin/sh
+            check_size() {
+                set -- $(stty size)
+                [ "$#" -eq 2 ] && [ "$1" -ge 2 ] && [ "$2" -ge 5 ] || exit 91
+            }
+            trap 'check_size' WINCH
+            printf R > \(shellQuoteSizeSensitiveChild(readyFIFOURL.path))
+            while :; do
+                sleep 1 &
+                wait $!
+            done
+            """
+        try Data(script.utf8).write(to: scriptURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: scriptURL.path
+        )
+        command = "/bin/sh \(shellQuoteSizeSensitiveChild(scriptURL.path))"
+
+        (readyExits, readyExitContinuation) = AsyncStream.makeStream(of: Int32.self)
+        readyReader.executableURL = URL(filePath: "/bin/cat")
+        readyReader.arguments = [readyFIFOURL.path]
+        readyReader.standardOutput = readyOutput
+        readyReader.standardError = FileHandle.nullDevice
+        let continuation = readyExitContinuation
+        readyReader.terminationHandler = { process in
+            continuation.yield(process.terminationStatus)
+            continuation.finish()
+        }
+    }
+
+    func startReadyReader() throws {
+        try readyReader.run()
+    }
+
+    func awaitReady(timeout: Duration) async throws {
+        let status = try await firstSizeSensitiveChildExit(
+            from: readyExits,
+            timeout: timeout
+        )
+        guard status == 0 else {
+            throw SizeSensitiveChildError.childProcessFailed(status)
+        }
+        guard readyOutput.fileHandleForReading.readDataToEndOfFile() == Data("R".utf8) else {
+            throw SizeSensitiveChildError.childProcessFailed(status)
+        }
+    }
+
+    func remove() {
+        readyExitContinuation.finish()
+        if readyReader.isRunning {
+            readyReader.terminate()
+        }
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
+
+private func firstSizeSensitiveChildExit(
+    from stream: AsyncStream<Int32>,
+    timeout: Duration
+) async throws -> Int32 {
+    try await withThrowingTaskGroup(of: Int32.self) { group in
+        group.addTask {
+            for await status in stream {
+                return status
+            }
+            throw SizeSensitiveChildError.eventStreamEnded
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw SizeSensitiveChildError.timeout
+        }
+
+        guard let status = try await group.next() else {
+            throw SizeSensitiveChildError.eventStreamEnded
+        }
+        group.cancelAll()
+        return status
+    }
+}
+
+private func shellQuoteSizeSensitiveChild(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }

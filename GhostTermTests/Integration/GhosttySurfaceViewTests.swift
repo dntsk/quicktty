@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import GhosttyKit
 import Testing
 
 @testable import GhostTerm
@@ -117,16 +118,51 @@ extension GhosttyBridgeTests {
         #expect(first.cellWidthPixels > 0)
         #expect(first.cellHeightPixels > 0)
 
-        surface.setFrameSize(NSSize(width: 640, height: 420))
+        let secondRequestedBackingSize = NSSize(width: 640, height: 420)
+        surface.setFrameSize(surface.convertFromBacking(secondRequestedBackingSize))
         let second = try #require(surface.sizeSnapshotForTesting)
-        let secondExpected = surface.convertToBacking(surface.bounds.size)
 
-        #expect(second.widthPixels == UInt32(secondExpected.width.rounded(.down)))
-        #expect(second.heightPixels == UInt32(secondExpected.height.rounded(.down)))
+        #expect(second.widthPixels == UInt32(secondRequestedBackingSize.width))
+        #expect(second.heightPixels == UInt32(secondRequestedBackingSize.height))
         #expect(second.widthPixels != first.widthPixels)
         #expect(second.heightPixels != first.heightPixels)
         #expect(second.columns != first.columns)
         #expect(second.rows != first.rows)
+    }
+
+    @Test
+    func conservativeMinimumSurfaceSizeFallsBackForInvalidOrUnrepresentableMetrics() {
+        let fallback = (widthPixels: UInt32(40), heightPixels: UInt32(32))
+
+        #expect(
+            conservativeMinimumSurfaceSize(
+                for: syntheticSurfaceSize(cellWidth: 0, cellHeight: 0)
+            ) == fallback
+        )
+        #expect(
+            conservativeMinimumSurfaceSize(
+                for: syntheticSurfaceSize(
+                    columns: .max,
+                    rows: .max,
+                    widthPixels: .max,
+                    heightPixels: .max,
+                    cellWidth: .max,
+                    cellHeight: .max
+                )
+            ) == fallback
+        )
+        #expect(
+            conservativeMinimumSurfaceSize(
+                for: syntheticSurfaceSize(
+                    columns: 1,
+                    rows: 1,
+                    widthPixels: 0,
+                    heightPixels: 0,
+                    cellWidth: 1,
+                    cellHeight: 1
+                )
+            ) == fallback
+        )
     }
 
     @Test
@@ -143,7 +179,16 @@ extension GhosttyBridgeTests {
         surface.setFrameSize(NSSize(width: 800, height: 600))
         let stableSize = try #require(surface.sizeSnapshotForTesting)
         let validRequestCount = surface.sizeRequestObservationsForTesting.count
-        let minimumSize = minimumSizeInPixels(for: stableSize)
+        let minimumSize = conservativeMinimumSurfaceSize(
+            for: syntheticSurfaceSize(
+                columns: stableSize.columns,
+                rows: stableSize.rows,
+                widthPixels: stableSize.widthPixels,
+                heightPixels: stableSize.heightPixels,
+                cellWidth: stableSize.cellWidthPixels,
+                cellHeight: stableSize.cellHeightPixels
+            )
+        )
 
         surface.setFrameSize(.zero)
         #expect(surface.sizeSnapshotForTesting == stableSize)
@@ -155,18 +200,74 @@ extension GhosttyBridgeTests {
 
         surface.setFrameSize(
             surface.convertFromBacking(
-                NSSize(width: CGFloat(minimumSize.width - 1), height: CGFloat(minimumSize.height))
+                NSSize(
+                    width: CGFloat(minimumSize.widthPixels - 1),
+                    height: CGFloat(minimumSize.heightPixels)
+                )
             )
         )
         #expect(surface.sizeSnapshotForTesting == stableSize)
         #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount)
 
+        surface.setFrameSize(
+            surface.convertFromBacking(
+                NSSize(
+                    width: CGFloat(minimumSize.widthPixels),
+                    height: CGFloat(minimumSize.heightPixels)
+                )
+            )
+        )
+        let thresholdSize = try #require(surface.sizeSnapshotForTesting)
+        let thresholdRequest = try #require(surface.sizeRequestObservationsForTesting.last)
+        #expect(thresholdRequest.requestedWidthPixels == minimumSize.widthPixels)
+        #expect(thresholdRequest.requestedHeightPixels == minimumSize.heightPixels)
+        #expect(thresholdSize.columns >= 5)
+        #expect(thresholdSize.rows >= 2)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount + 1)
+
         surface.setFrameSize(NSSize(width: 640, height: 420))
         let restoredSize = try #require(surface.sizeSnapshotForTesting)
         #expect(restoredSize != stableSize)
-        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount + 1)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount + 2)
         #expect(
             surface.sizeRequestObservationsForTesting.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            })
+    }
+
+    @Test
+    func sizeRequestObservationsKeepOnlyTheLatest256AcceptedResizes() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        defer { window.orderOut(nil) }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        let initialSurfaceIDs = bridge.activeSurfaceIDs
+        let requestedBackingSizes = (0..<300).map {
+            NSSize(width: CGFloat(800 + $0), height: CGFloat(600 + $0))
+        }
+        for requestedBackingSize in requestedBackingSizes {
+            surface.setFrameSize(surface.convertFromBacking(requestedBackingSize))
+        }
+
+        let observations = surface.sizeRequestObservationsForTesting
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.activeSurfaceIDs == initialSurfaceIDs)
+        #expect(observations.count == 256)
+        let expectedRequests = requestedBackingSizes.suffix(256).map {
+            (width: UInt32($0.width), height: UInt32($0.height))
+        }
+        #expect(
+            zip(observations, expectedRequests).allSatisfy {
+                $0.requestedWidthPixels == $1.width && $0.requestedHeightPixels == $1.height
+            }
+        )
+        #expect(
+            observations.allSatisfy {
                 $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
             })
     }
@@ -363,14 +464,21 @@ extension GhosttyBridgeTests {
     }
 }
 
-private func minimumSizeInPixels(
-    for size: GhosttySurfaceSizeSnapshot
-) -> (width: UInt64, height: UInt64) {
-    let width = UInt64(size.widthPixels) - UInt64(size.columns) * UInt64(size.cellWidthPixels)
-    let height = UInt64(size.heightPixels) - UInt64(size.rows) * UInt64(size.cellHeightPixels)
-    return (
-        width: width + 5 * UInt64(size.cellWidthPixels),
-        height: height + 2 * UInt64(size.cellHeightPixels)
+private func syntheticSurfaceSize(
+    columns: UInt16 = 80,
+    rows: UInt16 = 24,
+    widthPixels: UInt32 = 800,
+    heightPixels: UInt32 = 384,
+    cellWidth: UInt32 = 10,
+    cellHeight: UInt32 = 16
+) -> ghostty_surface_size_s {
+    ghostty_surface_size_s(
+        columns: columns,
+        rows: rows,
+        width_px: widthPixels,
+        height_px: heightPixels,
+        cell_width_px: cellWidth,
+        cell_height_px: cellHeight
     )
 }
 
