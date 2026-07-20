@@ -53,7 +53,6 @@ final class ConfigController {
     private let watcherScheduler: ConfigFileWatcher.Scheduler?
     private let watcherEventSource: ConfigFileWatcher.EventSource
     private var watcher: ConfigFileWatcher?
-    private var applyGeneration: UInt64 = 0
 
     init(
         configURL: URL,
@@ -212,8 +211,6 @@ final class ConfigController {
     }
 
     private func apply(_ document: ConfigDocument) throws {
-        applyGeneration &+= 1
-        let generation = applyGeneration
         let result = document.parse()
 
         let previousConfig = activeConfig
@@ -260,7 +257,7 @@ final class ConfigController {
 
         activeDocument = document
         onUpdate(result.config)
-        guard applyGeneration == generation, activeDocument == document else { return }
+        guard activeDocument == document else { return }
         onDiagnostics(result.diagnostics)
     }
 

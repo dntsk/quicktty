@@ -211,6 +211,72 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func failedNestedReloadRestoresOuterDocumentAndReportsOuterDiagnostics() throws {
+        enum Failure: Error { case rejected }
+
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        let outerSource = Data(
+            """
+            ghostterm-presentation-mode = quake
+            ghostterm-quake-height = impossible
+            """.utf8
+        )
+        try outerSource.write(to: fixture.configURL)
+        let replacementSource = Data(
+            """
+            ghostterm-config-editor = code --wait
+            ghostterm-restore-workspaces = false
+            """.utf8
+        )
+        let state = FailingNestedReloadState(
+            configURL: fixture.configURL,
+            replacementSource: replacementSource
+        )
+        var reloadCount = 0
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in
+                reloadCount += 1
+                if reloadCount == 2 {
+                    throw Failure.rejected
+                }
+            },
+            onUpdate: { state.onUpdate($0) },
+            onDiagnostics: { state.onDiagnostics($0) }
+        )
+        state.controller = controller
+
+        try controller.load()
+
+        #expect(state.callbackEvents == ["update:nano", "diagnostics:ghostterm-quake-height"])
+        #expect(
+            state.caughtErrors
+                == [
+                    .ghosttyReloadFailed("rejected")
+                ]
+        )
+        #expect(
+            state.reportedDiagnostics
+                == [
+                    [
+                        ConfigDiagnostic(
+                            line: 2,
+                            key: "ghostterm-quake-height",
+                            reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
+                        )
+                    ]
+                ]
+        )
+        #expect(controller.activeConfig.presentationMode == .quake)
+        #expect(controller.activeConfig.configEditor == "nano")
+        #expect(controller.activeDocument == ConfigDocument(data: outerSource))
+    }
+
+    @Test
     func bridgeFailureRollsBackActiveConfigAndEffectiveBytes() throws {
         enum Failure: Error { case rejected }
         let fixture = try ConfigFixture()
@@ -454,6 +520,45 @@ private final class ReentrantReloadState {
         try! replacementSource.write(to: configURL)
         guard let controller else { return }
         try! controller.reload()
+    }
+
+    func onDiagnostics(_ diagnostics: [ConfigDiagnostic]) {
+        callbackEvents.append(
+            "diagnostics:\(diagnostics.map { $0.key ?? "nil" }.joined(separator: ","))"
+        )
+        reportedDiagnostics.append(diagnostics)
+    }
+}
+
+@MainActor
+private final class FailingNestedReloadState {
+    let configURL: URL
+    let replacementSource: Data
+
+    var callbackEvents: [String] = []
+    var reportedDiagnostics: [[ConfigDiagnostic]] = []
+    var caughtErrors: [ConfigControllerError] = []
+    var didReenter = false
+    weak var controller: ConfigController?
+
+    init(configURL: URL, replacementSource: Data) {
+        self.configURL = configURL
+        self.replacementSource = replacementSource
+    }
+
+    func onUpdate(_ config: GhostTermConfig) {
+        callbackEvents.append("update:\(config.configEditor)")
+        guard !didReenter else { return }
+        didReenter = true
+        try! replacementSource.write(to: configURL)
+        guard let controller else { return }
+        do {
+            try controller.reload()
+        } catch let error as ConfigControllerError {
+            caughtErrors.append(error)
+        } catch {
+            Issue.record("Unexpected error: \(String(describing: error))")
+        }
     }
 
     func onDiagnostics(_ diagnostics: [ConfigDiagnostic]) {
