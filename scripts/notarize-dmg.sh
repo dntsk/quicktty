@@ -109,17 +109,14 @@ release_reject_secret_environment
 release_validate_team "${DEVELOPMENT_TEAM:-}"
 release_validate_identity "${CODE_SIGN_IDENTITY:-}"
 
-if [ "${NOTARY_PROFILE+x}" != x ]; then
-    NOTARY_PROFILE=$NOTARY_PROFILE_DEFAULT
-fi
+notarize_apply_defaults
 notarize_validate_profile "$NOTARY_PROFILE"
-[ -n "${DMG:-}" ] || release_fail 'DMG must be set'
 
 [ -e "$repo_root/.git" ] || release_fail "not a Git repository: $repo_root"
 expected_dmg_path=$repo_root/.build/Release/$RELEASE_DMG_NAME
-notarize_validate_dmg_path "$DMG" "$expected_dmg_path"
+DMG=$(notarize_resolve_dmg_path "$DMG" "$repo_root" "$expected_dmg_path")
 release_dir=${expected_dmg_path%/*}
-notary_result_path=$release_dir/$NOTARY_RESULT_NAME
+notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
 assert_result_path
 
 DEVELOPER_DIR=${DEVELOPER_DIR:-$DEFAULT_DEVELOPER_DIR}

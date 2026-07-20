@@ -4,6 +4,7 @@ RELEASE_LABEL_DEFAULT=0.1.0-alpha.1
 RELEASE_ARCHIVE_NAME=GhostTerm.xcarchive
 RELEASE_DMG_NAME=GhostTerm-0.1.0-alpha.1-arm64.dmg
 RELEASE_STAGE_NAME=GhostTerm-0.1.0-alpha.1-stage
+RELEASE_NOTARY_RESULT_NAME=$RELEASE_DMG_NAME.notary-result.json
 RELEASE_FIND_PATH=/usr/bin/find
 RELEASE_MKDIR_PATH=/bin/mkdir
 RELEASE_RM_PATH=/bin/rm
@@ -351,6 +352,7 @@ release_assert_generated_path() {
     case "$release_candidate" in
         "$release_output_dir/$RELEASE_ARCHIVE_NAME" | \
         "$release_output_dir/$RELEASE_DMG_NAME" | \
+        "$release_output_dir/$RELEASE_NOTARY_RESULT_NAME" | \
         "$release_output_dir/$RELEASE_STAGE_NAME") ;;
         *) release_fail "refusing to remove non-generated release path: $release_candidate" ;;
     esac

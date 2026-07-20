@@ -1,8 +1,4 @@
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
-DEVELOPMENT_TEAM ?=
-CODE_SIGN_IDENTITY ?=
-NOTARY_PROFILE ?= ghostterm-notary
-DMG ?= .build/Release/GhostTerm-0.1.0-alpha.1-arm64.dmg
 export DEVELOPER_DIR
 
 PROJECT := GhostTerm.xcodeproj
@@ -28,28 +24,18 @@ ghostty:
 ghostty-resources-test: ghostty
 	./scripts/tests/copy-ghostty-resources-test.sh
 
-release: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
-release: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
 release:
 	./scripts/build-release.sh
 
 release-contract:
 	./scripts/tests/build-release-test.sh
 
-notarize: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
-notarize: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
-notarize: export NOTARY_PROFILE := $(NOTARY_PROFILE)
-notarize: export DMG := $(abspath $(DMG))
 notarize:
 	./scripts/notarize-dmg.sh
 
 notarize-contract:
 	./scripts/tests/notarize-dmg-test.sh
 
-signed-alpha: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
-signed-alpha: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
-signed-alpha: export NOTARY_PROFILE := $(NOTARY_PROFILE)
-signed-alpha: export DMG := $(abspath $(DMG))
 signed-alpha:
 	$(MAKE) release
 	$(MAKE) notarize

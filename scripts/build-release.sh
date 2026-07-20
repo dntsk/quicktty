@@ -318,11 +318,13 @@ require_executable_path "$zig_path"
 release_dir=$(release_prepare_output_directory "$repo_root")
 archive_path=$release_dir/$RELEASE_ARCHIVE_NAME
 dmg_path=$release_dir/$RELEASE_DMG_NAME
+notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
 stage_dir=$release_dir/$RELEASE_STAGE_NAME
 
-printf '%s\n' 'cleanup: only prior GhostTerm archive, DMG, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
+printf '%s\n' 'cleanup: only prior GhostTerm archive, DMG, notarization result, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
 release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
+release_remove_generated_file "$release_dir" "$notary_result_path"
 release_remove_generated_directory "$release_dir" "$stage_dir"
 
 trap cleanup_release_exit 0

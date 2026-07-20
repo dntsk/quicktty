@@ -153,18 +153,22 @@ release_dir=$(release_prepare_output_directory "$fixture_repo")
 
 archive_path=$release_dir/$RELEASE_ARCHIVE_NAME
 dmg_path=$release_dir/$RELEASE_DMG_NAME
+notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
 stage_path=$release_dir/$RELEASE_STAGE_NAME
 unrelated_path=$release_dir/keep-me.txt
 printf 'unrelated\n' >"$unrelated_path"
 mkdir "$archive_path" "$stage_path"
 printf 'generated\n' >"$dmg_path"
+printf 'stale notarization result\n' >"$notary_result_path"
 
 release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_directory "$release_dir" "$stage_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
+release_remove_generated_file "$release_dir" "$notary_result_path"
 assert_missing "$archive_path"
 assert_missing "$stage_path"
 assert_missing "$dmg_path"
+assert_missing "$notary_result_path"
 [ -f "$unrelated_path" ] || fail 'cleanup modified an unrelated release file'
 release_assert_generated_path_absent "$release_dir" "$dmg_path"
 printf 'race\n' >"$dmg_path"
@@ -175,6 +179,11 @@ ln -s "$unrelated_path" "$dmg_path"
 expect_failure sh -c '. "$1"; release_assert_generated_path_absent "$2" "$3"' sh \
     "$helpers" "$release_dir" "$dmg_path"
 rm "$dmg_path"
+ln -s "$unrelated_path" "$notary_result_path"
+expect_failure sh -c '. "$1"; release_remove_generated_file "$2" "$3"' sh \
+    "$helpers" "$release_dir" "$notary_result_path"
+[ -L "$notary_result_path" ] || fail 'notarization-result cleanup removed a symlink'
+rm "$notary_result_path"
 
 mkdir "$tmp_root/symlink-target"
 ln -s "$tmp_root/symlink-target" "$stage_path"

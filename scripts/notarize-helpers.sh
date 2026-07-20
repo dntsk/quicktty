@@ -1,7 +1,16 @@
 #!/bin/sh
 
 NOTARY_PROFILE_DEFAULT=ghostterm-notary
-NOTARY_RESULT_NAME=$RELEASE_DMG_NAME.notary-result.json
+NOTARIZE_DEFAULT_DMG=.build/Release/$RELEASE_DMG_NAME
+
+notarize_apply_defaults() {
+    if [ "${NOTARY_PROFILE+x}" != x ]; then
+        NOTARY_PROFILE=$NOTARY_PROFILE_DEFAULT
+    fi
+    if [ "${DMG+x}" != x ]; then
+        DMG=$NOTARIZE_DEFAULT_DMG
+    fi
+}
 
 notarize_validate_profile() {
     notarize_profile=$1
@@ -14,14 +23,25 @@ notarize_validate_profile() {
     esac
 }
 
-notarize_validate_dmg_path() {
-    notarize_dmg_path=$1
-    notarize_expected_dmg_path=$2
+notarize_resolve_dmg_path() {
+    notarize_dmg_input=$1
+    notarize_repo_root=$2
+    notarize_expected_dmg_path=$3
 
-    [ -n "$notarize_dmg_path" ] || release_fail 'DMG must be set'
-    case "$notarize_dmg_path" in
-        /*) ;;
-        *) release_fail 'DMG must be an absolute canonical path' ;;
+    [ -n "$notarize_dmg_input" ] || release_fail 'DMG must be set'
+    [ -d "$notarize_repo_root" ] || release_fail "repository root is not a directory: $notarize_repo_root"
+    [ ! -L "$notarize_repo_root" ] || release_fail "repository root must not be a symlink: $notarize_repo_root"
+    notarize_repo_root_canonical=$(CDPATH= cd -P "$notarize_repo_root" && pwd -P) \
+        || release_fail "could not resolve repository root: $notarize_repo_root"
+    [ "$notarize_repo_root_canonical" = "$notarize_repo_root" ] \
+        || release_fail "repository root is not canonical: $notarize_repo_root"
+
+    case "/$notarize_dmg_input/" in
+        */../*) release_fail 'DMG must not contain .. path components' ;;
+    esac
+    case "$notarize_dmg_input" in
+        /*) notarize_dmg_path=$notarize_dmg_input ;;
+        *) notarize_dmg_path=$notarize_repo_root/$notarize_dmg_input ;;
     esac
 
     notarize_dmg_parent=${notarize_dmg_path%/*}
@@ -41,6 +61,7 @@ notarize_validate_dmg_path() {
         || release_fail "DMG path is not canonical: $notarize_dmg_path"
     [ "$notarize_dmg_canonical" = "$notarize_expected_dmg_path" ] \
         || release_fail "DMG must be the expected release artifact: $notarize_expected_dmg_path"
+    printf '%s\n' "$notarize_dmg_canonical"
 }
 
 notarize_validate_submission_id() {
