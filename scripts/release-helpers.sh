@@ -91,6 +91,95 @@ release_source_tree_state() {
     fi
 }
 
+release_require_canonical_directory() {
+    release_directory_path=$1
+    release_directory_description=$2
+
+    [ -d "$release_directory_path" ] \
+        || release_fail "$release_directory_description is not a directory: $release_directory_path"
+    [ ! -L "$release_directory_path" ] \
+        || release_fail "$release_directory_description must not be a symlink: $release_directory_path"
+    release_directory_canonical=$(CDPATH= cd -P "$release_directory_path" && pwd -P) \
+        || release_fail "could not resolve $release_directory_description: $release_directory_path"
+    [ "$release_directory_canonical" = "$release_directory_path" ] \
+        || release_fail "$release_directory_description is not canonical: $release_directory_path"
+}
+
+release_prepare_ghostty_generated_resource_parent() {
+    release_resource_repository=$1
+    release_ghostty_directory=$release_resource_repository/Vendor/ghostty
+    release_zig_out_directory=$release_ghostty_directory/zig-out
+    release_share_directory=$release_zig_out_directory/share
+
+    release_require_canonical_directory "$release_resource_repository" 'repository root'
+    release_require_canonical_directory "$release_resource_repository/Vendor" 'Vendor directory'
+    release_require_canonical_directory "$release_ghostty_directory" 'Ghostty source directory'
+
+    if [ ! -e "$release_zig_out_directory" ] && [ ! -L "$release_zig_out_directory" ]; then
+        return 0
+    fi
+    release_require_canonical_directory "$release_zig_out_directory" 'Ghostty zig-out directory'
+
+    if [ ! -e "$release_share_directory" ] && [ ! -L "$release_share_directory" ]; then
+        return 0
+    fi
+    release_require_canonical_directory "$release_share_directory" 'Ghostty generated share directory'
+}
+
+release_remove_ghostty_generated_resource_directory() {
+    release_resource_repository=$1
+    release_resource_candidate=$2
+    release_terminfo_directory=$release_resource_repository/Vendor/ghostty/zig-out/share/terminfo
+    release_ghostty_resource_directory=$release_resource_repository/Vendor/ghostty/zig-out/share/ghostty
+
+    case "$release_resource_candidate" in
+        "$release_terminfo_directory" | "$release_ghostty_resource_directory") ;;
+        *) release_fail "refusing to remove non-generated Ghostty resource path: $release_resource_candidate" ;;
+    esac
+
+    release_prepare_ghostty_generated_resource_parent "$release_resource_repository"
+
+    if [ -e "$release_resource_candidate" ] || [ -L "$release_resource_candidate" ]; then
+        release_require_canonical_directory "$release_resource_candidate" 'Ghostty generated resource directory'
+        printf 'cleanup: removing generated Ghostty runtime resources: %s\n' "$release_resource_candidate"
+        "$RELEASE_RM_PATH" -rf "$release_resource_candidate"
+    fi
+}
+
+release_force_clean_ghostty_generated_resources() {
+    release_resource_repository=$1
+    release_resource_share_directory=$release_resource_repository/Vendor/ghostty/zig-out/share
+
+    release_remove_ghostty_generated_resource_directory \
+        "$release_resource_repository" "$release_resource_share_directory/terminfo"
+    release_remove_ghostty_generated_resource_directory \
+        "$release_resource_repository" "$release_resource_share_directory/ghostty"
+}
+
+release_verify_ghostty_generated_resources() {
+    release_resource_repository=$1
+    release_resource_share_directory=$release_resource_repository/Vendor/ghostty/zig-out/share
+    release_terminfo_directory=$release_resource_share_directory/terminfo
+    release_ghostty_resource_directory=$release_resource_share_directory/ghostty
+
+    release_prepare_ghostty_generated_resource_parent "$release_resource_repository"
+    release_require_canonical_directory "$release_resource_share_directory" 'Ghostty generated share directory'
+    release_require_canonical_directory "$release_terminfo_directory" 'Ghostty generated terminfo directory'
+    release_require_canonical_directory "$release_terminfo_directory/78" 'Ghostty generated terminfo entry directory'
+    release_require_canonical_directory "$release_ghostty_resource_directory" 'Ghostty generated resource directory'
+    release_require_canonical_directory \
+        "$release_ghostty_resource_directory/shell-integration" 'Ghostty generated shell integration directory'
+    release_require_canonical_directory "$release_ghostty_resource_directory/themes" 'Ghostty generated themes directory'
+    [ -f "$release_terminfo_directory/78/xterm-ghostty" ] \
+        || release_fail "missing generated Ghostty terminfo sentinel: $release_terminfo_directory/78/xterm-ghostty"
+    [ ! -L "$release_terminfo_directory/78/xterm-ghostty" ] \
+        || release_fail "generated Ghostty terminfo sentinel must not be a symlink: $release_terminfo_directory/78/xterm-ghostty"
+    [ -f "$release_ghostty_resource_directory/shell-integration/bash/ghostty.bash" ] \
+        || release_fail "missing generated Ghostty shell integration sentinel: $release_ghostty_resource_directory/shell-integration/bash/ghostty.bash"
+    [ ! -L "$release_ghostty_resource_directory/shell-integration/bash/ghostty.bash" ] \
+        || release_fail "generated Ghostty shell integration sentinel must not be a symlink: $release_ghostty_resource_directory/shell-integration/bash/ghostty.bash"
+}
+
 release_require_empty_or_absent_directory() {
     release_directory_path=$1
 

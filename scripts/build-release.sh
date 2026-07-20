@@ -1,4 +1,7 @@
 #!/bin/sh
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
+export PATH
+
 set -eu
 
 LC_ALL=C
@@ -217,8 +220,11 @@ EOF
 }
 
 stage_created=no
-cleanup_stage() {
-    cleanup_status=$?
+archive_pending=no
+dmg_pending=no
+
+cleanup_release_outputs() {
+    cleanup_status=$1
     trap - 0 HUP INT TERM
 
     if [ "$stage_created" = yes ]; then
@@ -226,8 +232,26 @@ cleanup_stage() {
             printf 'error: could not remove generated staging directory: %s\n' "$stage_dir" >&2
         fi
     fi
+    if [ "$dmg_pending" = yes ]; then
+        if ! release_remove_generated_file "$release_dir" "$dmg_path"; then
+            printf 'error: could not remove incomplete release DMG: %s\n' "$dmg_path" >&2
+        fi
+    fi
+    if [ "$archive_pending" = yes ]; then
+        if ! release_remove_generated_directory "$release_dir" "$archive_path"; then
+            printf 'error: could not remove incomplete release archive: %s\n' "$archive_path" >&2
+        fi
+    fi
 
     exit "$cleanup_status"
+}
+
+cleanup_release_exit() {
+    cleanup_release_outputs "$?"
+}
+
+handle_release_signal() {
+    cleanup_release_outputs "$1"
 }
 
 release_require_no_arguments "$@"
@@ -281,17 +305,15 @@ done
 xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)
 lipo_path=$(resolve_selected_xcode_tool lipo)
 otool_path=$(resolve_selected_xcode_tool otool)
-xcodegen_resolved_path=$(command -v xcodegen) || release_fail 'xcodegen was not found'
-case "$xcodegen_resolved_path" in
-    /*) ;;
-    *) release_fail "xcodegen did not resolve to an absolute path: $xcodegen_resolved_path" ;;
-esac
-xcodegen_dir=${xcodegen_resolved_path%/*}
-xcodegen_name=${xcodegen_resolved_path##*/}
-xcodegen_dir=$(CDPATH= cd -P "$xcodegen_dir" && pwd -P) \
-    || release_fail "could not resolve xcodegen directory: $xcodegen_resolved_path"
-xcodegen_path=$xcodegen_dir/$xcodegen_name
+homebrew_bin=/opt/homebrew/bin
+xcodegen_path=$homebrew_bin/xcodegen
+zig_path=$homebrew_bin/zig
 require_executable_path "$xcodegen_path"
+require_executable_path "$zig_path"
+[ "$(command -v xcodegen)" = "$xcodegen_path" ] \
+    || release_fail "xcodegen did not resolve from the trusted Homebrew location: $xcodegen_path"
+[ "$(command -v zig)" = "$zig_path" ] \
+    || release_fail "zig did not resolve from the trusted Homebrew location: $zig_path"
 
 release_dir=$(release_prepare_output_directory "$repo_root")
 archive_path=$release_dir/$RELEASE_ARCHIVE_NAME
@@ -302,6 +324,11 @@ printf '%s\n' 'cleanup: only prior GhostTerm archive, DMG, and staging directory
 release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
 release_remove_generated_directory "$release_dir" "$stage_dir"
+
+trap cleanup_release_exit 0
+trap 'handle_release_signal 129' HUP
+trap 'handle_release_signal 130' INT
+trap 'handle_release_signal 143' TERM
 
 source_revision=$("$git_path" -C "$repo_root" rev-parse HEAD 2>/dev/null) \
     || release_fail 'could not determine base Git revision'
@@ -314,8 +341,15 @@ if [ "$source_tree_state" = dirty ]; then
 fi
 
 cd "$repo_root"
-"$script_dir/build-ghostty.sh"
+release_force_clean_ghostty_generated_resources "$repo_root"
+GHOSTTERM_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"
+release_verify_ghostty_generated_resources "$repo_root"
+prepared_source_tree_state=$(release_source_tree_state "$repo_root" "$git_path") \
+    || release_fail 'could not determine source tree state after Ghostty resource rebuild'
+[ "$prepared_source_tree_state" = "$source_tree_state" ] \
+    || release_fail 'source tree state changed during Ghostty resource rebuild'
 "$xcodegen_path" generate --spec "$repo_root/project.yml"
+archive_pending=yes
 "$xcodebuild_path" archive \
     -project "$repo_root/GhostTerm.xcodeproj" \
     -scheme GhostTerm \
@@ -332,10 +366,6 @@ cd "$repo_root"
 archive_app=$archive_path/Products/Applications/$PRODUCT_NAME.app
 verify_bundle "$archive_app"
 
-trap cleanup_stage 0
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 "$mkdir_path" "$stage_dir" || release_fail "could not create staging directory: $stage_dir"
 stage_created=yes
 "$ditto_path" "$archive_app" "$stage_dir/$PRODUCT_NAME.app"
@@ -348,6 +378,7 @@ stage_created=yes
     || release_fail 'staged app did not preserve its strict code signature'
 
 release_assert_generated_path_absent "$release_dir" "$dmg_path"
+dmg_pending=yes
 "$hdiutil_path" create \
     -volname "$VOLUME_NAME" \
     -srcfolder "$stage_dir" \
@@ -363,4 +394,7 @@ stage_created=no
 verify_signature_metadata "$dmg_path" '' no
 
 [ -f "$dmg_path" ] || release_fail "release DMG was not created: $dmg_path"
+archive_pending=no
+dmg_pending=no
+trap - 0 HUP INT TERM
 printf '%s\n' ".build/Release/$RELEASE_DMG_NAME"

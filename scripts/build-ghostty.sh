@@ -4,6 +4,15 @@ set -eu
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 REQUIRED_GHOSTTY_COMMIT=332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
 REQUIRED_ZIG_VERSION=0.15.2
+GHOSTTERM_FORCE_GHOSTTY_REBUILD=${GHOSTTERM_FORCE_GHOSTTY_REBUILD:-0}
+
+case "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" in
+    0 | 1) ;;
+    *)
+        printf '%s\n' 'error: GHOSTTERM_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >&2
+        exit 1
+        ;;
+esac
 
 if [ -z "${DEVELOPER_DIR:-}" ] && [ -d "$DEFAULT_DEVELOPER_DIR" ]; then
     DEVELOPER_DIR=$DEFAULT_DEVELOPER_DIR
@@ -230,9 +239,13 @@ cache_key=$(
 cache_key=${cache_key%% *}
 stamp_path=$cache_dir/$cache_key.stamp
 
-if validate_cached_xcframework; then
+if [ "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" = 0 ] && validate_cached_xcframework; then
     printf 'Reusing cached GhosttyKit XCFramework after checksum and required symbol validation: %s\n' "$xcframework_dir"
     exit 0
+fi
+
+if [ "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" = 1 ]; then
+    cache_validation_error='forced Ghostty rebuild requested by GHOSTTERM_FORCE_GHOSTTY_REBUILD=1'
 fi
 
 if [ -f "$stamp_path" ]; then
@@ -270,14 +283,38 @@ mkdir -p "$cache_dir"
 repack_dir=
 temporary_stamp=
 cleanup() {
+    cleanup_result=0
+
     if [ -n "$repack_dir" ]; then
-        rm -rf "$repack_dir"
+        rm -rf "$repack_dir" || cleanup_result=1
     fi
     if [ -n "$temporary_stamp" ]; then
-        rm -f "$temporary_stamp"
+        rm -f "$temporary_stamp" || cleanup_result=1
     fi
+
+    return "$cleanup_result"
 }
-trap cleanup EXIT HUP INT TERM
+
+cleanup_exit() {
+    cleanup_status=$?
+    trap - EXIT HUP INT TERM
+
+    cleanup || printf '%s\n' 'error: could not remove temporary Ghostty build files' >&2
+    exit "$cleanup_status"
+}
+
+handle_signal() {
+    signal_status=$1
+    trap - EXIT HUP INT TERM
+
+    cleanup || printf '%s\n' 'error: could not remove temporary Ghostty build files' >&2
+    exit "$signal_status"
+}
+
+trap cleanup_exit EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 repack_dir=$(mktemp -d "$cache_dir/archive-repack.XXXXXX") || fail "could not create Ghostty archive repack directory"
 candidate_inputs_path=$repack_dir/candidate-inputs.txt
@@ -335,6 +372,6 @@ temporary_stamp=$stamp_path.tmp.$$
 } >"$temporary_stamp" || fail "could not write temporary Ghostty cache stamp"
 mv -f "$temporary_stamp" "$stamp_path" || fail "could not atomically replace Ghostty cache stamp"
 temporary_stamp=
-cleanup
+cleanup || fail 'could not remove temporary Ghostty build files'
 trap - EXIT HUP INT TERM
 printf 'GhosttyKit XCFramework: %s\n' "$xcframework_dir"

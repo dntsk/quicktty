@@ -51,12 +51,25 @@ script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resol
 repo_root=$(CDPATH= cd -P "$script_dir/../.." && pwd -P) || fail 'could not resolve repository root'
 helpers=$repo_root/scripts/release-helpers.sh
 build_script=$repo_root/scripts/build-release.sh
+ghostty_build_script=$repo_root/scripts/build-ghostty.sh
 
 [ -f "$helpers" ] || fail "release helpers are missing: $helpers"
 [ -f "$build_script" ] || fail "release build script is missing: $build_script"
+[ -f "$ghostty_build_script" ] || fail "Ghostty build script is missing: $ghostty_build_script"
 
 sh -n "$helpers"
 sh -n "$build_script"
+sh -n "$ghostty_build_script"
+grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
+    || fail 'release build script does not set the trusted PATH'
+grep -F -x 'GHOSTTERM_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
+    || fail 'release build script does not force a Ghostty rebuild'
+
+invalid_force_output=$(GHOSTTERM_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_build_script" 2>&1) \
+    && fail 'invalid Ghostty force-rebuild flag unexpectedly succeeded'
+printf '%s\n' "$invalid_force_output" \
+    | grep -F -x 'error: GHOSTTERM_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >/dev/null \
+    || fail "unexpected invalid force-rebuild failure: $invalid_force_output"
 
 # These calls stop before tool discovery or any build/signing operation.
 DEVELOPMENT_TEAM=N8FS9YUZQA
@@ -115,6 +128,24 @@ case "$tmp_root" in
     *) fail "temporary directory has an unexpected path: $tmp_root" ;;
 esac
 
+malicious_bin=$tmp_root/malicious-bin
+malicious_marker=$tmp_root/malicious-command-ran
+malicious_output=$tmp_root/malicious-command-output
+mkdir "$malicious_bin"
+printf '#!/bin/sh\n: >"$GHOSTTERM_MALICIOUS_MARKER"\nexit 99\n' >"$malicious_bin/dirname"
+chmod +x "$malicious_bin/dirname"
+if PATH="$malicious_bin:/usr/bin:/bin" \
+    GHOSTTERM_MALICIOUS_MARKER="$malicious_marker" \
+    DEVELOPMENT_TEAM=N8FS9YUZQA \
+    CODE_SIGN_IDENTITY='Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)' \
+    /bin/sh "$build_script" unexpected-option >"$malicious_output" 2>&1
+then
+    fail 'release build accepted an unexpected argument with a malicious inherited PATH'
+fi
+grep -F -x 'error: this script accepts no options or positional arguments' "$malicious_output" >/dev/null \
+    || fail 'release build did not reach argument validation with a malicious inherited PATH'
+assert_missing "$malicious_marker"
+
 fixture_repo=$tmp_root/repository
 mkdir "$fixture_repo"
 release_dir=$(release_prepare_output_directory "$fixture_repo")
@@ -158,6 +189,26 @@ expect_failure sh -c '. "$1"; release_prepare_output_directory "$2"' sh \
 
 expect_failure sh -c '. "$1"; release_assert_generated_path "$2" /' sh \
     "$helpers" "$release_dir"
+
+resource_share=$fixture_repo/Vendor/ghostty/zig-out/share
+resource_terminfo=$resource_share/terminfo
+resource_ghostty=$resource_share/ghostty
+mkdir -p "$resource_terminfo" "$resource_ghostty"
+printf 'stale terminfo\n' >"$resource_terminfo/stale-file"
+printf 'stale Ghostty resource\n' >"$resource_ghostty/stale-file"
+printf 'preserve share root\n' >"$resource_share/keep-me"
+release_force_clean_ghostty_generated_resources "$fixture_repo"
+assert_missing "$resource_terminfo"
+assert_missing "$resource_ghostty"
+[ -f "$resource_share/keep-me" ] || fail 'Ghostty resource cleanup removed an unrelated share file'
+mkdir "$tmp_root/ghostty-resource-symlink-target"
+ln -s "$tmp_root/ghostty-resource-symlink-target" "$resource_terminfo"
+expect_failure sh -c '. "$1"; release_force_clean_ghostty_generated_resources "$2"' sh \
+    "$helpers" "$fixture_repo"
+[ -L "$resource_terminfo" ] || fail 'Ghostty resource cleanup removed a symlink'
+rm "$resource_terminfo"
+expect_failure sh -c '. "$1"; release_remove_ghostty_generated_resource_directory "$2" "$3"' sh \
+    "$helpers" "$fixture_repo" "$resource_share/unexpected"
 
 provenance_repo=$tmp_root/provenance-repository
 mkdir "$provenance_repo"
