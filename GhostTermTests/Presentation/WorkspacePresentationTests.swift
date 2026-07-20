@@ -318,6 +318,43 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func configurationDiagnosticPaletteMatchesDarkAndLightChrome() throws {
+        let darkPalette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+            foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+        )
+        let lightPalette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0xEE, green: 0xEE, blue: 0xEE),
+            foreground: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33)
+        )
+        let controller = WorkspaceViewController()
+
+        controller.applyChromePalette(darkPalette)
+        let darkAppearance = controller.configurationDiagnosticAppearanceNameForTesting
+        let darkForeground = try #require(
+            controller.configurationDiagnosticForegroundRGBAForTesting)
+        let darkBackground = try #require(
+            controller.configurationDiagnosticBackgroundRGBAForTesting)
+
+        controller.applyChromePalette(lightPalette)
+        let lightAppearance = controller.configurationDiagnosticAppearanceNameForTesting
+        let lightForeground = try #require(
+            controller.configurationDiagnosticForegroundRGBAForTesting)
+        let lightBackground = try #require(
+            controller.configurationDiagnosticBackgroundRGBAForTesting)
+
+        #expect(darkAppearance == .darkAqua)
+        #expect(lightAppearance == .aqua)
+        #expect(darkAppearance != lightAppearance)
+        #expect(darkForeground == Self.normalizedRGBA(darkPalette.foreground, alpha: 1))
+        #expect(darkBackground == Self.normalizedRGBA(darkPalette.foreground, alpha: 0.2))
+        #expect(lightForeground == Self.normalizedRGBA(lightPalette.foreground, alpha: 1))
+        #expect(lightBackground == Self.normalizedRGBA(lightPalette.foreground, alpha: 0.2))
+        #expect(darkForeground != lightForeground)
+        #expect(darkBackground != lightBackground)
+    }
+
+    @Test
     func configurationDiagnosticsStayHiddenWithoutMessages() {
         let controller = WorkspaceViewController()
 
@@ -366,22 +403,68 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func configurationDiagnosticsClearWithoutReplacingSplitHostAndPassThroughHits() throws {
+    func configurationDiagnosticsPreserveMountedSplitSurfacesAndPassThroughHits() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
         let controller = WorkspaceViewController()
         let window = Self.mountWorkspace(controller)
         defer { window.orderOut(nil) }
-        let contentView = try #require(window.contentView)
+        let firstSurface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let secondSurface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let splitRoot = SplitNode.split(
+            id: UUID(),
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .pane(firstSurface.paneID),
+            second: .pane(secondSurface.paneID)
+        )
 
         controller.displayTerminal(
-            root: .pane(PaneID()),
-            surfaces: [:],
+            root: splitRoot,
+            surfaces: [
+                firstSurface.paneID: firstSurface,
+                secondSurface.paneID: secondSurface,
+            ],
             palette: .fallback,
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
+        Self.layoutWorkspace(controller, in: window)
+        await Task.yield()
+        Self.layoutWorkspace(controller, in: window)
+        #expect(window.makeFirstResponder(secondSurface))
+
         let splitHost = try #require(controller.splitHostingViewForTesting)
-        let splitHostIdentifier = try #require(
-            controller.splitHostingControllerIdentifierForTesting)
+        let splitHostIdentifier = ObjectIdentifier(splitHost)
+        let splitHostFrame = splitHost.frame
+        let splitHostConstraintIdentifiers = controller.splitHostingConstraintIdentifiersForTesting
+        let hostedSurfaceIdentifiers = controller.hostedSurfaceIdentifiersForTesting
+        let renderedSurfaceIdentifiers = controller.renderedSurfaceIdentifiersForTesting
+        let firstResponder = try #require(window.firstResponder)
+        let diagnosticView = controller.configurationDiagnosticViewForTesting
+        let subviewIdentifiers = controller.terminalContentSubviewIdentifiersForTesting
+        let diagnosticIndex = try #require(
+            subviewIdentifiers.firstIndex(of: ObjectIdentifier(diagnosticView)))
+        let splitHostIndex = try #require(
+            subviewIdentifiers.firstIndex(of: splitHostIdentifier))
+
+        #expect(splitHostFrame.width > 0)
+        #expect(splitHostFrame.height > 0)
+        #expect(diagnosticIndex > splitHostIndex)
+        #expect(
+            hostedSurfaceIdentifiers
+                == [
+                    firstSurface.paneID: ObjectIdentifier(firstSurface),
+                    secondSurface.paneID: ObjectIdentifier(secondSurface),
+                ])
+        #expect(
+            Set(renderedSurfaceIdentifiers)
+                == Set([ObjectIdentifier(firstSurface), ObjectIdentifier(secondSurface)]))
+        #expect(firstResponder === secondSurface)
 
         controller.applyConfigurationDiagnostics(
             ConfigDiagnosticPresentation(
@@ -389,25 +472,46 @@ struct WorkspacePresentationTests {
                 messages: ["line 4: invalid quake height"]
             )
         )
-        contentView.layoutSubtreeIfNeeded()
-        controller.view.layoutSubtreeIfNeeded()
+        Self.layoutWorkspace(controller, in: window)
 
-        let diagnosticFrame = controller.configurationDiagnosticFrameForTesting
-        let point = controller.view.convert(
-            NSPoint(x: diagnosticFrame.midX, y: diagnosticFrame.midY),
-            to: contentView
+        let overlayPoint = diagnosticView.convert(
+            NSPoint(x: diagnosticView.bounds.midX, y: diagnosticView.bounds.midY),
+            to: controller.view
         )
-        let hitView = contentView.hitTest(point)
+        let hitView = controller.view.hitTest(overlayPoint)
 
         #expect(controller.configurationDiagnosticIsVisibleForTesting)
-        #expect(diagnosticFrame.height > 0)
+        #expect(diagnosticView.frame.height > 0)
+        #expect(hitView !== diagnosticView)
+        #expect(hitView?.isDescendant(of: diagnosticView) != true)
         #expect(hitView === splitHost || hitView?.isDescendant(of: splitHost) == true)
-        #expect(controller.splitHostingControllerIdentifierForTesting == splitHostIdentifier)
+        #expect(
+            ObjectIdentifier(try #require(controller.splitHostingViewForTesting))
+                == splitHostIdentifier)
+        #expect(try #require(controller.splitHostingViewForTesting).frame == splitHostFrame)
+        #expect(
+            controller.splitHostingConstraintIdentifiersForTesting == splitHostConstraintIdentifiers
+        )
+        #expect(controller.splitHostingConstraintsAreActiveForTesting)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == hostedSurfaceIdentifiers)
+        #expect(controller.renderedSurfaceIdentifiersForTesting == renderedSurfaceIdentifiers)
+        #expect(window.firstResponder === firstResponder)
 
         controller.applyConfigurationDiagnostics(nil)
+        Self.layoutWorkspace(controller, in: window)
 
         #expect(!controller.configurationDiagnosticIsVisibleForTesting)
-        #expect(controller.splitHostingControllerIdentifierForTesting == splitHostIdentifier)
+        #expect(
+            ObjectIdentifier(try #require(controller.splitHostingViewForTesting))
+                == splitHostIdentifier)
+        #expect(try #require(controller.splitHostingViewForTesting).frame == splitHostFrame)
+        #expect(
+            controller.splitHostingConstraintIdentifiersForTesting == splitHostConstraintIdentifiers
+        )
+        #expect(controller.splitHostingConstraintsAreActiveForTesting)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == hostedSurfaceIdentifiers)
+        #expect(controller.renderedSurfaceIdentifiersForTesting == renderedSurfaceIdentifiers)
+        #expect(window.firstResponder === firstResponder)
     }
 
     @Test
@@ -971,6 +1075,21 @@ struct WorkspacePresentationTests {
 
         #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
         #expect(completionCount == 0)
+    }
+
+    private static func normalizedRGBA(_ color: GhosttyRGB, alpha: CGFloat) -> [CGFloat] {
+        [
+            CGFloat(color.red) / 255,
+            CGFloat(color.green) / 255,
+            CGFloat(color.blue) / 255,
+            alpha,
+        ]
+    }
+
+    private static func layoutWorkspace(_ controller: WorkspaceViewController, in window: NSWindow)
+    {
+        window.contentView?.layoutSubtreeIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
     }
 
     private static func mountWorkspace(_ controller: WorkspaceViewController) -> NSWindow {

@@ -68,5 +68,30 @@ final class ConfigDiagnosticView: NSView {
         var textForTesting: String {
             messageLabel.stringValue
         }
+
+        var appearanceNameForTesting: NSAppearance.Name? {
+            effectiveAppearance.name
+        }
+
+        var foregroundRGBAForTesting: [CGFloat]? {
+            normalizedRGBA(messageLabel.textColor)
+        }
+
+        var backgroundRGBAForTesting: [CGFloat]? {
+            guard let color = layer?.backgroundColor.flatMap(NSColor.init(cgColor:)) else {
+                return nil
+            }
+            return normalizedRGBA(color)
+        }
+
+        private func normalizedRGBA(_ color: NSColor?) -> [CGFloat]? {
+            guard let color = color?.usingColorSpace(.sRGB) else { return nil }
+            return [
+                color.redComponent,
+                color.greenComponent,
+                color.blueComponent,
+                color.alphaComponent,
+            ]
+        }
     #endif
 }

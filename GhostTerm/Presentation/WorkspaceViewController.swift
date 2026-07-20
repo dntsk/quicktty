@@ -208,6 +208,22 @@ final class WorkspaceViewController: NSViewController {
             splitHostingController?.view
         }
 
+        var splitHostingConstraintIdentifiersForTesting: [ObjectIdentifier] {
+            splitHostingConstraints.map(ObjectIdentifier.init)
+        }
+
+        var splitHostingConstraintsAreActiveForTesting: Bool {
+            splitHostingConstraints.allSatisfy(\.isActive)
+        }
+
+        var terminalContentSubviewIdentifiersForTesting: [ObjectIdentifier] {
+            terminalContentView.subviews.map(ObjectIdentifier.init)
+        }
+
+        var configurationDiagnosticViewForTesting: NSView {
+            configurationDiagnosticView
+        }
+
         var configurationDiagnosticIsVisibleForTesting: Bool {
             !configurationDiagnosticView.isHidden
         }
@@ -216,8 +232,16 @@ final class WorkspaceViewController: NSViewController {
             configurationDiagnosticView.textForTesting
         }
 
-        var configurationDiagnosticFrameForTesting: NSRect {
-            configurationDiagnosticView.convert(configurationDiagnosticView.bounds, to: view)
+        var configurationDiagnosticAppearanceNameForTesting: NSAppearance.Name? {
+            configurationDiagnosticView.appearanceNameForTesting
+        }
+
+        var configurationDiagnosticForegroundRGBAForTesting: [CGFloat]? {
+            configurationDiagnosticView.foregroundRGBAForTesting
+        }
+
+        var configurationDiagnosticBackgroundRGBAForTesting: [CGFloat]? {
+            configurationDiagnosticView.backgroundRGBAForTesting
         }
 
         var emptyWorkspaceLabelIsVisibleForTesting: Bool {
