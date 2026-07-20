@@ -9,6 +9,7 @@ import Synchronization
     private let ghosttySurfaceFocusMonitorOwnershipCount = Mutex(0)
     private let ghosttyMouseObservationLimit = 256
     private let ghosttyClipboardObservationLimit = 256
+    private let ghosttySurfaceSizeObservationLimit = 256
 
     struct GhosttySurfaceInputObservation: Equatable {
         let eventIdentifier: ObjectIdentifier
@@ -28,6 +29,12 @@ import Synchronization
         let heightPixels: UInt32
         let cellWidthPixels: UInt32
         let cellHeightPixels: UInt32
+    }
+
+    struct GhosttySurfaceSizeRequestObservation: Equatable {
+        let requestedWidthPixels: UInt32
+        let requestedHeightPixels: UInt32
+        let resultingSize: GhosttySurfaceSizeSnapshot
     }
 
     enum GhosttySurfacePreeditObservation: Equatable {
@@ -73,6 +80,16 @@ import Synchronization
         to observations: inout [Value]
     ) {
         if observations.count == ghosttyMouseObservationLimit {
+            observations.removeFirst()
+        }
+        observations.append(observation)
+    }
+
+    private func appendBoundedSizeObservation(
+        _ observation: GhosttySurfaceSizeRequestObservation,
+        to observations: inout [GhosttySurfaceSizeRequestObservation]
+    ) {
+        if observations.count == ghosttySurfaceSizeObservationLimit {
             observations.removeFirst()
         }
         observations.append(observation)
@@ -174,6 +191,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     #if DEBUG
         private var inputObservations: [GhosttySurfaceInputObservation] = []
+        private var sizeRequestObservations: [GhosttySurfaceSizeRequestObservation] = []
         private var interpretedTextObservations: [String] = []
         private var preeditObservations: [GhosttySurfacePreeditObservation] = []
         private var imeGeometryObservations: [GhosttySurfaceIMEGeometryObservation] = []
@@ -399,15 +417,16 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         var sizeSnapshotForTesting: GhosttySurfaceSizeSnapshot? {
             guard let surface else { return nil }
-            let size = ghostty_surface_size(surface)
-            return GhosttySurfaceSizeSnapshot(
-                columns: size.columns,
-                rows: size.rows,
-                widthPixels: size.width_px,
-                heightPixels: size.height_px,
-                cellWidthPixels: size.cell_width_px,
-                cellHeightPixels: size.cell_height_px
-            )
+            return sizeSnapshot(for: surface)
+        }
+
+        var sizeRequestObservationsForTesting: [GhosttySurfaceSizeRequestObservation] {
+            sizeRequestObservations
+        }
+
+        var processExitedForTesting: Bool {
+            guard let surface else { return true }
+            return ghostty_surface_process_exited(surface)
         }
 
         var inputObservationsForTesting: [GhosttySurfaceInputObservation] {
@@ -608,11 +627,95 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     private func synchronizeSurfaceSize() {
         guard let surface else { return }
-        let backingSize = convertToBacking(bounds.size)
-        let width = UInt32(max(1, backingSize.width.rounded(.down)))
-        let height = UInt32(max(1, backingSize.height.rounded(.down)))
+        let viewSize = bounds.size
+        guard
+            viewSize.width.isFinite,
+            viewSize.height.isFinite,
+            viewSize.width > 0,
+            viewSize.height > 0
+        else { return }
+
+        let backingSize = convertToBacking(viewSize)
+        let roundedWidth = backingSize.width.rounded(.down)
+        let roundedHeight = backingSize.height.rounded(.down)
+        guard
+            roundedWidth.isFinite,
+            roundedHeight.isFinite,
+            roundedWidth > 0,
+            roundedHeight > 0,
+            roundedWidth <= CGFloat(UInt32.max),
+            roundedHeight <= CGFloat(UInt32.max)
+        else { return }
+
+        let width = UInt32(roundedWidth)
+        let height = UInt32(roundedHeight)
+        let minimumSize = minimumSurfaceSize(for: ghostty_surface_size(surface))
+        guard
+            UInt64(width) >= minimumSize.widthPixels,
+            UInt64(height) >= minimumSize.heightPixels
+        else { return }
+
         ghostty_surface_set_size(surface, width, height)
+
+        #if DEBUG
+            appendBoundedSizeObservation(
+                GhosttySurfaceSizeRequestObservation(
+                    requestedWidthPixels: width,
+                    requestedHeightPixels: height,
+                    resultingSize: sizeSnapshot(for: surface)
+                ),
+                to: &sizeRequestObservations
+            )
+        #endif
     }
+
+    private func minimumSurfaceSize(
+        for size: ghostty_surface_size_s
+    ) -> (widthPixels: UInt64, heightPixels: UInt64) {
+        let fallback = (widthPixels: UInt64(40), heightPixels: UInt64(32))
+        let cellWidth = UInt64(size.cell_width_px)
+        let cellHeight = UInt64(size.cell_height_px)
+        guard cellWidth > 0, cellHeight > 0 else { return fallback }
+
+        let gridWidth = UInt64(size.columns).multipliedReportingOverflow(by: cellWidth)
+        let gridHeight = UInt64(size.rows).multipliedReportingOverflow(by: cellHeight)
+        guard !gridWidth.overflow, !gridHeight.overflow else { return fallback }
+
+        let widthOverhead = UInt64(size.width_px)
+            .subtractingReportingOverflow(gridWidth.partialValue)
+        let heightOverhead = UInt64(size.height_px)
+            .subtractingReportingOverflow(gridHeight.partialValue)
+        guard !widthOverhead.overflow, !heightOverhead.overflow else { return fallback }
+
+        let minimumGridWidth = cellWidth.multipliedReportingOverflow(by: 5)
+        let minimumGridHeight = cellHeight.multipliedReportingOverflow(by: 2)
+        guard !minimumGridWidth.overflow, !minimumGridHeight.overflow else { return fallback }
+
+        let minimumWidth = widthOverhead.partialValue
+            .addingReportingOverflow(minimumGridWidth.partialValue)
+        let minimumHeight = heightOverhead.partialValue
+            .addingReportingOverflow(minimumGridHeight.partialValue)
+        guard !minimumWidth.overflow, !minimumHeight.overflow else { return fallback }
+
+        return (
+            widthPixels: minimumWidth.partialValue,
+            heightPixels: minimumHeight.partialValue
+        )
+    }
+
+    #if DEBUG
+        private func sizeSnapshot(for surface: ghostty_surface_t) -> GhosttySurfaceSizeSnapshot {
+            let size = ghostty_surface_size(surface)
+            return GhosttySurfaceSizeSnapshot(
+                columns: size.columns,
+                rows: size.rows,
+                widthPixels: size.width_px,
+                heightPixels: size.height_px,
+                cellWidthPixels: size.cell_width_px,
+                cellHeightPixels: size.cell_height_px
+            )
+        }
+    #endif
 
     private func clearLocalInputState() {
         markedText.mutableString.setString("")

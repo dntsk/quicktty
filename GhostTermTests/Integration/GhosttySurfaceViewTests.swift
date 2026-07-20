@@ -130,6 +130,48 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func transientTinySizesPreserveTheLastValidCoreSize() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        defer { window.orderOut(nil) }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        surface.setFrameSize(NSSize(width: 800, height: 600))
+        let stableSize = try #require(surface.sizeSnapshotForTesting)
+        let validRequestCount = surface.sizeRequestObservationsForTesting.count
+        let minimumSize = minimumSizeInPixels(for: stableSize)
+
+        surface.setFrameSize(.zero)
+        #expect(surface.sizeSnapshotForTesting == stableSize)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount)
+
+        surface.setFrameSize(surface.convertFromBacking(NSSize(width: 1, height: 1)))
+        #expect(surface.sizeSnapshotForTesting == stableSize)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount)
+
+        surface.setFrameSize(
+            surface.convertFromBacking(
+                NSSize(width: CGFloat(minimumSize.width - 1), height: CGFloat(minimumSize.height))
+            )
+        )
+        #expect(surface.sizeSnapshotForTesting == stableSize)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount)
+
+        surface.setFrameSize(NSSize(width: 640, height: 420))
+        let restoredSize = try #require(surface.sizeSnapshotForTesting)
+        #expect(restoredSize != stableSize)
+        #expect(surface.sizeRequestObservationsForTesting.count == validRequestCount + 1)
+        #expect(
+            surface.sizeRequestObservationsForTesting.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            })
+    }
+
+    @Test
     func runtimeActionFromPTYAndProcessExitCloseSurface() async throws {
         let fixture = try SurfaceTestConfig()
         defer { fixture.remove() }
@@ -319,6 +361,17 @@ extension GhosttyBridgeTests {
         #expect(GhosttyBridge.callbackContextCountForTesting == initialAppContextCount)
         #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == initialSurfaceContextCount)
     }
+}
+
+private func minimumSizeInPixels(
+    for size: GhosttySurfaceSizeSnapshot
+) -> (width: UInt64, height: UInt64) {
+    let width = UInt64(size.widthPixels) - UInt64(size.columns) * UInt64(size.cellWidthPixels)
+    let height = UInt64(size.heightPixels) - UInt64(size.rows) * UInt64(size.cellHeightPixels)
+    return (
+        width: width + 5 * UInt64(size.cellWidthPixels),
+        height: height + 2 * UInt64(size.cellHeightPixels)
+    )
 }
 
 private struct SurfaceCloseEvent: Equatable, Sendable {

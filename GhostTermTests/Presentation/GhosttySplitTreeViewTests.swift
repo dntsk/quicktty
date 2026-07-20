@@ -53,12 +53,14 @@ struct GhosttySplitTreeViewTests {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let first = try bridge.makeSurface(
-            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+            configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
         )
         let second = try bridge.makeSurface(
-            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+            configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
         )
         let controller = WorkspaceViewController()
+        let window = mountWorkspace(controller)
+        defer { window.orderOut(nil) }
 
         controller.displayTerminal(
             root: .pane(first.paneID),
@@ -67,7 +69,9 @@ struct GhosttySplitTreeViewTests {
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
+        layoutWorkspace(controller, in: window)
         await Task.yield()
+        layoutWorkspace(controller, in: window)
         #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
 
         controller.displayTerminal(
@@ -77,9 +81,57 @@ struct GhosttySplitTreeViewTests {
             onResize: { _, _ in },
             onEqualize: { _ in }
         )
+        layoutWorkspace(controller, in: window)
         await Task.yield()
-
+        layoutWorkspace(controller, in: window)
         #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(second)])
+
+        controller.displayTerminal(
+            root: .pane(first.paneID),
+            surfaces: [first.paneID: first],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+        layoutWorkspace(controller, in: window)
+        await Task.yield()
+        layoutWorkspace(controller, in: window)
+
+        #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
+        #expect(!first.processExitedForTesting)
+        #expect(!second.processExitedForTesting)
+        #expect(
+            first.sizeRequestObservationsForTesting.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            })
+        #expect(
+            second.sizeRequestObservationsForTesting.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            })
+    }
+
+    private func layoutWorkspace(_ controller: WorkspaceViewController, in window: NSWindow) {
+        window.contentView?.layoutSubtreeIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+    }
+
+    private func mountWorkspace(_ controller: WorkspaceViewController) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        guard let contentView = window.contentView else {
+            preconditionFailure("Expected test window content view")
+        }
+        let controllerView = controller.view
+        controllerView.frame = contentView.bounds
+        controllerView.autoresizingMask = [.width, .height]
+        contentView.addSubview(controllerView)
+        contentView.layoutSubtreeIfNeeded()
+        controllerView.layoutSubtreeIfNeeded()
+        return window
     }
 
     @Test
