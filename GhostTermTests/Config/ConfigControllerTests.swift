@@ -133,6 +133,84 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func nonReentrantLoadReportsUpdateBeforeDiagnostics() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data("ghostterm-quake-height = impossible\n".utf8).write(to: fixture.configURL)
+        var callbackEvents: [String] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onUpdate: { _ in callbackEvents.append("update") },
+            onDiagnostics: { _ in callbackEvents.append("diagnostics") }
+        )
+
+        try controller.load()
+
+        #expect(callbackEvents == ["update", "diagnostics"])
+    }
+
+    @Test
+    func reentrantReloadKeepsNewestDiagnosticsAndDocument() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            ghostterm-presentation-mode = quake
+            ghostterm-quake-height = impossible
+            """.utf8
+        ).write(to: fixture.configURL)
+        let replacementSource = Data(
+            """
+            ghostterm-config-editor = code --wait
+            ghostterm-restore-workspaces = maybe
+            """.utf8
+        )
+        let state = ReentrantReloadState(
+            configURL: fixture.configURL,
+            replacementSource: replacementSource
+        )
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onUpdate: { state.onUpdate($0) },
+            onDiagnostics: { state.onDiagnostics($0) }
+        )
+        state.controller = controller
+
+        try controller.load()
+
+        #expect(
+            state.callbackEvents
+                == [
+                    "update:nano",
+                    "update:code --wait",
+                    "diagnostics:ghostterm-restore-workspaces",
+                ]
+        )
+        #expect(
+            state.reportedDiagnostics
+                == [
+                    [
+                        ConfigDiagnostic(
+                            line: 2,
+                            key: "ghostterm-restore-workspaces",
+                            reason: .invalidBoolean
+                        )
+                    ]
+                ]
+        )
+        #expect(controller.activeConfig.configEditor == "code --wait")
+        #expect(controller.activeDocument == ConfigDocument(data: replacementSource))
+    }
+
+    @Test
     func bridgeFailureRollsBackActiveConfigAndEffectiveBytes() throws {
         enum Failure: Error { case rejected }
         let fixture = try ConfigFixture()
@@ -352,6 +430,38 @@ struct ConfigControllerTests {
 @MainActor
 private final class ReloadFailureSwitch {
     var shouldFail = false
+}
+
+@MainActor
+private final class ReentrantReloadState {
+    let configURL: URL
+    let replacementSource: Data
+
+    var callbackEvents: [String] = []
+    var reportedDiagnostics: [[ConfigDiagnostic]] = []
+    var didReenter = false
+    weak var controller: ConfigController?
+
+    init(configURL: URL, replacementSource: Data) {
+        self.configURL = configURL
+        self.replacementSource = replacementSource
+    }
+
+    func onUpdate(_ config: GhostTermConfig) {
+        callbackEvents.append("update:\(config.configEditor)")
+        guard !didReenter else { return }
+        didReenter = true
+        try! replacementSource.write(to: configURL)
+        guard let controller else { return }
+        try! controller.reload()
+    }
+
+    func onDiagnostics(_ diagnostics: [ConfigDiagnostic]) {
+        callbackEvents.append(
+            "diagnostics:\(diagnostics.map { $0.key ?? "nil" }.joined(separator: ","))"
+        )
+        reportedDiagnostics.append(diagnostics)
+    }
 }
 
 @MainActor
