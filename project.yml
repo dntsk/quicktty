@@ -35,6 +35,10 @@ targets:
         embed: false
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CURRENT_PROJECT_VERSION: 1
+        INFOPLIST_KEY_CFBundleDisplayName: GhostTerm
+        MARKETING_VERSION: 0.1.0
         OTHER_LDFLAGS: "$(inherited) -lstdc++"
         PRODUCT_BUNDLE_IDENTIFIER: com.dntsk.GhostTerm
         PRODUCT_NAME: GhostTerm
