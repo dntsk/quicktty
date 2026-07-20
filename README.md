@@ -35,7 +35,19 @@ make check
 
 Артефакт alpha предназначен для macOS 15+ на Apple Silicon. Полный ярлык выпуска — `0.1.0-alpha.1`; в метаданных Apple ему соответствуют `CFBundleShortVersionString = 0.1.0` и `CFBundleVersion = 1`. Поэтому ярлык используется в имени DMG, а не в маркетинговой версии bundle.
 
-Перед выпуском нужны полная Xcode в `DEVELOPER_DIR` (по умолчанию `/Applications/Xcode.app/Contents/Developer`), сертификат Developer ID Application команды `N8FS9YUZQA` и заранее сохранённый профиль Keychain `ghostterm-notary`. Репозиторий не хранит Apple ID, пароли, API-ключи или private keys; команды принимают только имя профиля Keychain.
+Перед выпуском нужны полная Xcode в `DEVELOPER_DIR` (по умолчанию `/Applications/Xcode.app/Contents/Developer`), сертификат Developer ID Application команды `N8FS9YUZQA` и заранее сохранённый профиль Keychain `ghostterm-notary`.
+
+1. В Xcode откройте Accounts и создайте сертификат **Developer ID Application** для своей команды.
+2. На [account.apple.com](https://account.apple.com) создайте пароль для конкретного приложения (app-specific password).
+3. Сохраните учётные данные в Keychain:
+
+```sh
+DEVELOPER_DIR=... xcrun notarytool store-credentials ghostterm-notary --apple-id "YOUR_APPLE_ID" --team-id YOUR_TEAM_ID
+```
+
+`notarytool` безопасно запросит app-specific password. Никогда не передавайте пароль в командной строке и не добавляйте его в репозиторий. Профиль также можно создать с ключом App Store Connect API.
+
+Репозиторий не хранит Apple ID, пароли, API-ключи или private keys; команды принимают только имя профиля Keychain.
 
 Создать подписанный archive и DMG:
 

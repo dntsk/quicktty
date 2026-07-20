@@ -155,10 +155,13 @@ do
     require_executable_path "$required_tool_path"
 done
 
+xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)
+[ "$xcodebuild_path" = "$DEVELOPER_DIR/usr/bin/xcodebuild" ] \
+    || release_fail 'full Xcode is required; selected developer directory appears to be Command Line Tools only'
 notarytool_path=$(resolve_selected_xcode_tool notarytool)
 stapler_path=$(resolve_selected_xcode_tool stapler)
-[ -n "$notarytool_path" ] && [ -n "$stapler_path" ] \
-    || release_fail 'selected Xcode notarization tools could not be resolved'
+[ -n "$xcodebuild_path" ] && [ -n "$notarytool_path" ] && [ -n "$stapler_path" ] \
+    || release_fail 'selected Xcode build and notarization tools could not be resolved'
 
 source_tree_state=$(release_source_tree_state "$repo_root" "$git_path") \
     || release_fail 'could not determine source tree state'

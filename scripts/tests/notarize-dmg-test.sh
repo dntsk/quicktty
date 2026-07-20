@@ -67,6 +67,16 @@ grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$notarize_scr
 grep -F -x '"$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \' \
     "$notarize_script" >/dev/null \
     || fail 'notarization script does not use the required Gatekeeper assessment context'
+grep -F -x 'xcrun_path=/usr/bin/xcrun' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not pin xcrun to /usr/bin/xcrun'
+grep -F -x '    selected_tool_path=$("$xcrun_path" --find "$selected_tool_name" 2>/dev/null) \' \
+    "$notarize_script" >/dev/null \
+    || fail 'notarization script does not resolve selected Xcode tools with xcrun'
+grep -F -x 'xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not resolve xcodebuild from the selected developer directory'
+grep -F -x '[ "$xcodebuild_path" = "$DEVELOPER_DIR/usr/bin/xcodebuild" ] \' \
+    "$notarize_script" >/dev/null \
+    || fail 'notarization script does not require full Xcode'
 
 DMG=
 NOTARY_PROFILE=ghostterm-notary
