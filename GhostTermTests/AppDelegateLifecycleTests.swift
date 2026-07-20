@@ -129,6 +129,95 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func configurationDiagnosticsMapToPathAwarePresentationAndClearWhenEmpty() {
+        let configURL = URL(fileURLWithPath: "/tmp/ghostterm/config")
+        let diagnostics = [
+            ConfigDiagnostic(
+                line: 4,
+                key: "ghostterm-quake-height",
+                reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
+            ),
+            ConfigDiagnostic(
+                line: 9,
+                key: "ghostterm-restore-workspaces",
+                reason: .invalidBoolean
+            ),
+        ]
+
+        let presentation = AppDelegate.configurationDiagnosticsPresentation(
+            configURL: configURL,
+            diagnostics: diagnostics
+        )
+
+        #expect(presentation?.path == configURL.path)
+        #expect(presentation?.messages == diagnostics.map(\.localizedDescription))
+        #expect(
+            AppDelegate.configurationDiagnosticsPresentation(configURL: configURL, diagnostics: [])
+                == nil
+        )
+
+        let error = ConfigControllerError.sourceReadFailed("permission denied")
+        #expect(
+            AppDelegate.configurationErrorPresentation(configURL: configURL, error: error)
+                == ConfigDiagnosticPresentation(
+                    path: configURL.path,
+                    messages: [error.localizedDescription]
+                )
+        )
+    }
+
+    @Test
+    func configurationDiagnosticsReceivedBeforeCoordinatorAreRetainedAndForwarded() throws {
+        let delegate = AppDelegate()
+        let configURL = URL(fileURLWithPath: "/tmp/ghostterm/config")
+        let diagnostics = [
+            ConfigDiagnostic(
+                line: 4,
+                key: "ghostterm-quake-height",
+                reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
+            )
+        ]
+        let expectedPresentation = try #require(
+            AppDelegate.configurationDiagnosticsPresentation(
+                configURL: configURL,
+                diagnostics: diagnostics
+            )
+        )
+
+        delegate.receiveConfigurationDiagnosticsForTesting(diagnostics, configURL: configURL)
+
+        #expect(delegate.configurationDiagnosticsPresentationForTesting == expectedPresentation)
+
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        delegate.installWindowCoordinatorForTesting(coordinator)
+        delegate.applyPendingConfigurationDiagnosticsForTesting()
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.configurationDiagnosticTextForTesting
+                == "\(configURL.path)\n\(diagnostics[0].localizedDescription)"
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.configurationDiagnosticIsVisibleForTesting
+        )
+
+        delegate.receiveConfigurationDiagnosticsForTesting([], configURL: configURL)
+
+        #expect(delegate.configurationDiagnosticsPresentationForTesting == nil)
+        #expect(
+            !coordinator.workspaceViewControllerForTesting
+                .configurationDiagnosticIsVisibleForTesting
+        )
+    }
+
+    @Test
     func terminationPolicyKeepsHostedTestsAlive() {
         #expect(
             !AppDelegate.shouldTerminateAfterLastWindowClosed(

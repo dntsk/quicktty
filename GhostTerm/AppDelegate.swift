@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ghosttyBridge: GhosttyBridge?
     private var windowCoordinator: WindowCoordinator?
     private var configController: ConfigController?
+    private var configurationDiagnosticsPresentation: ConfigDiagnosticPresentation?
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
     private var isTerminating = false
@@ -42,14 +43,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     do {
                         try self?.configController?.updatePresentationMode(mode)
                     } catch {
-                        self?.logConfigurationError(error)
+                        self?.handleConfigurationOperationError(error)
                     }
                 },
                 persistQuakeHeight: { [weak self] height in
                     do {
                         try self?.configController?.updateQuakeHeight(height)
                     } catch {
-                        self?.logConfigurationError(error)
+                        self?.handleConfigurationOperationError(error)
                     }
                 },
                 persistNormalWindowFrame: { [weak self] frame in
@@ -62,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.windowCoordinator = windowCoordinator
             windowCoordinator.applyConfiguration(config)
             try windowCoordinator.start()
+            applyPendingConfigurationDiagnostics()
             installNewTabMenuItem()
             installOpenConfigurationMenuItem()
             installSplitPaneMenuItems()
@@ -189,6 +191,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         guard !isRunningHostedTests else { return false }
         return presentationMode != .quake
+    }
+
+    static func configurationDiagnosticsPresentation(
+        configURL: URL,
+        diagnostics: [ConfigDiagnostic]
+    ) -> ConfigDiagnosticPresentation? {
+        guard !diagnostics.isEmpty else { return nil }
+        return ConfigDiagnosticPresentation(
+            path: configURL.path,
+            messages: diagnostics.map(\.localizedDescription)
+        )
+    }
+
+    static func configurationErrorPresentation(
+        configURL: URL,
+        error: ConfigControllerError
+    ) -> ConfigDiagnosticPresentation {
+        ConfigDiagnosticPresentation(path: configURL.path, messages: [error.localizedDescription])
     }
 
     static func performApplicationTermination(
@@ -987,13 +1007,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onUpdate: { [weak self] config in
                     self?.windowCoordinator?.applyConfiguration(config)
                 },
+                onDiagnostics: { [weak self] diagnostics in
+                    self?.handleConfigControllerDiagnostics(diagnostics)
+                },
                 onError: { [weak self] error in
-                    self?.logConfigurationError(error)
+                    self?.handleConfigControllerError(error)
                 }
             )
             self.configController = configController
             do {
                 try configController.start()
+            } catch let error as ConfigControllerError {
+                handleConfigControllerError(error)
             } catch {
                 logConfigurationError(error)
             }
@@ -1003,6 +1028,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return GhostTermConfig()
         }
     }
+
+    private func handleConfigControllerDiagnostics(_ diagnostics: [ConfigDiagnostic]) {
+        guard let configController else { return }
+        applyConfigurationDiagnostics(
+            Self.configurationDiagnosticsPresentation(
+                configURL: configController.configURL,
+                diagnostics: diagnostics
+            )
+        )
+    }
+
+    private func handleConfigControllerError(_ error: ConfigControllerError) {
+        logConfigurationError(error)
+        guard let configController else { return }
+        applyConfigurationDiagnostics(
+            Self.configurationErrorPresentation(configURL: configController.configURL, error: error)
+        )
+    }
+
+    private func handleConfigurationOperationError(_ error: Error) {
+        if let error = error as? ConfigControllerError {
+            handleConfigControllerError(error)
+        } else {
+            logConfigurationError(error)
+        }
+    }
+
+    private func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
+        configurationDiagnosticsPresentation = presentation
+        applyPendingConfigurationDiagnostics()
+    }
+
+    private func applyPendingConfigurationDiagnostics() {
+        windowCoordinator?.applyConfigurationDiagnostics(configurationDiagnosticsPresentation)
+    }
+
+    #if DEBUG
+        var configurationDiagnosticsPresentationForTesting: ConfigDiagnosticPresentation? {
+            configurationDiagnosticsPresentation
+        }
+
+        func receiveConfigurationDiagnosticsForTesting(
+            _ diagnostics: [ConfigDiagnostic],
+            configURL: URL
+        ) {
+            applyConfigurationDiagnostics(
+                Self.configurationDiagnosticsPresentation(
+                    configURL: configURL, diagnostics: diagnostics)
+            )
+        }
+
+        func installWindowCoordinatorForTesting(_ windowCoordinator: WindowCoordinator) {
+            self.windowCoordinator = windowCoordinator
+        }
+
+        func applyPendingConfigurationDiagnosticsForTesting() {
+            applyPendingConfigurationDiagnostics()
+        }
+    #endif
 
     private func quakeConfiguration(for config: GhostTermConfig) -> QuakeWindowConfiguration {
         let geometry =

@@ -117,6 +117,87 @@ struct WindowCoordinatorConfigurationTests {
     }
 
     @Test
+    func configurationDiagnosticsPreserveLiveSurfacesFocusAndWorkspaceState() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        var workspaceSnapshots: [WorkspaceStore] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { workspaceSnapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let workspaceStore = coordinator.workspaceStoreForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let hostedSurfaceIdentifiers = coordinator.workspaceViewControllerForTesting
+            .hostedSurfaceIdentifiersForTesting
+        let renderedSurfaceIdentifiers = coordinator.workspaceViewControllerForTesting
+            .renderedSurfaceIdentifiersForTesting
+        let splitHostingControllerIdentifier = try #require(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+        )
+        let firstResponder = try #require(window.firstResponder)
+        let snapshotCount = workspaceSnapshots.count
+
+        coordinator.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(
+                path: "/tmp/ghostterm/config",
+                messages: [
+                    "Line 4, ghostterm-quake-height: expected a value in 0...1 or 1%...100%."
+                ]
+            )
+        )
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.configurationDiagnosticIsVisibleForTesting
+        )
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.workspaceStoreForTesting == workspaceStore)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == hostedSurfaceIdentifiers)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting
+                == renderedSurfaceIdentifiers
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+                == splitHostingControllerIdentifier
+        )
+        #expect(window.firstResponder === firstResponder)
+        #expect(workspaceSnapshots.count == snapshotCount)
+        #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
+        #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
+
+        coordinator.applyConfigurationDiagnostics(nil)
+
+        #expect(
+            !coordinator.workspaceViewControllerForTesting
+                .configurationDiagnosticIsVisibleForTesting
+        )
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.workspaceStoreForTesting == workspaceStore)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == hostedSurfaceIdentifiers)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting
+                == renderedSurfaceIdentifiers
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+                == splitHostingControllerIdentifier
+        )
+        #expect(window.firstResponder === firstResponder)
+        #expect(workspaceSnapshots.count == snapshotCount)
+    }
+
+    @Test
     func configTransitionsPresentationAndRegistersOnlyQuakeHotKey() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

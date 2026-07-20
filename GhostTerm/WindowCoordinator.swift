@@ -628,6 +628,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         surfaces = restoredSurfaces
     }
 
+    func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
+        workspaceViewController.applyConfigurationDiagnostics(presentation)
+    }
+
     func applyConfiguration(_ config: GhostTermConfig) {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         activeHotKey = config.globalToggle

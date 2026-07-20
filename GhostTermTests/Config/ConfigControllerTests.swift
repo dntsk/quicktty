@@ -462,6 +462,50 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func controllerErrorsHaveReadableDescriptionsAndPreserveAllInvalidDiagnostics() {
+        let diagnostics = [
+            ConfigDiagnostic(
+                line: 4,
+                key: "ghostterm-quake-height",
+                reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
+            ),
+            ConfigDiagnostic(
+                line: 9,
+                key: "ghostterm-restore-workspaces",
+                reason: .invalidBoolean
+            ),
+        ]
+        let errors: [ConfigControllerError] = [
+            .starterResourceMissing,
+            .starterResourceReadFailed("permission denied"),
+            .directoryCreationFailed("disk is read-only"),
+            .starterCreationFailed("already exists"),
+            .sourceReadFailed("file is unavailable"),
+            .sourceWriteFailed("write denied"),
+            .invalidConfig(diagnostics),
+            .effectiveReadFailed("effective config is unavailable"),
+            .effectiveWriteFailed("effective config is read-only"),
+            .ghosttyReloadFailed("reload rejected"),
+            .effectiveRollbackFailed(primary: "reload rejected", rollback: "restore denied"),
+            .watcherFailed(.openFailed(path: "/tmp/ghostterm/config", code: 13)),
+        ]
+
+        for error in errors {
+            #expect(!error.localizedDescription.isEmpty)
+        }
+        #expect(
+            ConfigControllerError.invalidConfig(diagnostics).localizedDescription
+                == diagnostics.map(\.localizedDescription).joined(separator: "\n")
+        )
+        #expect(
+            ConfigControllerError.watcherFailed(
+                .openFailed(path: "/tmp/ghostterm/config", code: 13)
+            ).localizedDescription
+                == "The configuration file could not be watched at /tmp/ghostterm/config (POSIX error 13)."
+        )
+    }
+
+    @Test
     func watcherUsesInjectedSourceURLAndCoalescesWithoutSleeping() throws {
         let fixture = try ConfigFixture()
         defer { fixture.remove() }

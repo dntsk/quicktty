@@ -296,7 +296,7 @@ final class ConfigController {
     }
 }
 
-enum ConfigControllerError: Error, Equatable, Sendable {
+enum ConfigControllerError: Error, Equatable, LocalizedError, Sendable {
     case starterResourceMissing
     case starterResourceReadFailed(String)
     case directoryCreationFailed(String)
@@ -309,4 +309,37 @@ enum ConfigControllerError: Error, Equatable, Sendable {
     case ghosttyReloadFailed(String)
     case effectiveRollbackFailed(primary: String, rollback: String)
     case watcherFailed(ConfigFileWatcherError)
+
+    var errorDescription: String? {
+        switch self {
+        case .starterResourceMissing:
+            return "The default configuration resource is missing."
+        case .starterResourceReadFailed(let error):
+            return "The default configuration resource could not be read: \(error)"
+        case .directoryCreationFailed(let error):
+            return "The configuration directory could not be created: \(error)"
+        case .starterCreationFailed(let error):
+            return "The default configuration file could not be created: \(error)"
+        case .sourceReadFailed(let error):
+            return "The configuration file could not be read: \(error)"
+        case .sourceWriteFailed(let error):
+            return "The configuration file could not be written: \(error)"
+        case .invalidConfig(let diagnostics):
+            guard !diagnostics.isEmpty else {
+                return "The configuration contains invalid values."
+            }
+            return diagnostics.map(\.localizedDescription).joined(separator: "\n")
+        case .effectiveReadFailed(let error):
+            return "The effective Ghostty configuration could not be read: \(error)"
+        case .effectiveWriteFailed(let error):
+            return "The effective Ghostty configuration could not be written: \(error)"
+        case .ghosttyReloadFailed(let error):
+            return "Ghostty could not reload the configuration: \(error)"
+        case .effectiveRollbackFailed(let primary, let rollback):
+            return
+                "Ghostty reload failed: \(primary). The previous effective configuration could not be restored: \(rollback)"
+        case .watcherFailed(.openFailed(let path, let code)):
+            return "The configuration file could not be watched at \(path) (POSIX error \(code))."
+        }
+    }
 }
