@@ -318,6 +318,99 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func configurationDiagnosticsStayHiddenWithoutMessages() {
+        let controller = WorkspaceViewController()
+
+        controller.applyConfigurationDiagnostics(nil)
+        #expect(!controller.configurationDiagnosticIsVisibleForTesting)
+
+        controller.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: [])
+        )
+        #expect(!controller.configurationDiagnosticIsVisibleForTesting)
+    }
+
+    @Test
+    func configurationDiagnosticsDisplayPathAndMessages() {
+        let controller = WorkspaceViewController()
+
+        controller.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(
+                path: "/tmp/ghostterm/config",
+                messages: ["line 4: invalid quake height", "line 9: unknown option"]
+            )
+        )
+
+        #expect(controller.configurationDiagnosticIsVisibleForTesting)
+        #expect(
+            controller.configurationDiagnosticTextForTesting
+                == "/tmp/ghostterm/config\nline 4: invalid quake height\nline 9: unknown option"
+        )
+    }
+
+    @Test
+    func configurationDiagnosticsCapMessagesAndShowRemainingCount() {
+        let controller = WorkspaceViewController()
+        let messages = (1...10).map { "line \($0): invalid option" }
+
+        controller.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: messages)
+        )
+
+        let text = controller.configurationDiagnosticTextForTesting
+        #expect(text.contains("line 1: invalid option"))
+        #expect(text.contains("line 8: invalid option"))
+        #expect(!text.contains("line 9: invalid option"))
+        #expect(!text.contains("line 10: invalid option"))
+        #expect(text.contains("… and 2 more"))
+    }
+
+    @Test
+    func configurationDiagnosticsClearWithoutReplacingSplitHostAndPassThroughHits() throws {
+        let controller = WorkspaceViewController()
+        let window = Self.mountWorkspace(controller)
+        defer { window.orderOut(nil) }
+        let contentView = try #require(window.contentView)
+
+        controller.displayTerminal(
+            root: .pane(PaneID()),
+            surfaces: [:],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in }
+        )
+        let splitHost = try #require(controller.splitHostingViewForTesting)
+        let splitHostIdentifier = try #require(
+            controller.splitHostingControllerIdentifierForTesting)
+
+        controller.applyConfigurationDiagnostics(
+            ConfigDiagnosticPresentation(
+                path: "/tmp/ghostterm/config",
+                messages: ["line 4: invalid quake height"]
+            )
+        )
+        contentView.layoutSubtreeIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+
+        let diagnosticFrame = controller.configurationDiagnosticFrameForTesting
+        let point = controller.view.convert(
+            NSPoint(x: diagnosticFrame.midX, y: diagnosticFrame.midY),
+            to: contentView
+        )
+        let hitView = contentView.hitTest(point)
+
+        #expect(controller.configurationDiagnosticIsVisibleForTesting)
+        #expect(diagnosticFrame.height > 0)
+        #expect(hitView === splitHost || hitView?.isDescendant(of: splitHost) == true)
+        #expect(controller.splitHostingControllerIdentifierForTesting == splitHostIdentifier)
+
+        controller.applyConfigurationDiagnostics(nil)
+
+        #expect(!controller.configurationDiagnosticIsVisibleForTesting)
+        #expect(controller.splitHostingControllerIdentifierForTesting == splitHostIdentifier)
+    }
+
+    @Test
     func tabBarHasNoNewTabControl() {
         let workspaceController = WorkspaceViewController()
         workspaceController.apply(WorkspaceStore())
@@ -878,6 +971,26 @@ struct WorkspacePresentationTests {
 
         #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
         #expect(completionCount == 0)
+    }
+
+    private static func mountWorkspace(_ controller: WorkspaceViewController) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        guard let contentView = window.contentView else {
+            preconditionFailure("Expected test window content view")
+        }
+        let controllerView = controller.view
+        controllerView.frame = contentView.bounds
+        controllerView.autoresizingMask = [.width, .height]
+        contentView.addSubview(controllerView)
+        controller.apply(WorkspaceStore())
+        contentView.layoutSubtreeIfNeeded()
+        controllerView.layoutSubtreeIfNeeded()
+        return window
     }
 
     private static func makeMountedTabBar(

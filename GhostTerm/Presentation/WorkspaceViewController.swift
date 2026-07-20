@@ -23,6 +23,7 @@ final class WorkspaceViewController: NSViewController {
     private let chromeView = NSView()
     private let terminalContentView = NSView()
     private let emptyLabel = NSTextField(labelWithString: "No tabs in this workspace")
+    private let configurationDiagnosticView = ConfigDiagnosticView(frame: .zero)
     private var chromePalette = GhosttyChromePalette.fallback
     private var splitHostingController: NSHostingController<GhosttySplitTreeView>?
     private var splitHostingConstraints: [NSLayoutConstraint] = []
@@ -58,6 +59,9 @@ final class WorkspaceViewController: NSViewController {
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         terminalContentView.addSubview(emptyLabel)
 
+        configurationDiagnosticView.translatesAutoresizingMaskIntoConstraints = false
+        terminalContentView.addSubview(configurationDiagnosticView)
+
         rootView.addSubview(chromeView)
         rootView.addSubview(terminalContentView)
         NSLayoutConstraint.activate([
@@ -80,6 +84,18 @@ final class WorkspaceViewController: NSViewController {
             terminalContentView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: terminalContentView.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: terminalContentView.centerYAnchor),
+            configurationDiagnosticView.topAnchor.constraint(
+                equalTo: terminalContentView.topAnchor,
+                constant: 8
+            ),
+            configurationDiagnosticView.leadingAnchor.constraint(
+                equalTo: terminalContentView.leadingAnchor,
+                constant: 8
+            ),
+            configurationDiagnosticView.trailingAnchor.constraint(
+                equalTo: terminalContentView.trailingAnchor,
+                constant: -8
+            ),
         ])
         view = rootView
         applyChromePalette(chromePalette)
@@ -129,12 +145,18 @@ final class WorkspaceViewController: NSViewController {
         let backgroundColor = NSColor(ghosttyRGB: palette.background)
         chromeView.layer?.backgroundColor = backgroundColor.cgColor
         terminalContentView.layer?.backgroundColor = backgroundColor.cgColor
+        configurationDiagnosticView.applyChromePalette(palette)
 
         let appearanceName: NSAppearance.Name = palette.usesDarkAppearance ? .darkAqua : .aqua
         let appearance = NSAppearance(named: appearanceName)
         view.appearance = appearance
         chromeView.appearance = appearance
         tabBarViewController.applyChromePalette(palette)
+    }
+
+    func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
+        loadViewIfNeeded()
+        configurationDiagnosticView.apply(presentation)
     }
 
     func apply(_ store: WorkspaceStore) {
@@ -180,6 +202,22 @@ final class WorkspaceViewController: NSViewController {
 
         var splitHostingControllerIdentifierForTesting: ObjectIdentifier? {
             splitHostingController.map(ObjectIdentifier.init)
+        }
+
+        var splitHostingViewForTesting: NSView? {
+            splitHostingController?.view
+        }
+
+        var configurationDiagnosticIsVisibleForTesting: Bool {
+            !configurationDiagnosticView.isHidden
+        }
+
+        var configurationDiagnosticTextForTesting: String {
+            configurationDiagnosticView.textForTesting
+        }
+
+        var configurationDiagnosticFrameForTesting: NSRect {
+            configurationDiagnosticView.convert(configurationDiagnosticView.bounds, to: view)
         }
 
         var emptyWorkspaceLabelIsVisibleForTesting: Bool {
@@ -253,7 +291,11 @@ final class WorkspaceViewController: NSViewController {
         addChild(splitHostingController)
         let splitHostingView = splitHostingController.view
         splitHostingView.translatesAutoresizingMaskIntoConstraints = false
-        terminalContentView.addSubview(splitHostingView)
+        terminalContentView.addSubview(
+            splitHostingView,
+            positioned: .below,
+            relativeTo: configurationDiagnosticView
+        )
         splitHostingConstraints = [
             splitHostingView.topAnchor.constraint(equalTo: terminalContentView.topAnchor),
             splitHostingView.leadingAnchor.constraint(equalTo: terminalContentView.leadingAnchor),
