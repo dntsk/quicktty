@@ -33,6 +33,11 @@ targets:
       - sdk: Carbon.framework
       - framework: Vendor/ghostty/macos/GhosttyKit.xcframework
         embed: false
+    postBuildScripts:
+      - name: Copy Ghostty Runtime Resources
+        script: |
+          "$SRCROOT/scripts/copy-ghostty-resources.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+        basedOnDependencyAnalysis: false
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

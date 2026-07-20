@@ -10,7 +10,7 @@ SWIFT_SOURCES := GhostTerm GhostTermTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty format callback-contract lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test format callback-contract lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -20,6 +20,9 @@ doctor:
 
 ghostty:
 	./scripts/build-ghostty.sh
+
+ghostty-resources-test: ghostty
+	./scripts/tests/copy-ghostty-resources-test.sh
 
 format:
 	swift format format --recursive --in-place $(SWIFT_SOURCES)
@@ -36,4 +39,4 @@ build: generate
 test: generate
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) test
 
-check: lint build test
+check: ghostty-resources-test lint build test
