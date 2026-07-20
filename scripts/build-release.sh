@@ -24,8 +24,21 @@ PRODUCT_NAME=GhostTerm
 VOLUME_NAME="GhostTerm $RELEASE_LABEL_DEFAULT"
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-require_command() {
-    command -v "$1" >/dev/null 2>&1 || release_fail "required command not found: $1"
+require_executable_path() {
+    [ -x "$1" ] || release_fail "required tool is not executable: $1"
+}
+
+resolve_selected_xcode_tool() {
+    xcode_tool_name=$1
+    xcode_tool_path=$("$xcrun_path" --find "$xcode_tool_name" 2>/dev/null) \
+        || release_fail "$xcode_tool_name was not found in the selected DEVELOPER_DIR"
+    [ -x "$xcode_tool_path" ] \
+        || release_fail "$xcode_tool_name is not executable in the selected DEVELOPER_DIR: $xcode_tool_path"
+    case "$xcode_tool_path" in
+        "$DEVELOPER_DIR"/*) ;;
+        *) release_fail "$xcode_tool_name resolved outside the selected DEVELOPER_DIR: $xcode_tool_path" ;;
+    esac
+    printf '%s\n' "$xcode_tool_path"
 }
 
 require_regular_file() {
@@ -107,6 +120,7 @@ verify_bundle() {
     require_regular_file "$info_plist"
     require_regular_file "$archive_app/Contents/MacOS/$PRODUCT_NAME"
     require_directory "$resources_dir"
+    release_verify_app_code_layout "$archive_app" "$PRODUCT_NAME" "$file_path"
 
     actual_bundle_identifier=$(plist_value "$info_plist" CFBundleIdentifier) \
         || release_fail 'CFBundleIdentifier is missing from archived app'
@@ -177,11 +191,16 @@ verify_bundle() {
 
     linked_libraries=$("$otool_path" -L "$archive_app/Contents/MacOS/$PRODUCT_NAME") \
         || release_fail 'could not inspect executable linked libraries'
-    if printf '%s\n' "$linked_libraries" | awk 'NR > 1 && $1 ~ /GhosttyKit[.]framework/ { found = 1 } END { exit found }'; then
-        :
-    else
-        release_fail 'executable references GhosttyKit.framework instead of the static library'
-    fi
+    ghosttykit_linked=no
+    while IFS= read -r linked_library || [ -n "$linked_library" ]; do
+        case "$linked_library" in
+            *GhosttyKit.framework*) ghosttykit_linked=yes ;;
+        esac
+    done <<EOF
+$linked_libraries
+EOF
+    [ "$ghosttykit_linked" = no ] \
+        || release_fail 'executable references GhosttyKit.framework instead of the static library'
 
     "$codesign_path" --verify --strict --verbose=4 "$archive_app" \
         || release_fail 'archived app did not pass strict code-signature verification'
@@ -230,29 +249,49 @@ developer_dir_canonical=$(CDPATH= cd -P "$DEVELOPER_DIR" && pwd -P) \
 DEVELOPER_DIR=$developer_dir_canonical
 export DEVELOPER_DIR
 
-require_command xcrun
-require_command xcodegen
-require_command ditto
-require_command hdiutil
-require_command codesign
-require_command readlink
-require_command awk
-require_command git
-[ -x /usr/libexec/PlistBuddy ] || release_fail 'required tool is not executable: /usr/libexec/PlistBuddy'
-
-xcodebuild_path=$(xcrun --find xcodebuild 2>/dev/null) \
-    || release_fail 'xcodebuild was not found in the selected DEVELOPER_DIR'
-case "$xcodebuild_path" in
-    "$DEVELOPER_DIR"/usr/bin/xcodebuild) ;;
-    *) release_fail "selected DEVELOPER_DIR is not a full Xcode developer directory: $DEVELOPER_DIR" ;;
-esac
-lipo_path=$(xcrun --find lipo 2>/dev/null) \
-    || release_fail 'lipo was not found in the selected DEVELOPER_DIR'
-otool_path=$(xcrun --find otool 2>/dev/null) \
-    || release_fail 'otool was not found in the selected DEVELOPER_DIR'
-codesign_path=$(command -v codesign) || release_fail 'codesign was not found'
+codesign_path=/usr/bin/codesign
+hdiutil_path=/usr/bin/hdiutil
+ditto_path=/usr/bin/ditto
+xcrun_path=/usr/bin/xcrun
+readlink_path=/usr/bin/readlink
+file_path=/usr/bin/file
+git_path=/usr/bin/git
 plist_buddy=/usr/libexec/PlistBuddy
-xcodegen_path=$(command -v xcodegen) || release_fail 'xcodegen was not found'
+mkdir_path=/bin/mkdir
+ln_path=/bin/ln
+
+for required_tool_path in \
+    "$codesign_path" \
+    "$hdiutil_path" \
+    "$ditto_path" \
+    "$xcrun_path" \
+    "$readlink_path" \
+    "$file_path" \
+    "$git_path" \
+    "$plist_buddy" \
+    "$mkdir_path" \
+    "$ln_path" \
+    "$RELEASE_FIND_PATH" \
+    "$RELEASE_MKDIR_PATH" \
+    "$RELEASE_RM_PATH"
+do
+    require_executable_path "$required_tool_path"
+done
+
+xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)
+lipo_path=$(resolve_selected_xcode_tool lipo)
+otool_path=$(resolve_selected_xcode_tool otool)
+xcodegen_resolved_path=$(command -v xcodegen) || release_fail 'xcodegen was not found'
+case "$xcodegen_resolved_path" in
+    /*) ;;
+    *) release_fail "xcodegen did not resolve to an absolute path: $xcodegen_resolved_path" ;;
+esac
+xcodegen_dir=${xcodegen_resolved_path%/*}
+xcodegen_name=${xcodegen_resolved_path##*/}
+xcodegen_dir=$(CDPATH= cd -P "$xcodegen_dir" && pwd -P) \
+    || release_fail "could not resolve xcodegen directory: $xcodegen_resolved_path"
+xcodegen_path=$xcodegen_dir/$xcodegen_name
+require_executable_path "$xcodegen_path"
 
 release_dir=$(release_prepare_output_directory "$repo_root")
 archive_path=$release_dir/$RELEASE_ARCHIVE_NAME
@@ -264,9 +303,15 @@ release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
 release_remove_generated_directory "$release_dir" "$stage_dir"
 
-source_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) \
-    || release_fail 'could not determine source revision'
-printf 'Source revision (working tree cleanliness is not required): %s\n' "$source_revision"
+source_revision=$("$git_path" -C "$repo_root" rev-parse HEAD 2>/dev/null) \
+    || release_fail 'could not determine base Git revision'
+source_tree_state=$(release_source_tree_state "$repo_root" "$git_path") \
+    || release_fail 'could not determine source tree state'
+printf 'Base Git revision: %s\n' "$source_revision"
+printf 'Source tree state: %s\n' "$source_tree_state"
+if [ "$source_tree_state" = dirty ]; then
+    printf '%s\n' 'warning: source tree is dirty; Base Git revision does not uniquely identify this artifact.' >&2
+fi
 
 cd "$repo_root"
 "$script_dir/build-ghostty.sh"
@@ -291,21 +336,21 @@ trap cleanup_stage 0
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir "$stage_dir" || release_fail "could not create staging directory: $stage_dir"
+"$mkdir_path" "$stage_dir" || release_fail "could not create staging directory: $stage_dir"
 stage_created=yes
-"$(command -v ditto)" "$archive_app" "$stage_dir/$PRODUCT_NAME.app"
-ln -s /Applications "$stage_dir/Applications" \
+"$ditto_path" "$archive_app" "$stage_dir/$PRODUCT_NAME.app"
+"$ln_path" -s /Applications "$stage_dir/Applications" \
     || release_fail 'could not create Applications symlink in staging directory'
 [ -L "$stage_dir/Applications" ] || release_fail 'Applications staging entry is not a symlink'
-[ "$(readlink "$stage_dir/Applications")" = /Applications ] \
+[ "$("$readlink_path" "$stage_dir/Applications")" = /Applications ] \
     || release_fail 'Applications staging symlink does not target /Applications'
 "$codesign_path" --verify --strict --verbose=4 "$stage_dir/$PRODUCT_NAME.app" \
     || release_fail 'staged app did not preserve its strict code signature'
 
-hdiutil create \
+release_assert_generated_path_absent "$release_dir" "$dmg_path"
+"$hdiutil_path" create \
     -volname "$VOLUME_NAME" \
     -srcfolder "$stage_dir" \
-    -ov \
     -format UDZO \
     "$dmg_path"
 release_remove_generated_directory "$release_dir" "$stage_dir"

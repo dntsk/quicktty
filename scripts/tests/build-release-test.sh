@@ -22,6 +22,10 @@ assert_missing() {
     [ ! -e "$1" ] && [ ! -L "$1" ] || fail "path should be absent: $1"
 }
 
+assert_equals() {
+    [ "$1" = "$2" ] || fail "expected '$2', got '$1'"
+}
+
 run_build_script_negative() {
     env DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY= sh -c '
         [ -z "${DEVELOPMENT_TEAM:-}" ] && [ -z "${CODE_SIGN_IDENTITY:-}" ] || {
@@ -71,11 +75,18 @@ release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'
 signature_metadata='CodeDirectory v=20500 size=31839 flags=0x10000(runtime) hashes=984+7 location=embedded'
+signature_metadata_multi='CodeDirectory v=20500 size=31839 flags=0x10000(adhoc,runtime,linker-signed) hashes=984+7 location=embedded'
 release_signature_has_hardened_runtime "$signature_metadata"
+release_signature_has_hardened_runtime "$signature_metadata_multi"
 expect_failure sh -c '. "$1"; release_validate_label invalid' sh "$helpers"
 expect_failure sh -c '. "$1"; release_validate_team invalid' sh "$helpers"
 expect_failure sh -c '. "$1"; release_validate_identity "Apple Development: Example"' sh "$helpers"
 expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "CodeDirectory flags=0x0"' sh "$helpers"
+expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "CodeDirectory flags=0x0(none) note=runtime"' sh "$helpers"
+expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "CodeDirectory flags=0x0 note=(runtime)"' sh "$helpers"
+expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "CodeDirectory flags=0x10000(runtime-disabled)"' sh "$helpers"
+expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "Identifier=runtime\nCodeDirectory flags=0x0(none)"' sh "$helpers"
+expect_failure sh -c '. "$1"; release_signature_has_hardened_runtime "NotCodeDirectory flags=0x10000(runtime)"' sh "$helpers"
 expect_failure env APPLE_PRIVATE_KEY_PATH=unused sh -c '. "$1"; release_reject_secret_environment' sh "$helpers"
 
 tmp_base=${TMPDIR:-/tmp}
@@ -124,6 +135,15 @@ assert_missing "$archive_path"
 assert_missing "$stage_path"
 assert_missing "$dmg_path"
 [ -f "$unrelated_path" ] || fail 'cleanup modified an unrelated release file'
+release_assert_generated_path_absent "$release_dir" "$dmg_path"
+printf 'race\n' >"$dmg_path"
+expect_failure sh -c '. "$1"; release_assert_generated_path_absent "$2" "$3"' sh \
+    "$helpers" "$release_dir" "$dmg_path"
+rm "$dmg_path"
+ln -s "$unrelated_path" "$dmg_path"
+expect_failure sh -c '. "$1"; release_assert_generated_path_absent "$2" "$3"' sh \
+    "$helpers" "$release_dir" "$dmg_path"
+rm "$dmg_path"
 
 mkdir "$tmp_root/symlink-target"
 ln -s "$tmp_root/symlink-target" "$stage_path"
@@ -138,5 +158,57 @@ expect_failure sh -c '. "$1"; release_prepare_output_directory "$2"' sh \
 
 expect_failure sh -c '. "$1"; release_assert_generated_path "$2" /' sh \
     "$helpers" "$release_dir"
+
+provenance_repo=$tmp_root/provenance-repository
+mkdir "$provenance_repo"
+/usr/bin/git -C "$provenance_repo" init -q
+printf 'tracked\n' >"$provenance_repo/tracked.txt"
+printf 'ignored.txt\n' >"$provenance_repo/.gitignore"
+/usr/bin/git -C "$provenance_repo" add tracked.txt .gitignore
+/usr/bin/git -C "$provenance_repo" -c user.name=GhostTerm -c user.email=release-test@example.invalid \
+    commit -qm 'fixture'
+assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" clean
+printf 'tracked change\n' >"$provenance_repo/tracked.txt"
+assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" dirty
+printf 'tracked\n' >"$provenance_repo/tracked.txt"
+printf 'staged change\n' >"$provenance_repo/tracked.txt"
+/usr/bin/git -C "$provenance_repo" add tracked.txt
+assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" dirty
+printf 'tracked\n' >"$provenance_repo/tracked.txt"
+/usr/bin/git -C "$provenance_repo" add tracked.txt
+touch "$provenance_repo/untracked.txt"
+assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" dirty
+rm "$provenance_repo/untracked.txt"
+touch "$provenance_repo/ignored.txt"
+assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" clean
+
+layout_app=$tmp_root/Layout.app
+layout_macos=$layout_app/Contents/MacOS
+layout_resources=$layout_app/Contents/Resources
+mkdir -p "$layout_macos" "$layout_resources"
+cp /usr/bin/true "$layout_macos/GhostTerm"
+printf '#!/bin/sh\nexit 0\n' >"$layout_resources/resource-script.sh"
+chmod +x "$layout_resources/resource-script.sh"
+release_verify_app_code_layout "$layout_app" GhostTerm /usr/bin/file
+mkdir "$layout_app/Contents/Frameworks"
+release_verify_app_code_layout "$layout_app" GhostTerm /usr/bin/file
+touch "$layout_app/Contents/Frameworks/unexpected"
+expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" GhostTerm /usr/bin/file' sh \
+    "$helpers" "$layout_app"
+rm "$layout_app/Contents/Frameworks/unexpected"
+cp /usr/bin/true "$layout_resources/nested-macho"
+expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" GhostTerm /usr/bin/file' sh \
+    "$helpers" "$layout_app"
+rm "$layout_resources/nested-macho"
+touch "$layout_macos/unexpected"
+expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" GhostTerm /usr/bin/file' sh \
+    "$helpers" "$layout_app"
+rm "$layout_macos/unexpected"
+
+symlink_main_app=$tmp_root/SymlinkMain.app
+mkdir -p "$symlink_main_app/Contents/MacOS"
+ln -s /usr/bin/true "$symlink_main_app/Contents/MacOS/GhostTerm"
+expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" GhostTerm /usr/bin/file' sh \
+    "$helpers" "$symlink_main_app"
 
 printf 'Build release helper tests passed.\n'
