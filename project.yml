@@ -36,7 +36,9 @@ targets:
     postBuildScripts:
       - name: Copy Ghostty Runtime Resources
         script: |
-          "$SRCROOT/scripts/copy-ghostty-resources.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          "$SRCROOT/scripts/copy-ghostty-resources.sh" \
+            "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" \
+            "$TARGET_BUILD_DIR/GhostTerm.app/Contents/Resources"
         basedOnDependencyAnalysis: false
     settings:
       base:
