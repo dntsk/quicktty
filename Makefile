@@ -1,4 +1,6 @@
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
+DEVELOPMENT_TEAM ?=
+CODE_SIGN_IDENTITY ?=
 export DEVELOPER_DIR
 
 PROJECT := GhostTerm.xcodeproj
@@ -10,7 +12,7 @@ SWIFT_SOURCES := GhostTerm GhostTermTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test format callback-contract lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release format callback-contract lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -23,6 +25,11 @@ ghostty:
 
 ghostty-resources-test: ghostty
 	./scripts/tests/copy-ghostty-resources-test.sh
+
+release: export DEVELOPMENT_TEAM := $(DEVELOPMENT_TEAM)
+release: export CODE_SIGN_IDENTITY := $(CODE_SIGN_IDENTITY)
+release:
+	./scripts/build-release.sh
 
 format:
 	swift format format --recursive --in-place $(SWIFT_SOURCES)
