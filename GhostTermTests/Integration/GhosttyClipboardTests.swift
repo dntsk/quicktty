@@ -55,25 +55,32 @@ extension GhosttyBridgeTests {
 
     @Test
     func windowPerformClosePreemptsClipboardAndConfirmsRealActiveSurface() async throws {
-        let config = try WindowCloseConfig(confirmCloseSurface: "always")
-        defer { config.remove() }
+        let fixture = try ClipboardPTYFixture(
+            configContents: "confirm-close-surface = always\n"
+        ) { readyFIFOURL, _ in
+            "printf R > \(shellQuoteClipboard(readyFIFOURL.path)); exec /bin/sleep 60"
+        }
+        defer { fixture.remove() }
         let store = InMemoryClipboardStore()
         store.contents[.standard] = [
             GhosttyClipboardContent(mime: "text/plain", data: "unsafe\nclipboard")
         ]
         let recorder = CoordinatorConfirmationRecorder()
         defer { recorder.finish() }
-        let bridge = try GhosttyBridge(configURL: config.url, clipboardClient: store.client)
+        let bridge = try GhosttyBridge(configURL: fixture.configURL, clipboardClient: store.client)
         defer { bridge.shutdown() }
         let coordinator = WindowCoordinator(
             ghosttyBridge: bridge,
-            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: fixture.command),
             confirmationPresenter: recorder.presenter
         )
+        try fixture.startReadyReader()
         try coordinator.start()
         let window = try #require(coordinator.windowForTesting)
+        defer { window.orderOut(nil) }
         let surface = try #require(coordinator.defaultSurfaceForTesting)
         #expect(window.delegate === coordinator)
+        try await fixture.awaitReady(timeout: .seconds(10))
 
         surface.paste(nil)
         let clipboardPresentation = try await firstClipboardValue(

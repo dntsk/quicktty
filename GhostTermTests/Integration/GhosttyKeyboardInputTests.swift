@@ -816,12 +816,12 @@ extension GhosttyBridgeTests {
         )
         let window = makeKeyboardTestWindow()
         embedKeyboardSurface(surface, in: window)
-        let redispatched = try makeKeyboardEvent(
+        let redispatchedControlG = try makeKeyboardEvent(
             type: .keyDown,
-            modifierFlags: [.command],
-            characters: "b",
-            charactersIgnoringModifiers: "b",
-            keyCode: 11,
+            modifierFlags: [.control],
+            characters: "g",
+            charactersIgnoringModifiers: "g",
+            keyCode: 5,
             timestamp: 21
         )
         let unrelatedShortcut = try makeKeyboardEvent(
@@ -832,20 +832,22 @@ extension GhosttyBridgeTests {
             timestamp: 22
         )
 
+        #expect(!surface.isBroadcastShortcutForTesting(redispatchedControlG))
+
         let initialRouteCount = bridge.inputObservationsForTesting.count
-        #expect(!surface.performKeyEquivalent(with: redispatched))
+        #expect(!surface.performKeyEquivalent(with: redispatchedControlG))
         #expect(bridge.inputObservationsForTesting.count == initialRouteCount)
 
-        #expect(surface.performKeyEquivalent(with: redispatched))
+        #expect(surface.performKeyEquivalent(with: redispatchedControlG))
         let redispatchedRoute = try #require(bridge.inputObservationsForTesting.last)
-        #expect(redispatchedRoute.eventIdentifier == ObjectIdentifier(redispatched))
+        #expect(redispatchedRoute.eventIdentifier == ObjectIdentifier(redispatchedControlG))
         #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 1)
 
         #expect(!surface.performKeyEquivalent(with: unrelatedShortcut))
         #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 1)
 
         window.makeFirstResponder(nil)
-        #expect(!surface.performKeyEquivalent(with: redispatched))
+        #expect(!surface.performKeyEquivalent(with: redispatchedControlG))
         #expect(bridge.inputObservationsForTesting.count == initialRouteCount + 1)
     }
 
