@@ -1,3 +1,22 @@
+ifeq ($(origin DEVELOPMENT_TEAM),command line)
+$(error DEVELOPMENT_TEAM must be passed through the process environment before make, not on the command line)
+endif
+ifeq ($(origin CODE_SIGN_IDENTITY),command line)
+$(error CODE_SIGN_IDENTITY must be passed through the process environment before make, not on the command line)
+endif
+ifeq ($(origin DMG),command line)
+$(error DMG must be passed through the process environment before make, not on the command line)
+endif
+ifeq ($(origin NOTARY_PROFILE),command line)
+$(error NOTARY_PROFILE must be passed through the process environment before make, not on the command line)
+endif
+ifeq ($(origin DEVELOPER_DIR),command line)
+$(error DEVELOPER_DIR must be passed through the process environment before make, not on the command line)
+endif
+ifeq ($(origin RELEASE_LABEL),command line)
+$(error RELEASE_LABEL must be passed through the process environment before make, not on the command line)
+endif
+
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
 export DEVELOPER_DIR
 

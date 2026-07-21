@@ -26,6 +26,8 @@ assert_make_capture() {
     make_capture_identity=$3
     make_capture_dmg=$4
     make_capture_profile=$5
+    make_capture_developer_dir=$6
+    make_capture_release_label=$7
 
     grep -F -x "DEVELOPMENT_TEAM=$make_capture_team" "$make_capture_path" >/dev/null \
         || fail "make did not deliver DEVELOPMENT_TEAM to the recipe: $make_capture_path"
@@ -35,6 +37,10 @@ assert_make_capture() {
         || fail "make did not deliver DMG to the recipe: $make_capture_path"
     grep -F -x "NOTARY_PROFILE=$make_capture_profile" "$make_capture_path" >/dev/null \
         || fail "make did not deliver NOTARY_PROFILE to the recipe: $make_capture_path"
+    grep -F -x "DEVELOPER_DIR=$make_capture_developer_dir" "$make_capture_path" >/dev/null \
+        || fail "make did not deliver DEVELOPER_DIR to the recipe: $make_capture_path"
+    grep -F -x "RELEASE_LABEL=$make_capture_release_label" "$make_capture_path" >/dev/null \
+        || fail "make did not deliver RELEASE_LABEL to the recipe: $make_capture_path"
 }
 
 expect_failure() {
@@ -75,6 +81,9 @@ notarize_script=$repo_root/scripts/notarize-dmg.sh
 makefile=$repo_root/Makefile
 test_development_team=ABCDE12345
 test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
+default_developer_dir=/Applications/Xcode.app/Contents/Developer
+test_developer_dir=$default_developer_dir
+test_release_label=0.1.0-alpha.1
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"
@@ -262,83 +271,158 @@ expect_notarize_failure 'error: DMG must not contain .. path components'
 
 make_path=/usr/bin/make
 [ -x "$make_path" ] || fail "make is not executable: $make_path"
+for release_make_variable in \
+    DEVELOPMENT_TEAM \
+    CODE_SIGN_IDENTITY \
+    DMG \
+    NOTARY_PROFILE \
+    DEVELOPER_DIR \
+    RELEASE_LABEL
+do
+    grep -F -x "ifeq (\$(origin $release_make_variable),command line)" "$makefile" >/dev/null \
+        || fail "Makefile does not reject command-line $release_make_variable"
+done
+
 make_fixture=$tmp_root/make-fixture
 make_fixture_scripts=$make_fixture/scripts
 make_notarize_capture=$tmp_root/make-notarize-capture
-make_inherited_capture=$tmp_root/make-inherited-capture
 make_release_capture=$tmp_root/make-release-capture
 make_signed_release_capture=$tmp_root/make-signed-release-capture
 make_signed_notarize_capture=$tmp_root/make-signed-notarize-capture
+make_default_release_capture=$tmp_root/make-default-release-capture
+make_command_line_release_capture=$tmp_root/make-command-line-release-capture
+make_command_line_notarize_capture=$tmp_root/make-command-line-notarize-capture
+make_command_line_output=$tmp_root/make-command-line-output
 /bin/mkdir -p "$make_fixture_scripts"
 /bin/cp "$makefile" "$make_fixture/Makefile"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     ': "${GHOSTTERM_NOTARIZE_CAPTURE:?}"' \
-    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" >"$GHOSTTERM_NOTARIZE_CAPTURE"' \
+    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$GHOSTTERM_NOTARIZE_CAPTURE"' \
     >"$make_fixture_scripts/notarize-dmg.sh"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     ': "${GHOSTTERM_RELEASE_CAPTURE:?}"' \
-    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" >"$GHOSTTERM_RELEASE_CAPTURE"' \
+    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$GHOSTTERM_RELEASE_CAPTURE"' \
     >"$make_fixture_scripts/build-release.sh"
 /bin/chmod +x "$make_fixture_scripts/notarize-dmg.sh" "$make_fixture_scripts/build-release.sh"
 
-(
-    cd "$make_fixture"
-    GHOSTTERM_NOTARIZE_CAPTURE="$make_notarize_capture" \
-        "$make_path" --no-print-directory notarize \
-        DEVELOPMENT_TEAM="$test_development_team" \
-        CODE_SIGN_IDENTITY="$test_code_sign_identity" \
-        DMG=".build/Release/$RELEASE_DMG_NAME" \
-        NOTARY_PROFILE=fixture-notary
-)
+make_expansion_marker=$tmp_root/make-expansion-marker
+literal_make_value='$(shell /usr/bin/touch '"$make_expansion_marker"')'
+
+expect_make_command_line_rejection() {
+    make_target=$1
+    make_variable=$2
+
+    if (
+        cd "$make_fixture"
+        env -i \
+            PATH="$PATH" \
+            GHOSTTERM_RELEASE_CAPTURE="$make_command_line_release_capture" \
+            GHOSTTERM_NOTARIZE_CAPTURE="$make_command_line_notarize_capture" \
+            "$make_path" --no-print-directory "$make_target" "$make_variable=$literal_make_value"
+    ) >"$make_command_line_output" 2>&1
+    then
+        fail "command-line $make_variable unexpectedly succeeded for $make_target"
+    fi
+
+    grep -F "$make_variable must be passed through the process environment before make" \
+        "$make_command_line_output" >/dev/null \
+        || fail "command-line $make_variable did not fail during Makefile parsing for $make_target"
+    assert_missing "$make_expansion_marker"
+}
+
+for make_target in release notarize signed-alpha; do
+    for make_variable in \
+        DEVELOPMENT_TEAM \
+        CODE_SIGN_IDENTITY \
+        DMG \
+        NOTARY_PROFILE \
+        DEVELOPER_DIR \
+        RELEASE_LABEL
+    do
+        expect_make_command_line_rejection "$make_target" "$make_variable"
+    done
+done
+assert_missing "$make_command_line_release_capture"
+assert_missing "$make_command_line_notarize_capture"
+
+run_make_fixture_dry_run() {
+    make_target=$1
+    make_release_capture_path=$2
+    make_notarize_capture_path=$3
+    make_developer_dir=$4
+
+    (
+        cd "$make_fixture"
+        env -i \
+            PATH="$PATH" \
+            DEVELOPMENT_TEAM="$test_development_team" \
+            CODE_SIGN_IDENTITY="$test_code_sign_identity" \
+            DMG=".build/Release/$RELEASE_DMG_NAME" \
+            NOTARY_PROFILE=fixture-notary \
+            DEVELOPER_DIR="$make_developer_dir" \
+            RELEASE_LABEL="$test_release_label" \
+            GHOSTTERM_RELEASE_CAPTURE="$make_release_capture_path" \
+            GHOSTTERM_NOTARIZE_CAPTURE="$make_notarize_capture_path" \
+            "$make_path" --no-print-directory "$make_target"
+    )
+}
+
+run_make_fixture_dry_run \
+    release "$make_release_capture" "$tmp_root/unused-notarize-capture" "$test_developer_dir"
+assert_make_capture "$make_release_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
+
+run_make_fixture_dry_run \
+    notarize "$tmp_root/unused-release-capture" "$make_notarize_capture" "$test_developer_dir"
 assert_make_capture "$make_notarize_capture" "$test_development_team" "$test_code_sign_identity" \
-    ".build/Release/$RELEASE_DMG_NAME" fixture-notary
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
+
+run_make_fixture_dry_run \
+    signed-alpha "$make_signed_release_capture" "$make_signed_notarize_capture" "$test_developer_dir"
+assert_make_capture "$make_signed_release_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
+assert_make_capture "$make_signed_notarize_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
 
 (
     cd "$make_fixture"
-    DEVELOPMENT_TEAM="$test_development_team" \
+    env -i \
+        PATH="$PATH" \
+        DEVELOPMENT_TEAM="$test_development_team" \
         CODE_SIGN_IDENTITY="$test_code_sign_identity" \
         DMG=".build/Release/$RELEASE_DMG_NAME" \
         NOTARY_PROFILE=fixture-notary \
-        GHOSTTERM_NOTARIZE_CAPTURE="$make_inherited_capture" \
+        RELEASE_LABEL="$test_release_label" \
+        GHOSTTERM_RELEASE_CAPTURE="$make_default_release_capture" \
+        "$make_path" --no-print-directory release
+)
+assert_make_capture "$make_default_release_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$default_developer_dir" "$test_release_label"
+
+environment_literal_marker=$tmp_root/environment-literal-marker
+environment_literal_value='$(shell /usr/bin/touch '"$environment_literal_marker"')'
+environment_literal_output=$tmp_root/environment-literal-output
+if (
+    cd "$repo_root"
+    env -i \
+        PATH="$PATH" \
+        TMPDIR="$TMPDIR" \
+        DEVELOPMENT_TEAM="$test_development_team" \
+        CODE_SIGN_IDENTITY="$test_code_sign_identity" \
+        DMG="$environment_literal_value" \
+        NOTARY_PROFILE=fixture-notary \
         "$make_path" --no-print-directory notarize
-)
-assert_make_capture "$make_inherited_capture" "$test_development_team" "$test_code_sign_identity" \
-    ".build/Release/$RELEASE_DMG_NAME" fixture-notary
-
-(
-    cd "$make_fixture"
-    GHOSTTERM_RELEASE_CAPTURE="$make_release_capture" \
-        "$make_path" --no-print-directory release \
-        DEVELOPMENT_TEAM="$test_development_team" \
-        CODE_SIGN_IDENTITY="$test_code_sign_identity" \
-        DMG=".build/Release/$RELEASE_DMG_NAME" \
-        NOTARY_PROFILE=fixture-notary
-)
-assert_make_capture "$make_release_capture" "$test_development_team" "$test_code_sign_identity" \
-    ".build/Release/$RELEASE_DMG_NAME" fixture-notary
-
-make_expansion_marker=$tmp_root/make-expansion-marker
-literal_make_value='$$(shell /usr/bin/touch '"$make_expansion_marker"')'
-expected_literal_make_value='$(shell /usr/bin/touch '"$make_expansion_marker"')'
-(
-    cd "$make_fixture"
-    GHOSTTERM_RELEASE_CAPTURE="$make_signed_release_capture" \
-        GHOSTTERM_NOTARIZE_CAPTURE="$make_signed_notarize_capture" \
-        "$make_path" --no-print-directory signed-alpha \
-        DEVELOPMENT_TEAM="$test_development_team" \
-        CODE_SIGN_IDENTITY="$test_code_sign_identity" \
-        DMG="$literal_make_value" \
-        NOTARY_PROFILE=fixture-notary
-)
-assert_make_capture "$make_signed_release_capture" "$test_development_team" "$test_code_sign_identity" \
-    "$expected_literal_make_value" fixture-notary
-assert_make_capture "$make_signed_notarize_capture" "$test_development_team" "$test_code_sign_identity" \
-    "$expected_literal_make_value" fixture-notary
-assert_missing "$make_expansion_marker"
+) >"$environment_literal_output" 2>&1
+then
+    fail 'process-environment literal unexpectedly succeeded for notarize'
+fi
+grep -F 'error: DMG is not an existing regular file:' "$environment_literal_output" >/dev/null \
+    || fail 'process-environment literal did not reach notarization-script validation'
+assert_missing "$environment_literal_marker"
 
 accepted_result=$tmp_root/accepted.json
 invalid_result=$tmp_root/invalid.json

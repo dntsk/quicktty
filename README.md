@@ -52,28 +52,28 @@ DEVELOPER_DIR=... xcrun notarytool store-credentials ghostterm-notary --apple-id
 Создать подписанный archive и DMG:
 
 ```sh
-make release \
-  DEVELOPMENT_TEAM=YOUR_TEAM_ID \
-  CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)'
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+  CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
+  make release
 ```
 
 Отправить уже созданный точный DMG на нотарификацию:
 
 ```sh
-make notarize \
-  DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
   CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
   DMG=.build/Release/GhostTerm-0.1.0-alpha.1-arm64.dmg \
-  NOTARY_PROFILE=ghostterm-notary
+  NOTARY_PROFILE=ghostterm-notary \
+  make notarize
 ```
 
 Выполнить оба этапа последовательно:
 
 ```sh
-make signed-alpha \
-  DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
   CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
-  NOTARY_PROFILE=ghostterm-notary
+  NOTARY_PROFILE=ghostterm-notary \
+  make signed-alpha
 ```
 
 `make release` создаёт `.build/Release/GhostTerm.xcarchive` и `.build/Release/GhostTerm-0.1.0-alpha.1-arm64.dmg`. Перед отправкой `make notarize` требует чистое дерево и проверяет строгую подпись DMG, указанные Developer ID identity и Team ID, а также надёжную метку времени. Если предзагрузочные проверки выводят хеш, он относится к DMG до отправки. Финальные размер и SHA-256 печатаются только после статуса `Accepted`, stapler, повторной проверки подписи и проверки Gatekeeper. JSON-ответ Apple сохраняется как `.build/Release/GhostTerm-0.1.0-alpha.1-arm64.dmg.notary-result.json`; финальный вывод содержит путь к DMG, submission ID, SHA-256 и путь к доказательству. Статус нотарификации этого репозитория не подразумевается этой документацией: команду нужно выполнить для конкретного DMG.
