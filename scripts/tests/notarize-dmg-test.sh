@@ -271,6 +271,8 @@ expect_notarize_failure 'error: DMG must not contain .. path components'
 
 make_path=/usr/bin/make
 [ -x "$make_path" ] || fail "make is not executable: $make_path"
+grep -F -x 'ifneq ($(filter release notarize signed-alpha,$(MAKECMDGOALS)),)' "$makefile" >/dev/null \
+    || fail 'Makefile does not scope command-line variable rejection to release goals'
 for release_make_variable in \
     DEVELOPMENT_TEAM \
     CODE_SIGN_IDENTITY \
@@ -280,7 +282,7 @@ for release_make_variable in \
     RELEASE_LABEL
 do
     grep -F -x "ifeq (\$(origin $release_make_variable),command line)" "$makefile" >/dev/null \
-        || fail "Makefile does not reject command-line $release_make_variable"
+        || fail "Makefile does not reject command-line $release_make_variable for release goals"
 done
 
 make_fixture=$tmp_root/make-fixture
@@ -348,6 +350,24 @@ for make_target in release notarize signed-alpha; do
 done
 assert_missing "$make_command_line_release_capture"
 assert_missing "$make_command_line_notarize_capture"
+
+expect_make_command_line_developer_dir_acceptance() {
+    make_target=$1
+
+    if ! (
+        cd "$make_fixture"
+        env -i \
+            PATH="$PATH" \
+            "$make_path" --no-print-directory --dry-run "$make_target" "DEVELOPER_DIR=$test_developer_dir"
+    ) >"$make_command_line_output" 2>&1
+    then
+        fail "command-line DEVELOPER_DIR unexpectedly failed for $make_target"
+    fi
+}
+
+for make_target in build doctor generate; do
+    expect_make_command_line_developer_dir_acceptance "$make_target"
+done
 
 run_make_fixture_dry_run() {
     make_target=$1

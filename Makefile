@@ -1,3 +1,4 @@
+ifneq ($(filter release notarize signed-alpha,$(MAKECMDGOALS)),)
 ifeq ($(origin DEVELOPMENT_TEAM),command line)
 $(error DEVELOPMENT_TEAM must be passed through the process environment before make, not on the command line)
 endif
@@ -15,6 +16,7 @@ $(error DEVELOPER_DIR must be passed through the process environment before make
 endif
 ifeq ($(origin RELEASE_LABEL),command line)
 $(error RELEASE_LABEL must be passed through the process environment before make, not on the command line)
+endif
 endif
 
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
