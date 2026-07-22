@@ -141,6 +141,12 @@ final_size_calculation_line=$(grep -n -F -x \
 final_hash_calculation_line=$(grep -n -F -x \
     'dmg_hash_output=$("$shasum_path" -a 256 "$DMG") \' \
     "$notarize_script" | /usr/bin/cut -d: -f1)
+final_hash_extraction_line=$(grep -n -F -x \
+    'dmg_hash=${dmg_hash_output%% *}' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
+final_hash_validation_line=$(grep -n -F -x \
+    'notarize_is_valid_sha256 "$dmg_hash" \' \
+    "$notarize_script" | /usr/bin/cut -d: -f1)
 final_size_report_line=$(grep -n -F -x \
     'printf '\''Size: %s bytes\n'\'' "$dmg_size"' \
     "$notarize_script" | /usr/bin/cut -d: -f1)
@@ -151,10 +157,14 @@ final_hash_report_line=$(grep -n -F -x \
     || fail 'notarization script does not calculate the final DMG size after Gatekeeper assessment'
 [ "$final_hash_calculation_line" -gt "$gatekeeper_assessment_line" ] \
     || fail 'notarization script does not calculate the final DMG SHA-256 after Gatekeeper assessment'
+[ "$final_hash_extraction_line" -gt "$final_hash_calculation_line" ] \
+    || fail 'notarization script does not extract the final DMG SHA-256 after calculating it'
+[ "$final_hash_validation_line" -gt "$final_hash_extraction_line" ] \
+    || fail 'notarization script does not validate the final DMG SHA-256 after extracting it'
 [ "$final_size_report_line" -gt "$final_size_calculation_line" ] \
     || fail 'notarization script does not report the final DMG size after calculating it'
-[ "$final_hash_report_line" -gt "$final_hash_calculation_line" ] \
-    || fail 'notarization script does not report the final DMG SHA-256 after calculating it'
+[ "$final_hash_report_line" -gt "$final_hash_validation_line" ] \
+    || fail 'notarization script does not report the final DMG SHA-256 after validating it'
 
 DMG=
 NOTARY_PROFILE=ghostterm-notary
