@@ -2,7 +2,7 @@
 
 ## Общая схема
 
-GhostTerm разделяет чистую runtime-модель, AppKit presentation, persistence/config и интеграцию с терминальным движком. Главный принцип зависимости: нестабильный C API Ghostty заканчивается внутри `GhosttyBridge`; модель оперирует Swift-типами и `paneID`.
+QuickTTY разделяет чистую runtime-модель, AppKit presentation, persistence/config и интеграцию с терминальным движком. Главный принцип зависимости: нестабильный C API Ghostty заканчивается внутри `GhosttyBridge`; модель оперирует Swift-типами и `paneID`.
 
 Поток команды:
 
@@ -14,6 +14,8 @@ GhostTerm разделяет чистую runtime-модель, AppKit presentat
 6. Runtime callbacks преобразуются bridge в команды модели.
 7. Изменение модели обновляет UI и планирует сохранение state.
 
+First-party исходники находятся в `QuickTTY/`, тесты — в `QuickTTYTests/`; XcodeGen создаёт `QuickTTY.xcodeproj`.
+
 ## Компоненты и ответственность
 
 - `GhosttyBridge` — lifecycle engine/config/surfaces, input, resize, reload, callbacks, process exit, cwd и metadata.
@@ -24,7 +26,7 @@ GhostTerm разделяет чистую runtime-модель, AppKit presentat
 - `TerminalPane` — связь identity, session descriptor и surface bridge.
 - `WindowCoordinator` — единственное окно, tab bar, workspace selector и текущий workspace controller.
 - `PresentationController` — взаимоисключающие normal/Quake transitions без пересоздания процессов.
-- `ConfigController` — parsing GhostTerm-параметров, передача terminal config, reload и сохранение presentation mode.
+- `ConfigController` — parsing QuickTTY-параметров, передача terminal config, reload и сохранение presentation mode.
 
 ## Направление зависимостей
 
@@ -55,10 +57,10 @@ GhostTerm разделяет чистую runtime-модель, AppKit presentat
 
 ## Конфигурация и state
 
-- Пользовательский config: `~/.config/ghostterm/config`.
-- `ghostterm-` параметры принадлежат `ConfigController`; остальные terminal parameters передаются `libghostty`.
+- Пользовательский config: `~/.config/quicktty/config`.
+- `quicktty-` параметры принадлежат `ConfigController`; остальные terminal parameters передаются `libghostty`.
 - Изменение presentation mode точечно меняет одну строку и сохраняет комментарии.
-- Автоматический state: `~/Library/Application Support/GhostTerm/state.json`.
+- Автоматический state: `~/Library/Application Support/QuickTTY/state.json`.
 - State versioned, записывается через debounce и atomic replace; migrations явные, неизвестные поля игнорируются.
 - В state сохраняются descriptors/layout/focus/frame, но не runtime handles.
 

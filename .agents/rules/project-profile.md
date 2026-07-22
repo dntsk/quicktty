@@ -2,7 +2,15 @@
 
 ## Проект
 
-GhostTerm — нативный терминал для macOS. MVP включает tabs, binary splits, именованные workspaces, broadcast внутри текущего tab, Ghostty themes и переключение normal/Quake без потери запущенных shell-процессов.
+QuickTTY — нативный терминал для macOS. MVP включает tabs, binary splits, именованные workspaces, broadcast внутри текущего tab, Ghostty themes и переключение normal/Quake без потери запущенных shell-процессов.
+
+## Актуальные пути
+
+- First-party исходники: `QuickTTY/`.
+- Тесты: `QuickTTYTests/`.
+- Генерируемый Xcode-проект: `QuickTTY.xcodeproj`.
+- Пользовательский config: `~/.config/quicktty/config`.
+- Автоматический state: `~/Library/Application Support/QuickTTY/state.json`.
 
 ## Команда
 
@@ -55,7 +63,8 @@ Ghostty предоставляет PTY/process lifecycle, VT/xterm emulation, te
 
 ## Источники истины
 
-1. Продуктовый дизайн: `docs/plans/2026-07-14-ghostterm-design.md`.
-2. Архитектурные решения: `.agents/memory/architecture-decisions.md`.
-3. Интеграционные границы: `.agents/memory/integration-contracts.md`.
-4. Правила реализации: `.agents/rules/architecture.md` и `.agents/rules/coding-style.md`.
+1. Поведение продукта: `docs/plans/2026-07-14-ghostterm-design.md`.
+2. Идентичность продукта: `docs/plans/2026-07-22-quicktty-rename-design.md`.
+3. Архитектурные решения: `.agents/memory/architecture-decisions.md`.
+4. Интеграционные границы: `.agents/memory/integration-contracts.md`.
+5. Правила реализации: `.agents/rules/architecture.md` и `.agents/rules/coding-style.md`.

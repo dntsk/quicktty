@@ -1,4 +1,4 @@
-# GhostTerm Backlog
+# QuickTTY Backlog
 
 ## Custom-command restore confirmation
 
@@ -18,7 +18,7 @@ Future behavior:
 
 **Status:** Backlog.
 
-Every GhostTerm action must support a user-defined key chord instead of relying on hard-coded shortcuts. This includes tabs, workspaces, splits, pane navigation, broadcast, configuration, presentation mode, and the global Quake toggle.
+Every QuickTTY action must support a user-defined key chord instead of relying on hard-coded shortcuts. This includes tabs, workspaces, splits, pane navigation, broadcast, configuration, presentation mode, and the global Quake toggle.
 
 Required behavior:
 
@@ -26,8 +26,8 @@ Required behavior:
 - disable an action shortcut explicitly;
 - apply shortcut changes through config hot reload without restarting surfaces or shells;
 - update displayed `NSMenuItem` key equivalents immediately;
-- detect duplicate GhostTerm assignments and report both conflicting actions;
-- define deterministic precedence between GhostTerm-reserved shortcuts and Ghostty `keybind` entries;
+- detect duplicate QuickTTY assignments and report both conflicting actions;
+- define deterministic precedence between QuickTTY-reserved shortcuts and Ghostty `keybind` entries;
 - keep local application shortcuts and the global Quake shortcut as separate scopes;
 - reject unsupported global shortcuts transactionally while preserving the last valid registration;
 - provide stable action identifiers so future commands can be added without changing config syntax;

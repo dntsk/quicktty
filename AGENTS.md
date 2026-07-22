@@ -1,6 +1,6 @@
-# GhostTerm
+# QuickTTY
 
-GhostTerm — нативный терминал для macOS с tabs, splits, workspaces, broadcast-вводом и взаимоисключающими режимами normal/Quake. Источник продуктовых решений: `docs/plans/2026-07-14-ghostterm-design.md`.
+QuickTTY — нативный терминал для macOS с tabs, splits, workspaces, broadcast-вводом и взаимоисключающими режимами normal/Quake. Поведение MVP определяет исходный продуктовый дизайн `docs/plans/2026-07-14-ghostterm-design.md`; идентичность продукта переопределяет `docs/plans/2026-07-22-quicktty-rename-design.md`.
 
 ## Стек
 
