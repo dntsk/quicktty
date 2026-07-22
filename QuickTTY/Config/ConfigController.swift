@@ -116,7 +116,8 @@ final class ConfigController {
         configURL: URL,
         effectiveGhosttyURL: URL
     ) {
-        let directory = homeDirectoryURL
+        let directory =
+            homeDirectoryURL
             .appending(path: ".config", directoryHint: .isDirectory)
             .appending(path: "quicktty", directoryHint: .isDirectory)
 
