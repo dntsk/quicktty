@@ -93,12 +93,12 @@ expected_resources_input=$2
 [ -n "$destination_input" ] || fail 'destination must not be empty'
 [ -n "$expected_resources_input" ] || fail 'expected Xcode resource path must not be empty'
 case "$destination_input" in
-    */GhostTerm.app/Contents/Resources) ;;
-    *) fail 'destination must end in GhostTerm.app/Contents/Resources' ;;
+    */QuickTTY.app/Contents/Resources) ;;
+    *) fail 'destination must end in QuickTTY.app/Contents/Resources' ;;
 esac
 case "$expected_resources_input" in
-    */GhostTerm.app/Contents/Resources) ;;
-    *) fail 'expected Xcode resource path must end in GhostTerm.app/Contents/Resources' ;;
+    */QuickTTY.app/Contents/Resources) ;;
+    *) fail 'expected Xcode resource path must end in QuickTTY.app/Contents/Resources' ;;
 esac
 
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve script directory'
@@ -116,8 +116,8 @@ ghostty_source=$source_share/ghostty
 CDPATH= cd -P "$destination_input" || fail 'could not enter destination Resources directory'
 destination=$(pwd -P)
 case "$destination" in
-    */GhostTerm.app/Contents/Resources) ;;
-    *) fail 'canonical destination must end in GhostTerm.app/Contents/Resources' ;;
+    */QuickTTY.app/Contents/Resources) ;;
+    *) fail 'canonical destination must end in QuickTTY.app/Contents/Resources' ;;
 esac
 
 [ -L "$expected_resources_input" ] && fail 'expected Xcode Resources directory must not be a symlink'
@@ -154,7 +154,7 @@ else
 fi
 
 # This test-only failpoint exercises rollback after the original target is safely staged.
-if [ "$terminfo_had_original" -eq 1 ] && [ "${GHOSTTERM_TEST_SEND_TERM_AFTER_TERMINFO_BACKUP:-}" = 1 ]; then
+if [ "$terminfo_had_original" -eq 1 ] && [ "${QUICKTTY_TEST_SEND_TERM_AFTER_TERMINFO_BACKUP:-}" = 1 ]; then
     kill -TERM "$$"
 fi
 

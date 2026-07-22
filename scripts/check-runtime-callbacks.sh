@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-bridge='GhostTerm/Integration/GhosttyBridge/GhosttyBridge.swift'
-surface='GhostTerm/Integration/GhosttyBridge/GhosttySurfaceView.swift'
+bridge='QuickTTY/Integration/GhosttyBridge/GhosttyBridge.swift'
+surface='QuickTTY/Integration/GhosttyBridge/GhosttySurfaceView.swift'
 
 for binding in \
     'wakeup_cb: ghosttyRuntimeWakeupCallback' \
@@ -41,7 +41,7 @@ if grep -Eq 'MainActor\.assumeIsolated|Thread\.isMainThread' "$bridge" "$surface
     exit 1
 fi
 
-if grep -Eq '@unchecked[[:space:]]+Sendable' GhostTerm/Integration/GhosttyBridge/*.swift; then
+if grep -Eq '@unchecked[[:space:]]+Sendable' QuickTTY/Integration/GhosttyBridge/*.swift; then
     printf 'GhosttyBridge callback context must remain checked Sendable\n' >&2
     exit 1
 fi

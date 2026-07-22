@@ -1,5 +1,5 @@
 .build/
 .DS_Store
-GhostTerm.xcodeproj/
+QuickTTY.xcodeproj/
 xcuserdata/
 *.xcuserstate

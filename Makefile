@@ -22,11 +22,11 @@ endif
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
 export DEVELOPER_DIR
 
-PROJECT := GhostTerm.xcodeproj
-SCHEME := GhostTerm
+PROJECT := QuickTTY.xcodeproj
+SCHEME := QuickTTY
 DERIVED_DATA := .build/DerivedData
 DESTINATION := platform=macOS,arch=arm64
-SWIFT_SOURCES := GhostTerm GhostTermTests
+SWIFT_SOURCES := QuickTTY QuickTTYTests
 
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:

@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 
 FOUND=0
 
-for DIRECTORY in GhostTerm GhostTermTests; do
+for DIRECTORY in QuickTTY QuickTTYTests; do
   if [ -d "$DIRECTORY" ]; then
     if ! command -v swift >/dev/null 2>&1; then
       printf '%s\n' "ERROR: Swift toolchain is required to lint $DIRECTORY." >&2
@@ -22,5 +22,5 @@ for DIRECTORY in GhostTerm GhostTermTests; do
 done
 
 if [ "$FOUND" -eq 0 ]; then
-  printf '%s\n' 'No GhostTerm or GhostTermTests directory exists; nothing to lint.'
+  printf '%s\n' 'No QuickTTY or QuickTTYTests directory exists; nothing to lint.'
 fi
