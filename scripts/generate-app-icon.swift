@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-private let canvasSize = CGSize(width: 1024, height: 1024)
+private let masterSize = 1024
 
 private struct IconImage {
     let filename: String
@@ -37,43 +37,62 @@ private enum GeneratorError: LocalizedError {
         case .invalidOutputPath(let path):
             "Output path must end in .appiconset: \(path)"
         case .imageCreationFailed:
-            "Failed to create icon image"
+            "Failed to create a bitmap context or image"
         case .pngEncodingFailed:
             "Failed to encode PNG"
         }
     }
 }
 
-private func color(_ hex: UInt32, _ alpha: CGFloat = 1.0) -> CGColor {
-    let red = CGFloat((hex >> 16) & 0xFF) / 255.0
-    let green = CGFloat((hex >> 8) & 0xFF) / 255.0
-    let blue = CGFloat(hex & 0xFF) / 255.0
-    return CGColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+private func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
+    CGColor(
+        srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+        green: CGFloat((hex >> 8) & 0xFF) / 255,
+        blue: CGFloat(hex & 0xFF) / 255,
+        alpha: alpha
+    )
 }
 
-private func superellipsePath(in rect: CGRect, exponent: CGFloat = 5.0, steps: Int = 240) -> CGPath
-{
+private func bitmapContext(width: Int, height: Int) throws -> CGContext {
+    guard
+        let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+    else {
+        throw GeneratorError.imageCreationFailed
+    }
+    context.setAllowsAntialiasing(true)
+    context.setShouldAntialias(true)
+    context.interpolationQuality = .high
+    return context
+}
+
+private func superellipsePath(in rect: CGRect, exponent: CGFloat = 5, steps: Int = 256) -> CGPath {
     let path = CGMutablePath()
-    let horizontalRadius = rect.width / 2.0
-    let verticalRadius = rect.height / 2.0
-    let centerX = rect.midX
-    let centerY = rect.midY
+    let horizontalRadius = rect.width / 2
+    let verticalRadius = rect.height / 2
 
     for step in 0...steps {
-        let angle = CGFloat(step) / CGFloat(steps) * .pi * 2.0
+        let angle = CGFloat(step) / CGFloat(steps) * .pi * 2
         let cosine = cos(angle)
         let sine = sin(angle)
-        let x =
-            centerX + horizontalRadius * (cosine >= 0 ? 1 : -1)
-            * pow(abs(cosine), 2.0 / exponent)
-        let y = centerY + verticalRadius * (sine >= 0 ? 1 : -1) * pow(abs(sine), 2.0 / exponent)
+        let point = CGPoint(
+            x: rect.midX + horizontalRadius * (cosine >= 0 ? 1 : -1)
+                * pow(abs(cosine), 2 / exponent),
+            y: rect.midY + verticalRadius * (sine >= 0 ? 1 : -1) * pow(abs(sine), 2 / exponent)
+        )
         if step == 0 {
-            path.move(to: CGPoint(x: x, y: y))
+            path.move(to: point)
         } else {
-            path.addLine(to: CGPoint(x: x, y: y))
+            path.addLine(to: point)
         }
     }
-
     path.closeSubpath()
     return path
 }
@@ -82,7 +101,7 @@ private func roundedRectPath(_ rect: CGRect, radius: CGFloat) -> CGPath {
     CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
 }
 
-private func drawGradient(
+private func drawLinearGradient(
     in context: CGContext,
     colors: [CGColor],
     locations: [CGFloat],
@@ -101,169 +120,218 @@ private func drawGradient(
     context.drawLinearGradient(gradient, start: start, end: end, options: [])
 }
 
-private func makeMasterImage() throws -> CGImage {
+private func drawRadialGradient(
+    in context: CGContext,
+    colors: [CGColor],
+    locations: [CGFloat],
+    center: CGPoint,
+    radius: CGFloat
+) {
     guard
-        let context = CGContext(
-            data: nil,
-            width: Int(canvasSize.width),
-            height: Int(canvasSize.height),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        let gradient = CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+            colors: colors as CFArray,
+            locations: locations
         )
     else {
-        throw GeneratorError.imageCreationFailed
+        return
     }
+    context.drawRadialGradient(
+        gradient,
+        startCenter: center,
+        startRadius: 0,
+        endCenter: center,
+        endRadius: radius,
+        options: [.drawsAfterEndLocation]
+    )
+}
 
-    context.setAllowsAntialiasing(true)
-    context.setShouldAntialias(true)
-    context.interpolationQuality = .high
-    context.setFillColor(NSColor.clear.cgColor)
-    context.fill(CGRect(origin: .zero, size: canvasSize))
+private func drawQ(in context: CGContext) {
+    let outer = CGRect(x: 266, y: 384, width: 456, height: 456)
+    let counter = CGRect(x: 356, y: 474, width: 276, height: 276)
+    let ring = CGMutablePath()
+    ring.addEllipse(in: outer)
+    ring.addEllipse(in: counter)
 
-    let iconRect = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let iconPath = superellipsePath(in: iconRect, exponent: 5.0)
+    let tail = CGMutablePath()
+    tail.move(to: CGPoint(x: 569, y: 510))
+    tail.addLine(to: CGPoint(x: 624, y: 455))
+    tail.addLine(to: CGPoint(x: 756, y: 323))
+    tail.addQuadCurve(to: CGPoint(x: 762, y: 286), control: CGPoint(x: 780, y: 305))
+    tail.addQuadCurve(to: CGPoint(x: 725, y: 280), control: CGPoint(x: 743, y: 268))
+    tail.addLine(to: CGPoint(x: 593, y: 412))
+    tail.addLine(to: CGPoint(x: 538, y: 467))
+    tail.closeSubpath()
 
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -26), blur: 64, color: color(0x000000, 0.34))
-    context.addPath(iconPath)
-    context.setFillColor(color(0x1E2127))
+    context.setShadow(offset: CGSize(width: 0, height: -12), blur: 24, color: color(0x000000, 0.28))
+    context.addPath(ring)
+    context.drawPath(using: .eoFill)
+    context.addPath(tail)
     context.fillPath()
     context.restoreGState()
 
     context.saveGState()
-    context.addPath(iconPath)
+    context.addPath(ring)
+    context.clip(using: .evenOdd)
+    drawLinearGradient(
+        in: context,
+        colors: [color(0xFFFFFF), color(0xE8EBEC), color(0xCCD2D4)],
+        locations: [0, 0.58, 1],
+        start: CGPoint(x: 438, y: 850),
+        end: CGPoint(x: 590, y: 350)
+    )
+    context.restoreGState()
+
+    context.saveGState()
+    context.addPath(tail)
     context.clip()
-
-    context.setFillColor(color(0x1D2026))
-    context.fill(iconRect)
-
-    drawGradient(
+    drawLinearGradient(
         in: context,
-        colors: [color(0x2A2E35, 0.92), color(0x16181D, 0.96)],
-        locations: [0.0, 1.0],
-        start: CGPoint(x: iconRect.midX, y: iconRect.maxY),
-        end: CGPoint(x: iconRect.midX, y: iconRect.minY)
+        colors: [color(0xF5F7F7), color(0xD7DCDE)],
+        locations: [0, 1],
+        start: CGPoint(x: 615, y: 505),
+        end: CGPoint(x: 740, y: 290)
     )
-
-    drawGradient(
-        in: context,
-        colors: [color(0xFFFFFF, 0.14), color(0xFFFFFF, 0.02), color(0xFFFFFF, 0.0)],
-        locations: [0.0, 0.45, 1.0],
-        start: CGPoint(x: iconRect.midX, y: iconRect.maxY - 20),
-        end: CGPoint(x: iconRect.midX, y: iconRect.midY + 80)
-    )
-
-    drawGradient(
-        in: context,
-        colors: [color(0x000000, 0.0), color(0x000000, 0.18)],
-        locations: [0.0, 1.0],
-        start: CGPoint(x: iconRect.midX, y: iconRect.minY + iconRect.height * 0.38),
-        end: CGPoint(x: iconRect.midX, y: iconRect.minY)
-    )
-
-    let dividerX = iconRect.midX + 36
-    context.setStrokeColor(color(0xFFFFFF, 0.07))
-    context.setLineWidth(3)
-    context.setLineCap(.round)
-    context.move(to: CGPoint(x: dividerX, y: iconRect.minY + 154))
-    context.addLine(to: CGPoint(x: dividerX, y: iconRect.maxY - 154))
-    context.strokePath()
-
-    let topEdge = CGRect(x: iconRect.minX + 76, y: iconRect.maxY - 120, width: 220, height: 6)
-    context.setFillColor(color(0xFFFFFF, 0.08))
-    context.addPath(roundedRectPath(topEdge, radius: 3))
-    context.fillPath()
-
     context.restoreGState()
 
     context.saveGState()
-    context.addPath(iconPath)
-    context.setLineWidth(2.0)
-    context.setStrokeColor(color(0xFFFFFF, 0.07))
+    context.addPath(ring)
+    context.setLineWidth(2)
+    context.setStrokeColor(color(0xFFFFFF, 0.38))
     context.strokePath()
     context.restoreGState()
+}
+
+private func drawTTY(in context: CGContext, for pixelSize: Int) {
+    let isSmall = pixelSize <= 16
+    let horizontalScale: CGFloat = isSmall ? 1.22 : 1
+    let verticalScale: CGFloat = isSmall ? 1.45 : 1
+    let anchor = CGPoint(x: 512, y: 260)
 
     context.saveGState()
-    let innerEdgePath = superellipsePath(in: iconRect.insetBy(dx: 6, dy: 6), exponent: 5.0)
-    context.addPath(innerEdgePath)
-    context.setLineWidth(3.0)
-    context.setStrokeColor(color(0x000000, 0.18))
-    context.strokePath()
-    context.restoreGState()
+    context.translateBy(x: anchor.x, y: anchor.y)
+    context.scaleBy(x: horizontalScale, y: verticalScale)
+    context.translateBy(x: -anchor.x, y: -anchor.y)
 
-    let gColor = color(0xF3F1EA)
-    let tColor = color(0x79DDD3)
-    let gCenter = CGPoint(x: iconRect.midX - 82, y: iconRect.midY + 6)
-    let gRadius: CGFloat = 147
-    let gLine: CGFloat = 84
+    let topY: CGFloat = 355
+    let bottomY: CGFloat = 158
+    let stroke: CGFloat = isSmall ? 44 : 38
+    let accent = color(0x62CFD0)
 
-    let gArc = CGMutablePath()
-    gArc.addArc(
-        center: gCenter,
-        radius: gRadius,
-        startAngle: CGFloat(38.0 * .pi / 180.0),
-        endAngle: CGFloat(322.0 * .pi / 180.0),
-        clockwise: false
-    )
+    let tOne = CGMutablePath()
+    tOne.move(to: CGPoint(x: 253, y: topY))
+    tOne.addLine(to: CGPoint(x: 382, y: topY))
+    tOne.move(to: CGPoint(x: 317.5, y: topY))
+    tOne.addLine(to: CGPoint(x: 317.5, y: bottomY))
 
-    let gBar = CGMutablePath()
-    gBar.move(to: CGPoint(x: gCenter.x + 6, y: gCenter.y - 26))
-    gBar.addLine(to: CGPoint(x: gCenter.x + 118, y: gCenter.y - 26))
+    let tTwo = CGMutablePath()
+    tTwo.move(to: CGPoint(x: 430, y: topY))
+    tTwo.addLine(to: CGPoint(x: 559, y: topY))
+    tTwo.move(to: CGPoint(x: 494.5, y: topY))
+    tTwo.addLine(to: CGPoint(x: 494.5, y: bottomY))
+
+    let yGlyph = CGMutablePath()
+    yGlyph.move(to: CGPoint(x: 606, y: topY))
+    yGlyph.addLine(to: CGPoint(x: 670, y: 274))
+    yGlyph.addLine(to: CGPoint(x: 734, y: topY))
+    yGlyph.move(to: CGPoint(x: 670, y: 274))
+    yGlyph.addLine(to: CGPoint(x: 670, y: bottomY))
 
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: color(0x000000, 0.28))
-    context.addPath(gArc)
-    context.setStrokeColor(gColor)
-    context.setLineWidth(gLine)
+    context.setShadow(offset: CGSize(width: 0, height: -7), blur: 14, color: color(0x000000, 0.30))
+    context.setLineWidth(stroke)
     context.setLineCap(.round)
     context.setLineJoin(.round)
+    context.setStrokeColor(accent)
+    context.addPath(tOne)
+    context.addPath(tTwo)
+    context.addPath(yGlyph)
     context.strokePath()
-    context.addPath(gBar)
-    context.setStrokeColor(gColor)
-    context.setLineWidth(gLine * 0.68)
+    context.restoreGState()
+
+    context.saveGState()
+    context.setLineWidth(max(stroke - 12, 22))
     context.setLineCap(.round)
-    context.strokePath()
-    context.restoreGState()
-
-    let topBar = CGRect(x: iconRect.midX + 8, y: iconRect.midY + 113, width: 226, height: 78)
-    let stem = CGRect(x: iconRect.midX + 81, y: iconRect.midY - 168, width: 78, height: 360)
-    let topBarPath = roundedRectPath(topBar, radius: 28)
-    let stemPath = roundedRectPath(stem, radius: 28)
-
-    context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: color(0x000000, 0.26))
-    context.addPath(topBarPath)
-    context.setFillColor(tColor)
-    context.fillPath()
-    context.addPath(stemPath)
-    context.setFillColor(tColor)
-    context.fillPath()
-    context.restoreGState()
-
-    context.saveGState()
-    let tClip = CGMutablePath()
-    tClip.addPath(topBarPath)
-    tClip.addPath(stemPath)
-    context.addPath(tClip)
+    context.setLineJoin(.round)
+    context.addPath(tOne)
+    context.addPath(tTwo)
+    context.addPath(yGlyph)
     context.clip()
-    drawGradient(
+    drawLinearGradient(
         in: context,
-        colors: [color(0xB6FFF8, 0.18), color(0xFFFFFF, 0.0)],
-        locations: [0.0, 1.0],
-        start: CGPoint(x: topBar.midX, y: topBar.maxY),
-        end: CGPoint(x: stem.midX, y: stem.minY)
+        colors: [color(0xB7F4F2, 0.54), color(0xFFFFFF, 0)],
+        locations: [0, 1],
+        start: CGPoint(x: 500, y: 380),
+        end: CGPoint(x: 500, y: 200)
+    )
+    context.restoreGState()
+
+    context.restoreGState()
+}
+
+private func makeIconImage(pixelSize: Int) throws -> CGImage {
+    let context = try bitmapContext(width: pixelSize, height: pixelSize)
+    let scale = CGFloat(pixelSize) / CGFloat(masterSize)
+    context.scaleBy(x: scale, y: scale)
+
+    let canvas = CGRect(x: 0, y: 0, width: masterSize, height: masterSize)
+    context.setFillColor(NSColor.clear.cgColor)
+    context.fill(canvas)
+
+    let iconRect = CGRect(x: 96, y: 96, width: 832, height: 832)
+    let icon = superellipsePath(in: iconRect)
+
+    context.saveGState()
+    context.setShadow(offset: CGSize(width: 0, height: -24), blur: 54, color: color(0x000000, 0.34))
+    context.addPath(icon)
+    context.setFillColor(color(0x1B2024))
+    context.fillPath()
+    context.restoreGState()
+
+    context.saveGState()
+    context.addPath(icon)
+    context.clip()
+    context.setFillColor(color(0x1A1F23))
+    context.fill(iconRect)
+    drawLinearGradient(
+        in: context,
+        colors: [color(0x313940), color(0x20272C), color(0x14191D)],
+        locations: [0, 0.47, 1],
+        start: CGPoint(x: 350, y: 950),
+        end: CGPoint(x: 690, y: 70)
+    )
+    drawRadialGradient(
+        in: context,
+        colors: [color(0xAFC1C8, 0.12), color(0xAFC1C8, 0)],
+        locations: [0, 1],
+        center: CGPoint(x: 420, y: 864),
+        radius: 590
+    )
+    drawRadialGradient(
+        in: context,
+        colors: [color(0x000000, 0), color(0x000000, 0.25)],
+        locations: [0.42, 1],
+        center: CGPoint(x: 512, y: 570),
+        radius: 620
     )
     context.restoreGState()
 
     context.saveGState()
-    context.addPath(topBarPath)
-    context.addPath(stemPath)
-    context.setLineWidth(2.0)
-    context.setStrokeColor(color(0xDFFFFB, 0.24))
+    context.addPath(icon)
+    context.setLineWidth(2)
+    context.setStrokeColor(color(0xFFFFFF, 0.10))
     context.strokePath()
     context.restoreGState()
+
+    let innerEdge = superellipsePath(in: iconRect.insetBy(dx: 7, dy: 7))
+    context.addPath(innerEdge)
+    context.setLineWidth(2)
+    context.setStrokeColor(color(0x000000, 0.20))
+    context.strokePath()
+
+    drawQ(in: context)
+    drawTTY(in: context, for: pixelSize)
 
     guard let image = context.makeImage() else {
         throw GeneratorError.imageCreationFailed
@@ -271,41 +339,16 @@ private func makeMasterImage() throws -> CGImage {
     return image
 }
 
-private func writePNG(_ image: CGImage, pixelSize: Int, to outputURL: URL) throws {
-    let renderedImage: CGImage
-    if pixelSize == image.width, pixelSize == image.height {
-        renderedImage = image
-    } else {
-        guard
-            let context = CGContext(
-                data: nil,
-                width: pixelSize,
-                height: pixelSize,
-                bitsPerComponent: 8,
-                bytesPerRow: 0,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            )
-        else {
-            throw GeneratorError.imageCreationFailed
-        }
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: pixelSize, height: pixelSize))
-        guard let scaledImage = context.makeImage() else {
-            throw GeneratorError.imageCreationFailed
-        }
-        renderedImage = scaledImage
-    }
-
-    let representation = NSBitmapImageRep(cgImage: renderedImage)
-    representation.size = CGSize(width: pixelSize, height: pixelSize)
-    guard let pngData = representation.representation(using: .png, properties: [:]) else {
+private func writePNG(_ image: CGImage, to url: URL) throws {
+    let representation = NSBitmapImageRep(cgImage: image)
+    representation.size = CGSize(width: image.width, height: image.height)
+    guard let data = representation.representation(using: .png, properties: [:]) else {
         throw GeneratorError.pngEncodingFailed
     }
-    try pngData.write(to: outputURL, options: .atomic)
+    try data.write(to: url, options: .atomic)
 }
 
-private func writeContents(to outputURL: URL) throws {
+private func writeContents(to url: URL) throws {
     let images = iconImages.map { image in
         [
             "filename": image.filename,
@@ -316,14 +359,11 @@ private func writeContents(to outputURL: URL) throws {
     }
     let contents: [String: Any] = [
         "images": images,
-        "info": [
-            "author": "xcode",
-            "version": 1,
-        ],
+        "info": ["author": "xcode", "version": 1],
     ]
     let data = try JSONSerialization.data(
         withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
-    try data.write(to: outputURL, options: .atomic)
+    try data.write(to: url, options: .atomic)
 }
 
 private func outputURL(from arguments: [String]) throws -> URL {
@@ -338,17 +378,21 @@ private func outputURL(from arguments: [String]) throws -> URL {
     return outputURL
 }
 
-do {
+private func run() throws {
     let outputURL = try outputURL(from: Array(CommandLine.arguments.dropFirst()))
     try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
-    let masterImage = try makeMasterImage()
-    for image in iconImages {
-        try writePNG(
-            masterImage, pixelSize: image.pixelSize, to: outputURL.appending(path: image.filename))
+    for iconImage in iconImages {
+        let image = try makeIconImage(pixelSize: iconImage.pixelSize)
+        try writePNG(image, to: outputURL.appendingPathComponent(iconImage.filename))
     }
-    try writeContents(to: outputURL.appending(path: "Contents.json"))
+    try writeContents(to: outputURL.appendingPathComponent("Contents.json"))
+
     print("Wrote \(iconImages.count) PNGs to \(outputURL.path)")
+}
+
+do {
+    try run()
 } catch {
     fputs("error: \(error.localizedDescription)\n", stderr)
     exit(1)
