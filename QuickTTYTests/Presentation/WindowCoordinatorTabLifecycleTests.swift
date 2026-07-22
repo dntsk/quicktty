@@ -1305,7 +1305,7 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
-    func workspacePersistenceTracksLiveCWDForActiveBackgroundAndStalePanes() async throws {
+    func workspacePersistenceTracksLiveCWDForActiveBackgroundAndStalePanes() throws {
         let backgroundPaneID = PaneID()
         let activePaneID = PaneID()
         let backgroundTab = TerminalTab(
@@ -1349,15 +1349,16 @@ struct WindowCoordinatorTabLifecycleTests {
         defer { coordinator.prepareForBridgeShutdownForTesting() }
 
         try coordinator.start()
+        let workingDirectoryHandler = try #require(bridge.surfaceWorkingDirectoryHandler)
+        bridge.surfaceWorkingDirectoryHandler = nil
 
         #expect(persistence.snapshots.isEmpty)
-        let activeSurface = try #require(coordinator.surfaceForTesting(id: activePaneID))
-        let backgroundSurface = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
-        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/active-live"))
-        await Task.yield()
+        _ = try #require(coordinator.surfaceForTesting(id: activePaneID))
+        _ = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
+        workingDirectoryHandler(activePaneID, "/tmp/active-live")
 
         let activeDescriptor = try #require(
-            coordinator.workspaceStoreForPersistence.tab(id: activeTab.id)?
+            coordinator.workspaceStoreForTesting.tab(id: activeTab.id)?
                 .paneDescriptor(for: activePaneID)
         )
         #expect(
@@ -1369,18 +1370,17 @@ struct WindowCoordinatorTabLifecycleTests {
                 )
         )
         #expect(
-            coordinator.workspaceStoreForPersistence.tab(id: backgroundTab.id)?
+            coordinator.workspaceStoreForTesting.tab(id: backgroundTab.id)?
                 .paneDescriptor(for: backgroundPaneID)
                 == backgroundTab.paneDescriptor(for: backgroundPaneID)
         )
-        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
         persistence.reset()
 
-        #expect(backgroundSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/background-live"))
-        await Task.yield()
+        workingDirectoryHandler(backgroundPaneID, "/tmp/background-live")
 
         #expect(
-            coordinator.workspaceStoreForPersistence.tab(id: backgroundTab.id)?
+            coordinator.workspaceStoreForTesting.tab(id: backgroundTab.id)?
                 .paneDescriptor(for: backgroundPaneID)
                 == TerminalPaneDescriptor(
                     id: backgroundPaneID,
@@ -1388,29 +1388,26 @@ struct WindowCoordinatorTabLifecycleTests {
                     startupCommand: .custom("printf background")
                 )
         )
-        #expect(persistence.snapshots == [coordinator.workspaceStoreForPersistence])
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
         persistence.reset()
 
-        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/active-live"))
-        await Task.yield()
-        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("relative"))
-        await Task.yield()
-        #expect(activeSurface.currentWorkingDirectory == "relative")
-        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting(""))
-        await Task.yield()
-        #expect(activeSurface.currentWorkingDirectory == "")
-        #expect(persistence.snapshots.isEmpty)
-
-        #expect(activeSurface.scheduleWorkingDirectoryChangeForTesting("/tmp/stale"))
-        bridge.closeSurface(id: activePaneID)
-        await Task.yield()
-
+        workingDirectoryHandler(activePaneID, "/tmp/active-live")
+        workingDirectoryHandler(activePaneID, "relative")
+        workingDirectoryHandler(activePaneID, "")
         #expect(persistence.snapshots.isEmpty)
         #expect(
-            coordinator.workspaceStoreForPersistence.tab(id: activeTab.id)?
+            coordinator.workspaceStoreForTesting.tab(id: activeTab.id)?
                 .paneDescriptor(for: activePaneID)
                 == activeDescriptor
         )
+
+        coordinator.prepareForBridgeShutdownForTesting()
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        let storeBeforeStaleCallback = coordinator.workspaceStoreForTesting
+        workingDirectoryHandler(activePaneID, "/tmp/stale")
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == storeBeforeStaleCallback)
     }
 
     @Test
