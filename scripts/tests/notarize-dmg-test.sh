@@ -83,7 +83,7 @@ test_development_team=ABCDE12345
 test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
 default_developer_dir=/Applications/Xcode.app/Contents/Developer
 test_developer_dir=$default_developer_dir
-test_release_label=0.1.0-alpha.1
+test_release_label=0.1.0-alpha.2
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"
@@ -126,6 +126,9 @@ grep -F -x 'notarize_apply_defaults' "$notarize_script" >/dev/null \
     || fail 'notarization script does not apply its own defaults'
 grep -F -x 'DMG=$(notarize_resolve_dmg_path "$DMG" "$repo_root" "$expected_dmg_path")' "$notarize_script" >/dev/null \
     || fail 'notarization script does not resolve DMG against the repository root'
+grep -F -x 'notary_result_tmp=$("$mktemp_path" "$release_dir/.QuickTTY-notary-result.XXXXXX") \' \
+    "$notarize_script" >/dev/null \
+    || fail 'notarization script does not use a QuickTTY temporary result prefix'
 if grep -E '^(release|notarize|signed-alpha):[[:space:]]+export[[:space:]]' "$makefile" >/dev/null; then
     fail 'release targets must not use target-specific exported variables'
 fi
@@ -167,7 +170,7 @@ final_hash_report_line=$(grep -n -F -x \
     || fail 'notarization script does not report the final DMG SHA-256 after validating it'
 
 DMG=
-NOTARY_PROFILE=ghostterm-notary
+NOTARY_PROFILE=quicktty-notary
 DEVELOPMENT_TEAM=
 CODE_SIGN_IDENTITY=
 expect_notarize_failure 'error: this script accepts no options or positional arguments' unexpected-option
@@ -190,11 +193,13 @@ case "$default_profile_output" in
     *'error: DMG must be set'*) ;;
     *) fail "unexpected default profile failure: $default_profile_output" ;;
 esac
+NOTARY_PROFILE=ghostterm-notary
+expect_notarize_failure 'error: DMG must be set'
 NOTARY_PROFILE=
 expect_notarize_failure 'error: NOTARY_PROFILE must not be empty'
 NOTARY_PROFILE='invalid profile'
 expect_notarize_failure 'error: NOTARY_PROFILE contains unsupported characters'
-NOTARY_PROFILE=ghostterm-notary
+NOTARY_PROFILE=quicktty-notary
 if secret_output=$(env -i \
     PATH="$PATH" \
     TMPDIR="${TMPDIR:-/tmp}" \
@@ -223,13 +228,15 @@ for invalid_sha256 in "$sha256_63" "$sha256_65" "$sha256_nonhex"; do
     fi
 done
 
+assert_equals "$NOTARY_PROFILE_DEFAULT" quicktty-notary
+notarize_validate_profile quicktty-notary
 notarize_validate_profile ghostterm-notary
 release_validate_team "$test_development_team"
 release_validate_identity "$test_code_sign_identity"
 unset DMG NOTARY_PROFILE
 notarize_apply_defaults
 assert_equals "$DMG" ".build/Release/$RELEASE_DMG_NAME"
-assert_equals "$NOTARY_PROFILE" ghostterm-notary
+assert_equals "$NOTARY_PROFILE" quicktty-notary
 expect_failure /bin/sh -c '. "$1"; . "$2"; notarize_validate_profile "bad profile"' sh \
     "$release_helpers" "$notarize_helpers"
 
@@ -244,7 +251,7 @@ cleanup() {
 
     if [ -n "$tmp_root" ] && [ -d "$tmp_root" ]; then
         case "$tmp_root" in
-            "$tmp_base"/ghostterm-notarize-test.*) /bin/rm -rf "$tmp_root" ;;
+            "$tmp_base"/quicktty-notarize-test.*) /bin/rm -rf "$tmp_root" ;;
             *) printf 'error: refusing to remove unexpected temporary path: %s\n' "$tmp_root" >&2 ;;
         esac
     fi
@@ -253,10 +260,10 @@ cleanup() {
 }
 
 trap cleanup 0 HUP INT TERM
-tmp_root=$(/usr/bin/mktemp -d "$tmp_base/ghostterm-notarize-test.XXXXXX") \
+tmp_root=$(/usr/bin/mktemp -d "$tmp_base/quicktty-notarize-test.XXXXXX") \
     || fail 'could not create temporary directory'
 case "$tmp_root" in
-    "$tmp_base"/ghostterm-notarize-test.*) ;;
+    "$tmp_base"/quicktty-notarize-test.*) ;;
     *) fail "temporary directory has an unexpected path: $tmp_root" ;;
 esac
 
@@ -279,7 +286,7 @@ printf 'wrong DMG\n' >"$wrong_dmg"
 expect_failure /bin/sh -c '. "$1"; . "$2"; notarize_resolve_dmg_path "$3" "$4" "$5"' sh \
     "$release_helpers" "$notarize_helpers" "$wrong_dmg" "$fixture_repo" "$fixture_dmg"
 DMG=$wrong_dmg
-NOTARY_PROFILE=ghostterm-notary
+NOTARY_PROFILE=quicktty-notary
 expect_notarize_failure 'error: DMG must be the expected release artifact'
 
 symlink_dmg=$tmp_root/symlink.dmg
@@ -321,14 +328,14 @@ make_command_line_output=$tmp_root/make-command-line-output
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    ': "${GHOSTTERM_NOTARIZE_CAPTURE:?}"' \
-    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$GHOSTTERM_NOTARIZE_CAPTURE"' \
+    ': "${QUICKTTY_NOTARIZE_CAPTURE:?}"' \
+    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$QUICKTTY_NOTARIZE_CAPTURE"' \
     >"$make_fixture_scripts/notarize-dmg.sh"
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
-    ': "${GHOSTTERM_RELEASE_CAPTURE:?}"' \
-    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$GHOSTTERM_RELEASE_CAPTURE"' \
+    ': "${QUICKTTY_RELEASE_CAPTURE:?}"' \
+    'printf "DEVELOPMENT_TEAM=%s\\nCODE_SIGN_IDENTITY=%s\\nDMG=%s\\nNOTARY_PROFILE=%s\\nDEVELOPER_DIR=%s\\nRELEASE_LABEL=%s\\n" "${DEVELOPMENT_TEAM-}" "${CODE_SIGN_IDENTITY-}" "${DMG-}" "${NOTARY_PROFILE-}" "${DEVELOPER_DIR-}" "${RELEASE_LABEL-}" >"$QUICKTTY_RELEASE_CAPTURE"' \
     >"$make_fixture_scripts/build-release.sh"
 /bin/chmod +x "$make_fixture_scripts/notarize-dmg.sh" "$make_fixture_scripts/build-release.sh"
 
@@ -343,8 +350,8 @@ expect_make_command_line_rejection() {
         cd "$make_fixture"
         env -i \
             PATH="$PATH" \
-            GHOSTTERM_RELEASE_CAPTURE="$make_command_line_release_capture" \
-            GHOSTTERM_NOTARIZE_CAPTURE="$make_command_line_notarize_capture" \
+            QUICKTTY_RELEASE_CAPTURE="$make_command_line_release_capture" \
+            QUICKTTY_NOTARIZE_CAPTURE="$make_command_line_notarize_capture" \
             "$make_path" --no-print-directory "$make_target" "$make_variable=$literal_make_value"
     ) >"$make_command_line_output" 2>&1
     then
@@ -406,8 +413,8 @@ run_make_fixture_dry_run() {
             NOTARY_PROFILE=fixture-notary \
             DEVELOPER_DIR="$make_developer_dir" \
             RELEASE_LABEL="$test_release_label" \
-            GHOSTTERM_RELEASE_CAPTURE="$make_release_capture_path" \
-            GHOSTTERM_NOTARIZE_CAPTURE="$make_notarize_capture_path" \
+            QUICKTTY_RELEASE_CAPTURE="$make_release_capture_path" \
+            QUICKTTY_NOTARIZE_CAPTURE="$make_notarize_capture_path" \
             "$make_path" --no-print-directory "$make_target"
     )
 }
@@ -438,7 +445,7 @@ assert_make_capture "$make_signed_notarize_capture" "$test_development_team" "$t
         DMG=".build/Release/$RELEASE_DMG_NAME" \
         NOTARY_PROFILE=fixture-notary \
         RELEASE_LABEL="$test_release_label" \
-        GHOSTTERM_RELEASE_CAPTURE="$make_default_release_capture" \
+        QUICKTTY_RELEASE_CAPTURE="$make_default_release_capture" \
         "$make_path" --no-print-directory release
 )
 assert_make_capture "$make_default_release_capture" "$test_development_team" "$test_code_sign_identity" \
@@ -484,10 +491,10 @@ malicious_bin=$tmp_root/malicious-bin
 malicious_marker=$tmp_root/malicious-command-ran
 malicious_output=$tmp_root/malicious-command-output
 /bin/mkdir "$malicious_bin"
-printf '#!/bin/sh\n: >"$GHOSTTERM_MALICIOUS_MARKER"\nexit 99\n' >"$malicious_bin/dirname"
+printf '#!/bin/sh\n: >"$QUICKTTY_MALICIOUS_MARKER"\nexit 99\n' >"$malicious_bin/dirname"
 /bin/chmod +x "$malicious_bin/dirname"
 if PATH="$malicious_bin:/usr/bin:/bin" \
-    GHOSTTERM_MALICIOUS_MARKER="$malicious_marker" \
+    QUICKTTY_MALICIOUS_MARKER="$malicious_marker" \
     DEVELOPMENT_TEAM= \
     CODE_SIGN_IDENTITY= \
     DMG= \
@@ -504,4 +511,4 @@ case "$malicious_output_contents" in
 esac
 assert_missing "$malicious_marker"
 
-printf 'Notarization DMG contract tests passed.\n'
+printf 'QuickTTY notarization DMG contract tests passed.\n'

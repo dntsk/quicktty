@@ -4,12 +4,12 @@ set -eu
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 REQUIRED_GHOSTTY_COMMIT=332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
 REQUIRED_ZIG_VERSION=0.15.2
-GHOSTTERM_FORCE_GHOSTTY_REBUILD=${GHOSTTERM_FORCE_GHOSTTY_REBUILD:-0}
+QUICKTTY_FORCE_GHOSTTY_REBUILD=${QUICKTTY_FORCE_GHOSTTY_REBUILD:-0}
 
-case "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" in
+case "$QUICKTTY_FORCE_GHOSTTY_REBUILD" in
     0 | 1) ;;
     *)
-        printf '%s\n' 'error: GHOSTTERM_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >&2
+        printf '%s\n' 'error: QUICKTTY_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >&2
         exit 1
         ;;
 esac
@@ -239,13 +239,13 @@ cache_key=$(
 cache_key=${cache_key%% *}
 stamp_path=$cache_dir/$cache_key.stamp
 
-if [ "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" = 0 ] && validate_cached_xcframework; then
+if [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 0 ] && validate_cached_xcframework; then
     printf 'Reusing cached GhosttyKit XCFramework after checksum and required symbol validation: %s\n' "$xcframework_dir"
     exit 0
 fi
 
-if [ "$GHOSTTERM_FORCE_GHOSTTY_REBUILD" = 1 ]; then
-    cache_validation_error='forced Ghostty rebuild requested by GHOSTTERM_FORCE_GHOSTTY_REBUILD=1'
+if [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 1 ]; then
+    cache_validation_error='forced Ghostty rebuild requested by QUICKTTY_FORCE_GHOSTTY_REBUILD=1'
 fi
 
 if [ -f "$stamp_path" ]; then

@@ -172,10 +172,10 @@ verify_dmg_signature_metadata
 printf 'DMG: %s\n' "$DMG"
 printf '%s\n' 'Stage: submitting DMG to Apple notary service and waiting for completion.'
 
-notary_result_tmp=$("$mktemp_path" "$release_dir/.GhostTerm-notary-result.XXXXXX") \
+notary_result_tmp=$("$mktemp_path" "$release_dir/.QuickTTY-notary-result.XXXXXX") \
     || release_fail "could not create temporary notarization result in: $release_dir"
 case "$notary_result_tmp" in
-    "$release_dir"/.GhostTerm-notary-result.*) ;;
+    "$release_dir"/.QuickTTY-notary-result.*) ;;
     *) release_fail "temporary notarization result has an unexpected path: $notary_result_tmp" ;;
 esac
 [ -f "$notary_result_tmp" ] && [ ! -L "$notary_result_tmp" ] \

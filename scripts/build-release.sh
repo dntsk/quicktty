@@ -20,11 +20,11 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/release-helpers.sh"
 
 MARKETING_VERSION=0.1.0
-BUILD_NUMBER=1
-BUNDLE_IDENTIFIER=com.dntsk.GhostTerm
+BUILD_NUMBER=2
+BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
-PRODUCT_NAME=GhostTerm
-VOLUME_NAME="GhostTerm $RELEASE_LABEL_DEFAULT"
+PRODUCT_NAME=QuickTTY
+VOLUME_NAME="QuickTTY $RELEASE_LABEL_DEFAULT"
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 require_executable_path() {
@@ -132,12 +132,12 @@ verify_bundle() {
 
     actual_display_name=$(plist_value "$info_plist" CFBundleDisplayName) \
         || release_fail 'CFBundleDisplayName is missing from archived app'
-    [ "$actual_display_name" = GhostTerm ] \
+    [ "$actual_display_name" = QuickTTY ] \
         || release_fail "unexpected CFBundleDisplayName: $actual_display_name"
 
     actual_bundle_name=$(plist_value "$info_plist" CFBundleName) \
         || release_fail 'CFBundleName is missing from archived app'
-    [ "$actual_bundle_name" = GhostTerm ] \
+    [ "$actual_bundle_name" = QuickTTY ] \
         || release_fail "unexpected CFBundleName: $actual_bundle_name"
 
     actual_bundle_package_type=$(plist_value "$info_plist" CFBundlePackageType) \
@@ -321,7 +321,7 @@ dmg_path=$release_dir/$RELEASE_DMG_NAME
 notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
 stage_dir=$release_dir/$RELEASE_STAGE_NAME
 
-printf '%s\n' 'cleanup: only prior GhostTerm archive, DMG, notarization result, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
+printf '%s\n' 'cleanup: only prior QuickTTY archive, DMG, notarization result, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
 release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
 release_remove_generated_file "$release_dir" "$notary_result_path"
@@ -344,7 +344,7 @@ fi
 
 cd "$repo_root"
 release_force_clean_ghostty_generated_resources "$repo_root"
-GHOSTTERM_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"
+QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"
 release_verify_ghostty_generated_resources "$repo_root"
 prepared_source_tree_state=$(release_source_tree_state "$repo_root" "$git_path") \
     || release_fail 'could not determine source tree state after Ghostty resource rebuild'
@@ -353,8 +353,8 @@ prepared_source_tree_state=$(release_source_tree_state "$repo_root" "$git_path")
 "$xcodegen_path" generate --spec "$repo_root/project.yml"
 archive_pending=yes
 "$xcodebuild_path" archive \
-    -project "$repo_root/GhostTerm.xcodeproj" \
-    -scheme GhostTerm \
+    -project "$repo_root/QuickTTY.xcodeproj" \
+    -scheme QuickTTY \
     -configuration Release \
     -destination 'generic/platform=macOS' \
     -archivePath "$archive_path" \
