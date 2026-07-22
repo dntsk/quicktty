@@ -107,6 +107,11 @@ private final class PaneNavigationMenuActionTarget: NSObject {
 @MainActor
 struct AppDelegateLifecycleTests {
     @Test
+    func startupErrorUsesQuickTTYName() {
+        #expect(AppDelegate.startupErrorMessage == "QuickTTY could not start")
+    }
+
+    @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
         #expect(
             AppDelegate.shouldTerminateAfterLastWindowClosed(
@@ -130,16 +135,16 @@ struct AppDelegateLifecycleTests {
 
     @Test
     func configurationDiagnosticsMapToPathAwarePresentationAndClearWhenEmpty() {
-        let configURL = URL(fileURLWithPath: "/tmp/ghostterm/config")
+        let configURL = URL(fileURLWithPath: "/tmp/quicktty/config")
         let diagnostics = [
             ConfigDiagnostic(
                 line: 4,
-                key: "ghostterm-quake-height",
+                key: "quicktty-quake-height",
                 reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
             ),
             ConfigDiagnostic(
                 line: 9,
-                key: "ghostterm-restore-workspaces",
+                key: "quicktty-restore-workspaces",
                 reason: .invalidBoolean
             ),
         ]
@@ -169,11 +174,11 @@ struct AppDelegateLifecycleTests {
     @Test
     func configurationDiagnosticsReceivedBeforeCoordinatorAreRetainedAndForwarded() throws {
         let delegate = AppDelegate()
-        let configURL = URL(fileURLWithPath: "/tmp/ghostterm/config")
+        let configURL = URL(fileURLWithPath: "/tmp/quicktty/config")
         let diagnostics = [
             ConfigDiagnostic(
                 line: 4,
-                key: "ghostterm-quake-height",
+                key: "quicktty-quake-height",
                 reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
             )
         ]
@@ -418,7 +423,7 @@ struct AppDelegateLifecycleTests {
             target: target,
             action: #selector(OpenConfigurationMenuActionTarget.openConfiguration)
         )
-        let applicationMenu = mainMenu.item(withTitle: "GhostTerm")?.submenu
+        let applicationMenu = mainMenu.item(withTitle: "QuickTTY")?.submenu
         let item = try #require(applicationMenu?.item(withTitle: "Open Configuration…"))
 
         #expect(applicationMenu?.items.count == 1)
@@ -434,8 +439,8 @@ struct AppDelegateLifecycleTests {
     func openConfigurationMenuInstallerIsIdempotentAndPreservesForeignModifiedCommas() throws {
         let target = OpenConfigurationMenuActionTarget()
         let mainMenu = NSMenu()
-        let applicationItem = NSMenuItem(title: "GhostTerm", action: nil, keyEquivalent: "")
-        let applicationMenu = NSMenu(title: "GhostTerm")
+        let applicationItem = NSMenuItem(title: "QuickTTY", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "QuickTTY")
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)
         let commandCapsLockComma = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: ",")

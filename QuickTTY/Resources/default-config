@@ -1,5 +1,5 @@
-# GhostTerm configuration
-# See Help > Configuration Reference for every GhostTerm option.
+# QuickTTY configuration
+# See Help > Configuration Reference for every QuickTTY option.
 
 # Terminal options below are passed directly to Ghostty.
 font-family = JetBrains Mono
@@ -7,12 +7,12 @@ font-size = 13
 theme = Monokai Remastered
 copy-on-select = clipboard
 
-# GhostTerm window and Quake options.
-ghostterm-presentation-mode = normal
-ghostterm-global-toggle = f12
-ghostterm-quake-height = 75%
-ghostterm-quake-animation-duration = 0.18
-ghostterm-quake-padding = 0
-ghostterm-hide-on-focus-loss = true
-ghostterm-restore-workspaces = true
-ghostterm-config-editor = nano
+# QuickTTY window and Quake options.
+quicktty-presentation-mode = normal
+quicktty-global-toggle = f12
+quicktty-quake-height = 75%
+quicktty-quake-animation-duration = 0.18
+quicktty-quake-padding = 0
+quicktty-hide-on-focus-loss = true
+quicktty-restore-workspaces = true
+quicktty-config-editor = nano

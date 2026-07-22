@@ -24,7 +24,7 @@ extension ConfigDiagnostic: LocalizedError {
         case .malformedAssignment:
             return "\(prefix): expected 'key = value'."
         case .unknownKey:
-            return "\(prefix): unknown GhostTerm option."
+            return "\(prefix): unknown QuickTTY option."
         case .emptyValue:
             return "\(prefix): value is empty."
         case .invalidPresentationMode:
@@ -56,7 +56,7 @@ struct ConfigDocument: Equatable, Sendable {
         let key: String?
         let value: String?
         let valueRange: Range<Int>?
-        let belongsToGhostTerm: Bool
+        let belongsToQuickTTY: Bool
         let malformed: Bool
     }
 
@@ -81,7 +81,7 @@ struct ConfigDocument: Equatable, Sendable {
 
     var filteredGhosttyData: Data {
         lines.reduce(into: Data()) { result, line in
-            guard Self.assignment(in: line.content).belongsToGhostTerm else {
+            guard Self.assignment(in: line.content).belongsToQuickTTY else {
                 result.append(line.content)
                 result.append(line.terminator)
                 return
@@ -112,7 +112,7 @@ struct ConfigDocument: Equatable, Sendable {
 
         for (index, line) in lines.enumerated() {
             let assignment = Self.assignment(in: line.content)
-            guard assignment.belongsToGhostTerm else { continue }
+            guard assignment.belongsToQuickTTY else { continue }
             guard !assignment.malformed, let keyName = assignment.key else {
                 diagnostics.append(
                     ConfigDiagnostic(
@@ -237,7 +237,7 @@ struct ConfigDocument: Equatable, Sendable {
                 key: nil,
                 value: nil,
                 valueRange: nil,
-                belongsToGhostTerm: false,
+                belongsToQuickTTY: false,
                 malformed: false
             )
         }
@@ -245,12 +245,12 @@ struct ConfigDocument: Equatable, Sendable {
         guard let equals = bytes[first...].firstIndex(of: 0x3D) else {
             let tokenEnd = bytes[first...].firstIndex(where: isHorizontalWhitespace) ?? bytes.count
             let token = String(bytes: bytes[first..<tokenEnd], encoding: .utf8)
-            let belongs = token?.hasPrefix("ghostterm-") == true
+            let belongs = token?.hasPrefix("quicktty-") == true
             return Assignment(
                 key: token,
                 value: nil,
                 valueRange: nil,
-                belongsToGhostTerm: belongs,
+                belongsToQuickTTY: belongs,
                 malformed: belongs
             )
         }
@@ -260,13 +260,13 @@ struct ConfigDocument: Equatable, Sendable {
             keyEnd -= 1
         }
         let key = String(bytes: bytes[first..<keyEnd], encoding: .utf8)
-        let belongs = key?.hasPrefix("ghostterm-") == true
+        let belongs = key?.hasPrefix("quicktty-") == true
         guard belongs else {
             return Assignment(
                 key: key,
                 value: nil,
                 valueRange: nil,
-                belongsToGhostTerm: false,
+                belongsToQuickTTY: false,
                 malformed: false
             )
         }
@@ -285,7 +285,7 @@ struct ConfigDocument: Equatable, Sendable {
             key: key,
             value: value,
             valueRange: valueStart..<valueEnd,
-            belongsToGhostTerm: true,
+            belongsToQuickTTY: true,
             malformed: value == nil
         )
     }

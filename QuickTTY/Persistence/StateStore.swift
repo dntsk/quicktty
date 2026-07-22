@@ -95,7 +95,7 @@ final class StateStore {
     }
 
     private static let logger = Logger(
-        subsystem: "com.dntsk.GhostTerm",
+        subsystem: "com.dntsk.QuickTTY",
         category: "StateStore"
     )
 
@@ -156,13 +156,16 @@ final class StateStore {
         }
 
         return try StateStore(
-            url:
-                applicationSupportURL
-                .appending(path: "GhostTerm", directoryHint: .isDirectory)
-                .appending(path: "state.json"),
+            url: productionStateURL(applicationSupportURL: applicationSupportURL),
             homeDirectoryURL: fileManager.homeDirectoryForCurrentUser,
             fileManager: fileManager
         )
+    }
+
+    static func productionStateURL(applicationSupportURL: URL) -> URL {
+        applicationSupportURL
+            .appending(path: "QuickTTY", directoryHint: .isDirectory)
+            .appending(path: "state.json")
     }
 
     func load() throws -> ApplicationState {

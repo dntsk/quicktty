@@ -362,7 +362,7 @@ struct WorkspacePresentationTests {
         #expect(!controller.configurationDiagnosticIsVisibleForTesting)
 
         controller.applyConfigurationDiagnostics(
-            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: [])
+            ConfigDiagnosticPresentation(path: "/tmp/quicktty/config", messages: [])
         )
         #expect(!controller.configurationDiagnosticIsVisibleForTesting)
     }
@@ -373,7 +373,7 @@ struct WorkspacePresentationTests {
 
         controller.applyConfigurationDiagnostics(
             ConfigDiagnosticPresentation(
-                path: "/tmp/ghostterm/config",
+                path: "/tmp/quicktty/config",
                 messages: ["line 4: invalid quake height", "line 9: unknown option"]
             )
         )
@@ -381,7 +381,7 @@ struct WorkspacePresentationTests {
         #expect(controller.configurationDiagnosticIsVisibleForTesting)
         #expect(
             controller.configurationDiagnosticTextForTesting
-                == "/tmp/ghostterm/config\nline 4: invalid quake height\nline 9: unknown option"
+                == "/tmp/quicktty/config\nline 4: invalid quake height\nline 9: unknown option"
         )
     }
 
@@ -391,7 +391,7 @@ struct WorkspacePresentationTests {
         let messages = (1...10).map { "line \($0): invalid option" }
 
         controller.applyConfigurationDiagnostics(
-            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: messages)
+            ConfigDiagnosticPresentation(path: "/tmp/quicktty/config", messages: messages)
         )
 
         let text = controller.configurationDiagnosticTextForTesting
@@ -413,7 +413,7 @@ struct WorkspacePresentationTests {
         }
 
         controller.applyConfigurationDiagnostics(
-            ConfigDiagnosticPresentation(path: "/tmp/ghostterm/config", messages: messages)
+            ConfigDiagnosticPresentation(path: "/tmp/quicktty/config", messages: messages)
         )
         Self.layoutWorkspace(controller, in: window)
 
@@ -434,11 +434,11 @@ struct WorkspacePresentationTests {
         let diagnosticView = try #require(
             controller.configurationDiagnosticViewForTesting as? ConfigDiagnosticView)
         let presentation = ConfigDiagnosticPresentation(
-            path: "/tmp/ghostterm/config",
+            path: "/tmp/quicktty/config",
             messages: ["line 4: invalid quake height"]
         )
         let changedPresentation = ConfigDiagnosticPresentation(
-            path: "/tmp/ghostterm/config",
+            path: "/tmp/quicktty/config",
             messages: ["line 9: unknown option"]
         )
         var announcements: [String] = []
@@ -460,7 +460,7 @@ struct WorkspacePresentationTests {
         #expect(diagnosticView.accessibilityLabel() == "Configuration diagnostics")
         #expect(
             diagnosticView.accessibilityValue() as? String
-                == "/tmp/ghostterm/config\nline 9: unknown option"
+                == "/tmp/quicktty/config\nline 9: unknown option"
         )
     }
 
@@ -530,7 +530,7 @@ struct WorkspacePresentationTests {
 
         controller.applyConfigurationDiagnostics(
             ConfigDiagnosticPresentation(
-                path: "/tmp/ghostterm/config",
+                path: "/tmp/quicktty/config",
                 messages: ["line 4: invalid quake height"]
             )
         )
@@ -1177,6 +1177,11 @@ struct WorkspacePresentationTests {
         return window
     }
 
+    @Test
+    func tabDraggingUsesQuickTTYPasteboardType() {
+        #expect(NSPasteboard.PasteboardType.quickTTYTab.rawValue == "com.dntsk.QuickTTY.tab")
+    }
+
     private static func makeMountedTabBar(
         tabs: [TerminalTab],
         activeTabID: TabID
@@ -1281,12 +1286,12 @@ private final class TabDraggingInfo: NSObject, @MainActor NSDraggingInfo {
     init(source: AnyObject?, payload: String?) {
         draggingSource = source
         draggingPasteboard = NSPasteboard(
-            name: NSPasteboard.Name("GhostTermTests.TabDraggingInfo.\(UUID().uuidString)")
+            name: NSPasteboard.Name("QuickTTYTests.TabDraggingInfo.\(UUID().uuidString)")
         )
         super.init()
         draggingPasteboard.clearContents()
         if let payload {
-            draggingPasteboard.setString(payload, forType: .ghostTermTab)
+            draggingPasteboard.setString(payload, forType: .quickTTYTab)
         }
     }
 

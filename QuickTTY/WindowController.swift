@@ -12,7 +12,7 @@ final class WindowController: NSWindowController {
             defer: false
         )
 
-        window.title = "GhostTerm"
+        window.title = "QuickTTY"
         window.contentViewController = contentViewController
         window.center()
 

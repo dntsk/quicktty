@@ -35,6 +35,18 @@ struct ConfigControllerTests {
     }
 
     @Test
+    func productionURLsUseOnlyTheQuickTTYConfigDirectory() {
+        let homeDirectoryURL = URL(filePath: "/fixture/home", directoryHint: .isDirectory)
+        let urls = ConfigController.productionURLs(homeDirectoryURL: homeDirectoryURL)
+
+        #expect(urls.configURL.path == "/fixture/home/.config/quicktty/config")
+        #expect(
+            urls.effectiveGhosttyURL.path
+                == "/fixture/home/.config/quicktty/.ghostty-effective-config"
+        )
+    }
+
+    @Test
     func reloadWritesEffectiveDataAndUpdatesActiveConfig() throws {
         let fixture = try ConfigFixture()
         defer { fixture.remove() }
@@ -44,8 +56,8 @@ struct ConfigControllerTests {
         try Data(
             """
             font-family = Changed\r
-            ghostterm-restore-workspaces = false\r
-            ghostterm-config-editor = code --wait\r
+            quicktty-restore-workspaces = false\r
+            quicktty-config-editor = code --wait\r
             """.utf8
         ).write(to: fixture.configURL)
 
@@ -71,8 +83,8 @@ struct ConfigControllerTests {
         try Data(
             """
             font-family = Changed
-            ghostterm-presentation-mode = quake
-            ghostterm-quake-height = impossible
+            quicktty-presentation-mode = quake
+            quicktty-quake-height = impossible
             """.utf8
         ).write(to: fixture.configURL)
         var reloadURLs: [URL] = []
@@ -96,7 +108,7 @@ struct ConfigControllerTests {
                     [
                         ConfigDiagnostic(
                             line: 3,
-                            key: "ghostterm-quake-height",
+                            key: "quicktty-quake-height",
                             reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
                         )
                     ]
@@ -117,14 +129,14 @@ struct ConfigControllerTests {
             at: fixture.directoryURL,
             withIntermediateDirectories: true
         )
-        try Data("ghostterm-quake-height = impossible\n".utf8).write(to: fixture.configURL)
+        try Data("quicktty-quake-height = impossible\n".utf8).write(to: fixture.configURL)
         var reportedDiagnostics: [[ConfigDiagnostic]] = []
         let controller = fixture.makeController(
             reloadGhostty: { _ in },
             onDiagnostics: { reportedDiagnostics.append($0) }
         )
         try controller.load()
-        try Data("ghostterm-presentation-mode = quake\n".utf8).write(to: fixture.configURL)
+        try Data("quicktty-presentation-mode = quake\n".utf8).write(to: fixture.configURL)
 
         try controller.reload()
 
@@ -140,7 +152,7 @@ struct ConfigControllerTests {
             at: fixture.directoryURL,
             withIntermediateDirectories: true
         )
-        try Data("ghostterm-quake-height = impossible\n".utf8).write(to: fixture.configURL)
+        try Data("quicktty-quake-height = impossible\n".utf8).write(to: fixture.configURL)
         var callbackEvents: [String] = []
         let controller = fixture.makeController(
             reloadGhostty: { _ in },
@@ -163,14 +175,14 @@ struct ConfigControllerTests {
         )
         try Data(
             """
-            ghostterm-presentation-mode = quake
-            ghostterm-quake-height = impossible
+            quicktty-presentation-mode = quake
+            quicktty-quake-height = impossible
             """.utf8
         ).write(to: fixture.configURL)
         let replacementSource = Data(
             """
-            ghostterm-config-editor = code --wait
-            ghostterm-restore-workspaces = maybe
+            quicktty-config-editor = code --wait
+            quicktty-restore-workspaces = maybe
             """.utf8
         )
         let state = ReentrantReloadState(
@@ -191,7 +203,7 @@ struct ConfigControllerTests {
                 == [
                     "update:nano",
                     "update:code --wait",
-                    "diagnostics:ghostterm-restore-workspaces",
+                    "diagnostics:quicktty-restore-workspaces",
                 ]
         )
         #expect(
@@ -200,7 +212,7 @@ struct ConfigControllerTests {
                     [
                         ConfigDiagnostic(
                             line: 2,
-                            key: "ghostterm-restore-workspaces",
+                            key: "quicktty-restore-workspaces",
                             reason: .invalidBoolean
                         )
                     ]
@@ -222,15 +234,15 @@ struct ConfigControllerTests {
         )
         let outerSource = Data(
             """
-            ghostterm-presentation-mode = quake
-            ghostterm-quake-height = impossible
+            quicktty-presentation-mode = quake
+            quicktty-quake-height = impossible
             """.utf8
         )
         try outerSource.write(to: fixture.configURL)
         let replacementSource = Data(
             """
-            ghostterm-config-editor = code --wait
-            ghostterm-restore-workspaces = false
+            quicktty-config-editor = code --wait
+            quicktty-restore-workspaces = false
             """.utf8
         )
         let state = FailingNestedReloadState(
@@ -252,7 +264,7 @@ struct ConfigControllerTests {
 
         try controller.load()
 
-        #expect(state.callbackEvents == ["update:nano", "diagnostics:ghostterm-quake-height"])
+        #expect(state.callbackEvents == ["update:nano", "diagnostics:quicktty-quake-height"])
         #expect(
             state.caughtErrors
                 == [
@@ -265,7 +277,7 @@ struct ConfigControllerTests {
                     [
                         ConfigDiagnostic(
                             line: 2,
-                            key: "ghostterm-quake-height",
+                            key: "quicktty-quake-height",
                             reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
                         )
                     ]
@@ -294,7 +306,7 @@ struct ConfigControllerTests {
         try controller.load()
         let effectiveBefore = try Data(contentsOf: fixture.effectiveURL)
         try Data(
-            "font-family = Changed\nghostterm-presentation-mode = quake\n".utf8
+            "font-family = Changed\nquicktty-presentation-mode = quake\n".utf8
         ).write(to: fixture.configURL)
         failureSwitch.shouldFail = true
 
@@ -314,9 +326,9 @@ struct ConfigControllerTests {
         defer { fixture.remove() }
         let source = Data(
             """
-            ghostterm-presentation-mode = normal
+            quicktty-presentation-mode = normal
             # preserved
-            ghostterm-presentation-mode  =  normal  # effective
+            quicktty-presentation-mode  =  normal  # effective
             font-size = 14
             """.utf8
         )
@@ -335,9 +347,9 @@ struct ConfigControllerTests {
             try Data(contentsOf: fixture.configURL)
                 == Data(
                     """
-                    ghostterm-presentation-mode = normal
+                    quicktty-presentation-mode = normal
                     # preserved
-                    ghostterm-presentation-mode  =  quake  # effective
+                    quicktty-presentation-mode  =  quake  # effective
                     font-size = 14
                     """.utf8
                 )
@@ -355,7 +367,7 @@ struct ConfigControllerTests {
             withIntermediateDirectories: true
         )
         try Data(
-            "ghostterm-quake-height = 75%\r\nfont-size = 14\r\n".utf8
+            "quicktty-quake-height = 75%\r\nfont-size = 14\r\n".utf8
         ).write(to: fixture.configURL)
         var reloadCount = 0
         var updates: [QuickTTYConfig] = []
@@ -369,7 +381,7 @@ struct ConfigControllerTests {
 
         #expect(
             try Data(contentsOf: fixture.configURL)
-                == Data("ghostterm-quake-height = 73.125%\r\nfont-size = 14\r\n".utf8)
+                == Data("quicktty-quake-height = 73.125%\r\nfont-size = 14\r\n".utf8)
         )
         #expect(controller.activeConfig.quakeHeight == 0.73125)
         #expect(updates.map(\.quakeHeight) == [0.75, 0.73125])
@@ -409,7 +421,7 @@ struct ConfigControllerTests {
         #expect(reloadCount == 2)
         #expect(updates.map(\.quakeHeight) == [0.75, 0.73125])
 
-        try Data("ghostterm-quake-height = 80%\n".utf8).write(to: fixture.configURL)
+        try Data("quicktty-quake-height = 80%\n".utf8).write(to: fixture.configURL)
         source.emitLatest()
         scheduler.runAllIncludingCanceled()
 
@@ -445,14 +457,14 @@ struct ConfigControllerTests {
                     """
                     font-family = Mono
                     copy-on-select = clipboard
-                    ghostterm-presentation-mode = normal
-                    ghostterm-global-toggle = f12
-                    ghostterm-quake-height = 73.125%
-                    ghostterm-quake-animation-duration = 0.18
-                    ghostterm-quake-padding = 0
-                    ghostterm-hide-on-focus-loss = true
-                    ghostterm-restore-workspaces = true
-                    ghostterm-config-editor = nano
+                    quicktty-presentation-mode = normal
+                    quicktty-global-toggle = f12
+                    quicktty-quake-height = 73.125%
+                    quicktty-quake-animation-duration = 0.18
+                    quicktty-quake-padding = 0
+                    quicktty-hide-on-focus-loss = true
+                    quicktty-restore-workspaces = true
+                    quicktty-config-editor = nano
                     """.utf8
                 )
         )
@@ -466,12 +478,12 @@ struct ConfigControllerTests {
         let diagnostics = [
             ConfigDiagnostic(
                 line: 4,
-                key: "ghostterm-quake-height",
+                key: "quicktty-quake-height",
                 reason: .invalidNumber(expected: "a value in 0...1 or 1%...100%")
             ),
             ConfigDiagnostic(
                 line: 9,
-                key: "ghostterm-restore-workspaces",
+                key: "quicktty-restore-workspaces",
                 reason: .invalidBoolean
             ),
         ]
@@ -487,7 +499,7 @@ struct ConfigControllerTests {
             .effectiveWriteFailed("effective config is read-only"),
             .ghosttyReloadFailed("reload rejected"),
             .effectiveRollbackFailed(primary: "reload rejected", rollback: "restore denied"),
-            .watcherFailed(.openFailed(path: "/tmp/ghostterm/config", code: 13)),
+            .watcherFailed(.openFailed(path: "/tmp/quicktty/config", code: 13)),
         ]
 
         for error in errors {
@@ -499,9 +511,9 @@ struct ConfigControllerTests {
         )
         #expect(
             ConfigControllerError.watcherFailed(
-                .openFailed(path: "/tmp/ghostterm/config", code: 13)
+                .openFailed(path: "/tmp/quicktty/config", code: 13)
             ).localizedDescription
-                == "The configuration file could not be watched at /tmp/ghostterm/config (POSIX error 13)."
+                == "The configuration file could not be watched at /tmp/quicktty/config (POSIX error 13)."
         )
     }
 
@@ -664,20 +676,20 @@ private struct ConfigFixture {
         """
         font-family = Mono
         copy-on-select = clipboard
-        ghostterm-presentation-mode = normal
-        ghostterm-global-toggle = f12
-        ghostterm-quake-height = 75%
-        ghostterm-quake-animation-duration = 0.18
-        ghostterm-quake-padding = 0
-        ghostterm-hide-on-focus-loss = true
-        ghostterm-restore-workspaces = true
-        ghostterm-config-editor = nano
+        quicktty-presentation-mode = normal
+        quicktty-global-toggle = f12
+        quicktty-quake-height = 75%
+        quicktty-quake-animation-duration = 0.18
+        quicktty-quake-padding = 0
+        quicktty-hide-on-focus-loss = true
+        quicktty-restore-workspaces = true
+        quicktty-config-editor = nano
         """.utf8
     )
 
     init() throws {
         directoryURL = FileManager.default.temporaryDirectory.appending(
-            path: "GhostTerm-ConfigTests-\(UUID().uuidString)",
+            path: "QuickTTY-ConfigTests-\(UUID().uuidString)",
             directoryHint: .isDirectory
         )
         configURL = directoryURL.appending(path: "config")

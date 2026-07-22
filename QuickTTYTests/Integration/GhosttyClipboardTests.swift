@@ -194,7 +194,7 @@ extension GhosttyBridgeTests {
             GhosttyClipboardClient.opinionatedString(urls: [], fallback: "fallback")
                 == "fallback"
         )
-        #expect(GhosttyClipboardClient.selectionPasteboardName == "com.dntsk.GhostTerm.selection")
+        #expect(GhosttyClipboardClient.selectionPasteboardName == "com.dntsk.QuickTTY.selection")
         #expect(GhosttyClipboardClient.pasteboardType(for: "text/plain") == .string)
         #expect(GhosttyClipboardClient.pasteboardType(for: "text/html") == .html)
     }

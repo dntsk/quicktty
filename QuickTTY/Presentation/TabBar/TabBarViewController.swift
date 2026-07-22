@@ -102,7 +102,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             TabItemView.self,
             forItemWithIdentifier: TabItemView.reuseIdentifier
         )
-        collectionView.registerForDraggedTypes([.ghostTermTab])
+        collectionView.registerForDraggedTypes([.quickTTYTab])
         collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -279,7 +279,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     ) -> (any NSPasteboardWriting)? {
         guard indexPath.section == 0, tabs.indices.contains(indexPath.item) else { return nil }
         let item = NSPasteboardItem()
-        item.setString(tabs[indexPath.item].id.rawValue.uuidString, forType: .ghostTermTab)
+        item.setString(tabs[indexPath.item].id.rawValue.uuidString, forType: .quickTTYTab)
         return item
     }
 
@@ -370,7 +370,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         guard
             let source = draggingInfo.draggingSource as? NSCollectionView,
             source === collectionView,
-            let rawID = draggingInfo.draggingPasteboard.string(forType: .ghostTermTab),
+            let rawID = draggingInfo.draggingPasteboard.string(forType: .quickTTYTab),
             let uuid = UUID(uuidString: rawID)
         else { return nil }
 
@@ -508,7 +508,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 }
 
 extension NSPasteboard.PasteboardType {
-    static let ghostTermTab = NSPasteboard.PasteboardType(
-        "com.dntsk.GhostTerm.tab"
+    static let quickTTYTab = NSPasteboard.PasteboardType(
+        "com.dntsk.QuickTTY.tab"
     )
 }

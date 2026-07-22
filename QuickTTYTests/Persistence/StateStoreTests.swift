@@ -8,6 +8,19 @@ import Testing
 @MainActor
 struct StateStoreTests {
     @Test
+    func productionStateURLUsesOnlyTheQuickTTYApplicationSupportDirectory() {
+        let applicationSupportURL = URL(
+            filePath: "/fixture/Application Support",
+            directoryHint: .isDirectory
+        )
+
+        #expect(
+            StateStore.productionStateURL(applicationSupportURL: applicationSupportURL).path
+                == "/fixture/Application Support/QuickTTY/state.json"
+        )
+    }
+
+    @Test
     func versionOneFixtureRoundTripsStableFlattenedSchema() throws {
         let fixture = Data(Self.versionOneFixture.utf8)
 
@@ -1045,7 +1058,7 @@ private struct StoreFixture {
 
     init(backupSuffix: String = "test-backup") throws {
         directoryURL = FileManager.default.temporaryDirectory.appending(
-            path: "GhostTerm-StateStoreTests-\(UUID().uuidString)",
+            path: "QuickTTY-StateStoreTests-\(UUID().uuidString)",
             directoryHint: .isDirectory
         )
         homeURL = directoryURL.appending(path: "home", directoryHint: .isDirectory)

@@ -15,7 +15,7 @@ final class NormalWindowController: NSWindowController, PresentationWindowContai
 
     init(
         contentRect: NSRect = NSRect(origin: .zero, size: defaultContentSize),
-        title: String = "GhostTerm"
+        title: String = "QuickTTY"
     ) {
         let window = NSWindow(
             contentRect: contentRect,

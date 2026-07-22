@@ -96,6 +96,17 @@ struct PresentationStateMachineTests {
         #expect(window.canBecomeKey)
         #expect(window.canBecomeMain)
         #expect(window.contentMinSize.height == QuakeWindow.minimumContentHeight)
+        #expect(window.title == "QuickTTY Quake Terminal")
+        #expect(window.accessibilityLabel() == "QuickTTY Quake Terminal")
+    }
+
+    @Test
+    func normalWindowsUseQuickTTYTitles() {
+        let normal = NormalWindowController()
+        let windowController = WindowController()
+
+        #expect(normal.window?.title == "QuickTTY")
+        #expect(windowController.window?.title == "QuickTTY")
     }
 
     @Test

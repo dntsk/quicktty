@@ -11,7 +11,7 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
             backing: .buffered,
             defer: false
         )
-        title = "GhostTerm Quake Terminal"
+        title = "QuickTTY Quake Terminal"
         level = .floating
         contentMinSize = NSSize(width: 0, height: Self.minimumContentHeight)
         minSize = NSSize(width: 0, height: Self.minimumContentHeight)
@@ -21,7 +21,7 @@ final class QuakeWindow: NSPanel, QuakeWindowRepresenting {
         becomesKeyOnlyIfNeeded = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        setAccessibilityLabel("GhostTerm Quake Terminal")
+        setAccessibilityLabel("QuickTTY Quake Terminal")
         setAccessibilitySubrole(.floatingWindow)
     }
 

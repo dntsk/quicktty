@@ -9,7 +9,7 @@ struct ConfigFileWatcherTests {
     @Test
     func productionSourceDeliversFileChangesOnMainActor() async throws {
         let directoryURL = FileManager.default.temporaryDirectory.appending(
-            path: "GhostTerm-ConfigFileWatcherTests-\(UUID().uuidString)",
+            path: "QuickTTY-ConfigFileWatcherTests-\(UUID().uuidString)",
             directoryHint: .isDirectory
         )
         let fileURL = directoryURL.appending(path: "config")

@@ -98,17 +98,31 @@ final class ConfigController {
         } catch {
             throw ConfigControllerError.starterResourceReadFailed(String(describing: error))
         }
-        let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: ".config", directoryHint: .isDirectory)
-            .appending(path: "ghostterm", directoryHint: .isDirectory)
+        let urls = productionURLs(
+            homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+        )
         return ConfigController(
-            configURL: directory.appending(path: "config"),
-            effectiveGhosttyURL: directory.appending(path: ".ghostty-effective-config"),
+            configURL: urls.configURL,
+            effectiveGhosttyURL: urls.effectiveGhosttyURL,
             starterData: starterData,
             reloadGhostty: reloadGhostty,
             onUpdate: onUpdate,
             onDiagnostics: onDiagnostics,
             onError: onError
+        )
+    }
+
+    static func productionURLs(homeDirectoryURL: URL) -> (
+        configURL: URL,
+        effectiveGhosttyURL: URL
+    ) {
+        let directory = homeDirectoryURL
+            .appending(path: ".config", directoryHint: .isDirectory)
+            .appending(path: "quicktty", directoryHint: .isDirectory)
+
+        return (
+            configURL: directory.appending(path: "config"),
+            effectiveGhosttyURL: directory.appending(path: ".ghostty-effective-config")
         )
     }
 

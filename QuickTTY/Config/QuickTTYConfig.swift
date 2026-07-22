@@ -3,14 +3,14 @@ import Foundation
 
 struct QuickTTYConfig: Equatable, Sendable {
     enum Key: String, CaseIterable, Sendable {
-        case presentationMode = "ghostterm-presentation-mode"
-        case globalToggle = "ghostterm-global-toggle"
-        case quakeHeight = "ghostterm-quake-height"
-        case quakeAnimationDuration = "ghostterm-quake-animation-duration"
-        case quakePadding = "ghostterm-quake-padding"
-        case hideOnFocusLoss = "ghostterm-hide-on-focus-loss"
-        case restoreWorkspaces = "ghostterm-restore-workspaces"
-        case configEditor = "ghostterm-config-editor"
+        case presentationMode = "quicktty-presentation-mode"
+        case globalToggle = "quicktty-global-toggle"
+        case quakeHeight = "quicktty-quake-height"
+        case quakeAnimationDuration = "quicktty-quake-animation-duration"
+        case quakePadding = "quicktty-quake-padding"
+        case hideOnFocusLoss = "quicktty-hide-on-focus-loss"
+        case restoreWorkspaces = "quicktty-restore-workspaces"
+        case configEditor = "quicktty-config-editor"
     }
 
     var presentationMode: PresentationMode = .normal

@@ -343,7 +343,7 @@ private struct TemporaryConfig {
     let directoryURL: URL
     let url: URL
 
-    init(contents: String = "# GhostTerm integration test\n") throws {
+    init(contents: String = "# QuickTTY integration test\n") throws {
         directoryURL = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString,
             directoryHint: .isDirectory

@@ -20,11 +20,28 @@ struct ConfigDocumentTests {
     }
 
     @Test
+    func keysUseTheExactQuickTTYNamespace() {
+        #expect(
+            QuickTTYConfig.Key.allCases.map(\.rawValue)
+                == [
+                    "quicktty-presentation-mode",
+                    "quicktty-global-toggle",
+                    "quicktty-quake-height",
+                    "quicktty-quake-animation-duration",
+                    "quicktty-quake-padding",
+                    "quicktty-hide-on-focus-loss",
+                    "quicktty-restore-workspaces",
+                    "quicktty-config-editor",
+                ]
+        )
+    }
+
+    @Test
     func parsesWorkspaceRestoreAndEditorValuesIncludingArguments() {
         let document = ConfigDocument(
             text: """
-                ghostterm-restore-workspaces = false
-                ghostterm-config-editor = \t nvim --nofork \t
+                quicktty-restore-workspaces = false
+                quicktty-config-editor = \t nvim --nofork \t
                 """
         )
 
@@ -38,7 +55,7 @@ struct ConfigDocumentTests {
     @Test(arguments: ["TRUE", "False", "yes", "0"])
     func restoreWorkspacesRejectsNonExactBooleanValues(_ value: String) {
         let result = ConfigDocument(
-            text: "ghostterm-restore-workspaces = \(value)\n"
+            text: "quicktty-restore-workspaces = \(value)\n"
         ).parse()
 
         #expect(result.config.restoreWorkspaces)
@@ -56,7 +73,7 @@ struct ConfigDocumentTests {
     @Test
     func configEditorRejectsNUL() {
         let result = ConfigDocument(
-            text: "ghostterm-config-editor = na\0no\n"
+            text: "quicktty-config-editor = na\0no\n"
         ).parse()
 
         #expect(result.config.configEditor == "nano")
@@ -75,10 +92,10 @@ struct ConfigDocumentTests {
     func duplicateWorkspaceRestoreAndEditorAssignmentsUseLastValidValue() {
         let result = ConfigDocument(
             text: """
-                ghostterm-restore-workspaces = false
-                ghostterm-restore-workspaces = true
-                ghostterm-config-editor = vim
-                ghostterm-config-editor = code --wait
+                quicktty-restore-workspaces = false
+                quicktty-restore-workspaces = true
+                quicktty-config-editor = vim
+                quicktty-config-editor = code --wait
                 """
         ).parse()
 
@@ -105,7 +122,7 @@ struct ConfigDocumentTests {
     @Test
     func preservesEveryOriginalByteIncludingMixedTerminatorsAndInvalidUnknownData() {
         let bytes = Data(
-            Array("# comment\r\nfont-size = 14\r\nghostterm-presentation-mode = quake\r".utf8)
+            Array("# comment\r\nfont-size = 14\r\nquicktty-presentation-mode = quake\r".utf8)
                 + [0xFF, 0x00, 0x0A]
         )
 
@@ -118,9 +135,9 @@ struct ConfigDocumentTests {
     @Test
     func lastDuplicateIsEffectiveAndOnlyItsValueBytesChange() {
         let source =
-            "ghostterm-presentation-mode=normal\r\n"
+            "quicktty-presentation-mode=normal\r\n"
             + "# keep me\r\n"
-            + "ghostterm-presentation-mode  =  quake  # effective\r\n"
+            + "quicktty-presentation-mode  =  quake  # effective\r\n"
             + "font-family = Mono"
         var document = ConfigDocument(data: Data(source.utf8))
 
@@ -130,9 +147,9 @@ struct ConfigDocumentTests {
         #expect(
             document.data
                 == Data(
-                    ("ghostterm-presentation-mode=normal\r\n"
+                    ("quicktty-presentation-mode=normal\r\n"
                         + "# keep me\r\n"
-                        + "ghostterm-presentation-mode  =  normal  # effective\r\n"
+                        + "quicktty-presentation-mode  =  normal  # effective\r\n"
                         + "font-family = Mono").utf8
                 )
         )
@@ -147,14 +164,14 @@ struct ConfigDocumentTests {
         #expect(ConfigDocument.formattedQuakeHeight(0.73125) == "73.125%")
 
         var document = ConfigDocument(
-            data: Data("ghostterm-quake-height  =  75%  # preserved\r\nfont-size = 14\r\n".utf8)
+            data: Data("quicktty-quake-height  =  75%  # preserved\r\nfont-size = 14\r\n".utf8)
         )
         document.setQuakeHeight(0.73125)
 
         #expect(
             document.data
                 == Data(
-                    "ghostterm-quake-height  =  73.125%  # preserved\r\nfont-size = 14\r\n".utf8
+                    "quicktty-quake-height  =  73.125%  # preserved\r\nfont-size = 14\r\n".utf8
                 )
         )
     }
@@ -167,17 +184,17 @@ struct ConfigDocumentTests {
 
         #expect(
             document.data
-                == Data("font-size = 13\nghostterm-presentation-mode = quake\n".utf8)
+                == Data("font-size = 13\nquicktty-presentation-mode = quake\n".utf8)
         )
     }
 
     @Test
-    func diagnosticsIdentifyExactGhostTermLineAndUnknownTerminalLinesAreIgnored() throws {
+    func diagnosticsIdentifyExactQuickTTYLineAndUnknownTerminalLinesAreIgnored() throws {
         let document = ConfigDocument(
             text: """
                 font-size = definitely-not-a-number
-                ghostterm-quake-height = huge
-                ghostterm-hide-on-focus-loss = maybe
+                quicktty-quake-height = huge
+                quicktty-hide-on-focus-loss = maybe
                 """
         )
 
@@ -195,14 +212,14 @@ struct ConfigDocumentTests {
         let source = Data(
             ("# terminal\r\n"
                 + "font-size = 15\r\n"
-                + "ghostterm-presentation-mode = quake\r\n"
-                + "ghostterm-global-toggle = cmd+opt+f11\r\n"
-                + "ghostterm-quake-height = 80%\r\n"
-                + "ghostterm-quake-animation-duration = 0.2\r\n"
-                + "ghostterm-quake-padding = 8\r\n"
-                + "ghostterm-hide-on-focus-loss = false\r\n"
-                + "ghostterm-restore-workspaces = false\r\n"
-                + "ghostterm-config-editor = code --wait\r\n"
+                + "quicktty-presentation-mode = quake\r\n"
+                + "quicktty-global-toggle = cmd+opt+f11\r\n"
+                + "quicktty-quake-height = 80%\r\n"
+                + "quicktty-quake-animation-duration = 0.2\r\n"
+                + "quicktty-quake-padding = 8\r\n"
+                + "quicktty-hide-on-focus-loss = false\r\n"
+                + "quicktty-restore-workspaces = false\r\n"
+                + "quicktty-config-editor = code --wait\r\n"
                 + "include = themes/local.conf").utf8
         )
         let document = ConfigDocument(data: source)
@@ -229,7 +246,7 @@ struct ConfigDocumentTests {
     @Test
     func effectiveGhosttyDataInjectsClipboardDefaultOnlyWithoutTerminalAssignment() {
         let source = Data(
-            "ghostterm-config-editor = vim\r\nfont-size = 14\r\n".utf8
+            "quicktty-config-editor = vim\r\nfont-size = 14\r\n".utf8
         )
         let document = ConfigDocument(data: source)
 
@@ -254,11 +271,11 @@ struct ConfigDocumentTests {
     }
 
     @Test
-    func byteOrderMarkPrefixedGhostTermAssignmentParsesAndIsFiltered() {
+    func byteOrderMarkPrefixedQuickTTYAssignmentParsesAndIsFiltered() {
         let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
         let source =
             byteOrderMark
-            + Data("ghostterm-restore-workspaces = false\r\nfont-size = 14\r\n".utf8)
+            + Data("quicktty-restore-workspaces = false\r\nfont-size = 14\r\n".utf8)
         let document = ConfigDocument(data: source)
 
         let result = document.parse()
@@ -273,17 +290,17 @@ struct ConfigDocumentTests {
     }
 
     @Test
-    func setValuePreservesByteOrderMarkOnFirstGhostTermAssignment() {
+    func setValuePreservesByteOrderMarkOnFirstQuickTTYAssignment() {
         let byteOrderMark = Data([0xEF, 0xBB, 0xBF])
         var document = ConfigDocument(
-            data: byteOrderMark + Data("ghostterm-restore-workspaces = false\r\n".utf8)
+            data: byteOrderMark + Data("quicktty-restore-workspaces = false\r\n".utf8)
         )
 
         document.setValue("true", for: .restoreWorkspaces)
 
         #expect(
             document.data
-                == byteOrderMark + Data("ghostterm-restore-workspaces = true\r\n".utf8)
+                == byteOrderMark + Data("quicktty-restore-workspaces = true\r\n".utf8)
         )
     }
 
@@ -300,7 +317,7 @@ struct ConfigDocumentTests {
     @Test(arguments: ["false", "true", "clipboard"])
     func effectiveGhosttyDataPreservesExplicitCopyOnSelect(_ value: String) {
         let source = Data(
-            "ghostterm-restore-workspaces = false\r\ncopy-on-select = \(value)\r\n".utf8
+            "quicktty-restore-workspaces = false\r\ncopy-on-select = \(value)\r\n".utf8
         )
         let document = ConfigDocument(data: source)
 

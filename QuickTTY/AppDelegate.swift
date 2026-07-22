@@ -3,8 +3,10 @@ import OSLog
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static let startupErrorMessage = "QuickTTY could not start"
+
     private let logger = Logger(
-        subsystem: "com.dntsk.GhostTerm",
+        subsystem: "com.dntsk.QuickTTY",
         category: "ApplicationLifecycle"
     )
     private var ghosttyBridge: GhosttyBridge?
@@ -77,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "GhostTerm could not start"
+            alert.messageText = Self.startupErrorMessage
             alert.informativeText = error.localizedDescription
             alert.runModal()
             NSApp.terminate(nil)
@@ -590,17 +592,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func applicationMenu(in mainMenu: NSMenu) -> NSMenu {
-        if let applicationItem = mainMenu.item(withTitle: "GhostTerm") {
+        if let applicationItem = mainMenu.item(withTitle: "QuickTTY") {
             if let existingApplicationMenu = applicationItem.submenu {
                 return existingApplicationMenu
             }
-            let newApplicationMenu = NSMenu(title: "GhostTerm")
+            let newApplicationMenu = NSMenu(title: "QuickTTY")
             applicationItem.submenu = newApplicationMenu
             return newApplicationMenu
         }
 
-        let applicationItem = NSMenuItem(title: "GhostTerm", action: nil, keyEquivalent: "")
-        let newApplicationMenu = NSMenu(title: "GhostTerm")
+        let applicationItem = NSMenuItem(title: "QuickTTY", action: nil, keyEquivalent: "")
+        let newApplicationMenu = NSMenu(title: "QuickTTY")
         applicationItem.submenu = newApplicationMenu
         mainMenu.insertItem(applicationItem, at: 0)
         return newApplicationMenu

@@ -97,7 +97,7 @@ struct GhosttyClipboardClient {
     typealias Write =
         @MainActor @Sendable (GhosttyClipboardLocation, [GhosttyClipboardContent]) -> Void
 
-    static let selectionPasteboardName = "com.dntsk.GhostTerm.selection"
+    static let selectionPasteboardName = "com.dntsk.QuickTTY.selection"
 
     private static let selectionPasteboard = NSPasteboard(
         name: NSPasteboard.Name(selectionPasteboardName)

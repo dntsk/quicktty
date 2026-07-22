@@ -146,9 +146,9 @@ struct WindowCoordinatorConfigurationTests {
 
         coordinator.applyConfigurationDiagnostics(
             ConfigDiagnosticPresentation(
-                path: "/tmp/ghostterm/config",
+                path: "/tmp/quicktty/config",
                 messages: [
-                    "Line 4, ghostterm-quake-height: expected a value in 0...1 or 1%...100%."
+                    "Line 4, quicktty-quake-height: expected a value in 0...1 or 1%...100%."
                 ]
             )
         )

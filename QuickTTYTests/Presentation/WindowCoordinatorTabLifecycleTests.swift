@@ -9,7 +9,7 @@ struct WindowCoordinatorTabLifecycleTests {
     @Test
     func openConfigurationCreatesFocusedEditorTabWithQuotedPathAndLatestEditor() throws {
         let directory = FileManager.default.temporaryDirectory.appending(
-            path: "GhostTerm Config's \(UUID().uuidString)",
+            path: "QuickTTY Config's \(UUID().uuidString)",
             directoryHint: .isDirectory
         )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -636,7 +636,7 @@ struct WindowCoordinatorTabLifecycleTests {
         }
         #expect(throws: WorkspaceError.self) {
             try coordinator.openConfigurationForTesting(
-                at: URL(fileURLWithPath: "/tmp/ghostterm-config"),
+                at: URL(fileURLWithPath: "/tmp/quicktty-config"),
                 in: WorkspaceID()
             )
         }
@@ -660,7 +660,7 @@ struct WindowCoordinatorTabLifecycleTests {
 
         #expect(throws: WorkspaceError.workspaceNotFound(missingWorkspaceID)) {
             try coordinator.openConfigurationForTesting(
-                at: URL(fileURLWithPath: "/tmp/ghostterm-config"),
+                at: URL(fileURLWithPath: "/tmp/quicktty-config"),
                 in: missingWorkspaceID
             )
         }
@@ -685,7 +685,7 @@ struct WindowCoordinatorTabLifecycleTests {
         bridge.failNextSurfaceCreationForTesting()
 
         #expect(throws: GhosttyBridgeError.self) {
-            try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/ghostterm-config"))
+            try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/quicktty-config"))
         }
 
         #expect(coordinator.workspaceStoreForTesting == storeBeforeFailure)

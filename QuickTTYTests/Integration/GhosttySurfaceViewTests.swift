@@ -288,7 +288,7 @@ extension GhosttyBridgeTests {
             id: paneID,
             configuration: GhosttySurfaceConfiguration(
                 initialInput:
-                    "printf '\\033]2;ghostterm-io-action\\007'; exec /bin/sh -lc 'printf ghostterm-ready'\n"
+                    "printf '\\033]2;quicktty-io-action\\007'; exec /bin/sh -lc 'printf quicktty-ready'\n"
             )
         ) { paneID, processAlive in
             continuation.yield(SurfaceCloseEvent(paneID: paneID, processAlive: processAlive))
