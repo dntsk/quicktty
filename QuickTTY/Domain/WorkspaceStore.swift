@@ -334,6 +334,27 @@ struct WorkspaceStore: Codable, Equatable, Sendable {
         workspaces[workspaceIndex].tabs[tabIndex].setBroadcasting(isBroadcasting)
     }
 
+    mutating func resetBroadcasting(
+        for tabID: TabID,
+        in workspaceID: WorkspaceID
+    ) throws {
+        guard let workspaceIndex = index(of: workspaceID) else {
+            throw WorkspaceError.workspaceNotFound(workspaceID)
+        }
+        guard let ownerID = owner(of: tabID) else {
+            throw WorkspaceError.tabNotFound(tabID)
+        }
+        guard ownerID == workspaceID else {
+            throw WorkspaceError.tabNotInWorkspace(tabID: tabID, workspaceID: workspaceID)
+        }
+
+        guard let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            throw WorkspaceError.tabNotFound(tabID)
+        }
+        workspaces[workspaceIndex].tabs[tabIndex].resetBroadcasting()
+    }
+
     private func index(of workspaceID: WorkspaceID) -> Int? {
         workspaces.firstIndex { $0.id == workspaceID }
     }

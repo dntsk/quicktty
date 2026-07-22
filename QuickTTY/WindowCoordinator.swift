@@ -9,6 +9,12 @@ struct WorkspaceDeletionConfirmation: Equatable {
 
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
+    private enum StartupState {
+        case notStarted
+        case starting
+        case started
+    }
+
     typealias ModePersistence = @MainActor (PresentationMode) -> Void
     typealias QuakeHeightPersistence = @MainActor (Double) -> Void
     typealias NormalWindowFramePersistence = @MainActor (NormalWindowFrame) -> Void
@@ -36,7 +42,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
     private var pendingWorkspaceDeletionID: WorkspaceID?
+    private var startupState: StartupState = .notStarted
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
+    private var surfaceFailures: [PaneID: SurfaceFailurePresentation] = [:]
     private var closingTabIDs: Set<TabID> = []
     private var closingPaneIDs: Set<PaneID> = []
     private var activeHotKey = HotKeyDescriptor(key: .f12)
@@ -44,7 +52,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var workspaceMenuTransientInteraction: QuakeWindowController.TransientInteraction?
 
     #if DEBUG
+        private var failsNextStartupModelMutationForTesting = false
         private var failsNextSplitMutationForTesting = false
+        private var refreshWorkspacePresentationInvocationCountForTestingStorage = 0
+        private var closeUnavailablePaneDidBeginHookForTesting: ((PaneID) -> Void)?
+        private var retryUnavailablePanePresentationCallbackForTesting: ((PaneID) -> Void)?
+        private var closeUnavailablePanePresentationCallbackForTesting: ((PaneID) -> Void)?
     #endif
 
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
@@ -265,15 +278,22 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func start() throws {
-        guard surfaces.isEmpty else { return }
+        guard case .notStarted = startupState else { return }
+        startupState = .starting
 
-        workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
-        if workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }) {
-            try createShellTab(refreshPresentation: false, surfaceContext: .window)
-        } else {
-            try restoreWorkspaceSurfaces()
+        do {
+            workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
+            if workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }) {
+                try createStartupShellTab()
+            } else {
+                try restoreWorkspaceSurfaces()
+            }
+            refreshWorkspacePresentation(focusTerminal: true)
+            startupState = .started
+        } catch {
+            startupState = .notStarted
+            throw error
         }
-        refreshWorkspacePresentation(focusTerminal: true)
     }
 
     @discardableResult
@@ -458,6 +478,47 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         try createShellTab(in: workspaceID, refreshPresentation: true)
     }
 
+    private func createStartupShellTab() throws {
+        let workspaceID = workspaceStore.activeWorkspaceID
+        let paneID = PaneID()
+        let descriptor = TerminalPaneDescriptor(
+            id: paneID,
+            cwd: surfaceConfiguration.workingDirectory
+                ?? FileManager.default.homeDirectoryForCurrentUser.path,
+            startupCommand: surfaceConfiguration.command.map(StartupCommand.custom) ?? .shell
+        )
+        let tab = TerminalTab(title: "Shell", pane: descriptor)
+        var candidate = workspaceStore
+
+        #if DEBUG
+            if failsNextStartupModelMutationForTesting {
+                failsNextStartupModelMutationForTesting = false
+                throw WorkspaceError.workspaceNotFound(workspaceID)
+            }
+        #endif
+
+        try candidate.addTab(tab, to: workspaceID)
+        try candidate.activateTab(tab.id, in: workspaceID)
+        _ = commitWorkspaceStore(candidate)
+
+        var startupConfiguration = surfaceConfiguration
+        startupConfiguration.context = .window
+        do {
+            let surface = try ghosttyBridge.makeSurface(
+                id: paneID,
+                configuration: startupConfiguration
+            ) { [weak self] paneID, processAlive in
+                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+            }
+            surfaces[paneID] = surface
+            surfaceFailures.removeValue(forKey: paneID)
+        } catch {
+            surfaceFailures[paneID] = SurfaceFailurePresentation(
+                message: error.localizedDescription
+            )
+        }
+    }
+
     func openConfiguration(at configURL: URL) throws {
         try createConfigurationTab(
             at: configURL,
@@ -592,8 +653,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func restoreWorkspaceSurfaces() throws {
+        var candidate = workspaceStore
         var restoredSurfaces: [PaneID: GhosttySurfaceView] = [:]
-        var restoredPaneIDs: [PaneID] = []
+        var restoredFailures: [PaneID: SurfaceFailurePresentation] = [:]
 
         do {
             for workspace in workspaceStore.workspaces {
@@ -607,25 +669,152 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                         restoredConfiguration.command = nil
                         restoredConfiguration.initialInput = nil
                         restoredConfiguration.context = leafIndex == 0 ? .newTab : .split
-                        let surface = try ghosttyBridge.makeSurface(
-                            id: paneID,
-                            configuration: restoredConfiguration
-                        ) { [weak self] paneID, processAlive in
-                            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+                        do {
+                            let surface = try ghosttyBridge.makeSurface(
+                                id: paneID,
+                                configuration: restoredConfiguration
+                            ) { [weak self] paneID, processAlive in
+                                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+                            }
+                            restoredSurfaces[paneID] = surface
+                        } catch {
+                            restoredFailures[paneID] = SurfaceFailurePresentation(
+                                message: error.localizedDescription
+                            )
+                            try candidate.resetBroadcasting(for: tab.id, in: workspace.id)
                         }
-                        restoredSurfaces[paneID] = surface
-                        restoredPaneIDs.append(paneID)
                     }
                 }
             }
         } catch {
-            for paneID in restoredPaneIDs {
+            for paneID in restoredSurfaces.keys {
                 ghosttyBridge.closeSurface(id: paneID)
             }
             throw error
         }
 
         surfaces = restoredSurfaces
+        surfaceFailures = restoredFailures
+        _ = commitWorkspaceStore(candidate)
+    }
+
+    @MainActor
+    private func retryUnavailablePane(_ paneID: PaneID) {
+        guard surfaces[paneID] == nil, surfaceFailures[paneID] != nil else { return }
+
+        var owningWorkspace: Workspace?
+        var owningTab: TerminalTab?
+        var leafIndex: Int?
+        var descriptor: TerminalPaneDescriptor?
+
+        search: for workspace in workspaceStore.workspaces {
+            for tab in workspace.tabs {
+                guard let index = tab.root.leaves.firstIndex(of: paneID),
+                    let paneDescriptor = tab.paneDescriptor(for: paneID)
+                else {
+                    continue
+                }
+                owningWorkspace = workspace
+                owningTab = tab
+                leafIndex = index
+                descriptor = paneDescriptor
+                break search
+            }
+        }
+
+        guard let owningWorkspace, let owningTab, let leafIndex, let descriptor else { return }
+
+        var retryConfiguration = surfaceConfiguration
+        retryConfiguration.workingDirectory = descriptor.cwd
+        retryConfiguration.command = nil
+        retryConfiguration.initialInput = nil
+        retryConfiguration.context = leafIndex == 0 ? .newTab : .split
+
+        let ownerTabWasVisible =
+            owningWorkspace.id == workspaceStore.activeWorkspaceID
+            && owningWorkspace.activeTabID == owningTab.id
+        let shouldFocus = ownerTabWasVisible && owningTab.activePaneID == paneID
+        do {
+            let surface = try ghosttyBridge.makeSurface(
+                id: paneID,
+                configuration: retryConfiguration
+            ) { [weak self] paneID, processAlive in
+                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+            }
+            surfaces[paneID] = surface
+            surfaceFailures.removeValue(forKey: paneID)
+            if ownerTabWasVisible {
+                refreshWorkspacePresentation(focusTerminal: shouldFocus)
+            }
+        } catch {
+            surfaceFailures[paneID] = SurfaceFailurePresentation(
+                message: error.localizedDescription
+            )
+            if ownerTabWasVisible {
+                refreshWorkspacePresentation(focusTerminal: false)
+            }
+        }
+    }
+
+    private func closeUnavailablePane(_ paneID: PaneID) {
+        guard surfaces[paneID] == nil,
+            workspaceStore.workspaces.contains(where: { workspace in
+                workspace.tabs.contains(where: { $0.root.contains(paneID) })
+            }),
+            closingPaneIDs.insert(paneID).inserted
+        else {
+            return
+        }
+        defer { closingPaneIDs.remove(paneID) }
+
+        confirmationQueue.invalidatePane(paneID)
+        #if DEBUG
+            if let hook = closeUnavailablePaneDidBeginHookForTesting {
+                closeUnavailablePaneDidBeginHookForTesting = nil
+                hook(paneID)
+            }
+        #endif
+
+        guard surfaces[paneID] == nil else { return }
+        let ownership = workspaceStore.workspaces.lazy.compactMap { workspace in
+            workspace.tabs.first(where: { $0.root.contains(paneID) }).map { (workspace, $0) }
+        }.first
+        guard let (owningWorkspace, owningTab) = ownership else { return }
+
+        let ownerWorkspaceWasActive = owningWorkspace.id == workspaceStore.activeWorkspaceID
+        let ownerTabWasActive = owningWorkspace.activeTabID == owningTab.id
+        var candidate = workspaceStore
+        do {
+            _ = try splitCoordinator.apply(
+                .closePane(
+                    workspaceID: owningWorkspace.id,
+                    tabID: owningTab.id,
+                    paneID: paneID
+                ),
+                to: &candidate
+            )
+        } catch {
+            return
+        }
+
+        guard commitWorkspaceStore(candidate) else { return }
+        surfaceFailures.removeValue(forKey: paneID)
+        guard ownerWorkspaceWasActive else { return }
+        guard ownerTabWasActive else {
+            workspaceViewController.apply(workspaceStore)
+            return
+        }
+
+        let shouldFocus: Bool
+        if let activeTabID = workspaceStore.workspace(id: owningWorkspace.id)?.activeTabID,
+            let correctedActivePaneID = workspaceStore.tab(id: activeTabID)?.activePaneID,
+            surfaces[correctedActivePaneID] != nil
+        {
+            shouldFocus = true
+        } else {
+            shouldFocus = false
+        }
+        refreshWorkspacePresentation(focusTerminal: shouldFocus)
     }
 
     func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
@@ -805,23 +994,45 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
+        #if DEBUG
+            refreshWorkspacePresentationInvocationCountForTestingStorage += 1
+        #endif
         workspaceViewController.apply(workspaceStore)
+        let activePaneIDs = activeTab?.root.leaves ?? []
         let activeTabSurfaces = Dictionary(
-            uniqueKeysWithValues: (activeTab?.root.leaves ?? []).compactMap { paneID in
+            uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
                 surfaces[paneID].map { (paneID, $0) }
             }
         )
+        let activeSurfaceFailures = Dictionary(
+            uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
+                surfaceFailures[paneID].map { (paneID, $0) }
+            }
+        )
         let surface = activePaneID.flatMap { activeTabSurfaces[$0] }
+        let retryUnavailablePaneCallback: (PaneID) -> Void = { [weak self] paneID in
+            self?.retryUnavailablePane(paneID)
+        }
+        let closeUnavailablePaneCallback: (PaneID) -> Void = { [weak self] paneID in
+            self?.closeUnavailablePane(paneID)
+        }
+        #if DEBUG
+            retryUnavailablePanePresentationCallbackForTesting = retryUnavailablePaneCallback
+            closeUnavailablePanePresentationCallbackForTesting = closeUnavailablePaneCallback
+        #endif
         workspaceViewController.displayTerminal(
             root: activeTab?.root,
             surfaces: activeTabSurfaces,
+            failures: activeSurfaceFailures,
             palette: ghosttyBridge.chromePalette,
             onResize: { [weak self] splitID, ratio in
                 self?.updateActiveSplitRatio(id: splitID, ratio: ratio)
             },
             onEqualize: { [weak self] splitID in
                 self?.equalizeActiveSplits(triggeredBy: splitID)
-            }
+            },
+            onRetryUnavailablePane: retryUnavailablePaneCallback,
+            onCloseUnavailablePane: closeUnavailablePaneCallback
         )
         if focusTerminal, let surface, let paneID = activePaneID {
             focus(surface, paneID: paneID)
@@ -1066,6 +1277,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         detachActiveWorkspacePresentation()
         for paneID in removedWorkspace.tabs.flatMap(\.root.leaves) {
+            surfaceFailures.removeValue(forKey: paneID)
             _ = removeSurface(id: paneID, closeBridgeSurface: true)
         }
         guard commitWorkspaceStore(candidate) else { return }
@@ -1077,9 +1289,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.displayTerminal(
             root: nil,
             surfaces: [:],
+            failures: [:],
             palette: ghosttyBridge.chromePalette,
             onResize: { _, _ in },
-            onEqualize: { _ in }
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
         )
     }
 
@@ -1318,8 +1533,42 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces.keys.sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
         }
 
+        var surfaceFailureIDsForTesting: [PaneID] {
+            surfaceFailures.keys.sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
+        }
+
+        var surfaceFailureMessagesForTesting: [PaneID: String] {
+            surfaceFailures.mapValues(\.message)
+        }
+
         func surfaceForTesting(id paneID: PaneID) -> GhosttySurfaceView? {
             surfaces[paneID]
+        }
+
+        func clearSurfaceFailureForTesting(_ paneID: PaneID) {
+            surfaceFailures.removeValue(forKey: paneID)
+        }
+
+        func retryUnavailablePaneForTesting(_ paneID: PaneID) {
+            retryUnavailablePane(paneID)
+        }
+
+        func invokeRetryUnavailablePanePresentationCallbackForTesting(_ paneID: PaneID) {
+            retryUnavailablePanePresentationCallbackForTesting?(paneID)
+        }
+
+        func invokeCloseUnavailablePanePresentationCallbackForTesting(_ paneID: PaneID) {
+            closeUnavailablePanePresentationCallbackForTesting?(paneID)
+        }
+
+        func setCloseUnavailablePaneDidBeginHookForTesting(
+            _ hook: @escaping (PaneID) -> Void
+        ) {
+            closeUnavailablePaneDidBeginHookForTesting = hook
+        }
+
+        var refreshWorkspacePresentationInvocationCountForTesting: Int {
+            refreshWorkspacePresentationInvocationCountForTestingStorage
         }
 
         func activateTabForTesting(_ tabID: TabID) {
@@ -1340,6 +1589,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         func splitActivePaneForTesting(axis: SplitAxis) throws {
             try splitActivePane(axis: axis)
+        }
+
+        func failNextStartupModelMutationForTesting() {
+            failsNextStartupModelMutationForTesting = true
         }
 
         func failNextSplitMutationForTesting() {
@@ -1381,6 +1634,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var activeConfirmationForTesting: GhosttyConfirmationPresentation? {
             confirmationQueue.activePresentation
+        }
+
+        var pendingConfirmationCountForTesting: Int {
+            confirmationQueue.pendingCount
+        }
+
+        func enqueueCloseConfirmationForTesting(_ paneID: PaneID) {
+            confirmationQueue.enqueueClose(paneID: paneID) { _ in }
         }
 
         var workspaceStoreForTesting: WorkspaceStore {
@@ -1449,12 +1710,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.displayTerminal(
             root: nil,
             surfaces: [:],
+            failures: [:],
             palette: ghosttyBridge.chromePalette,
             onResize: { _, _ in },
-            onEqualize: { _ in }
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
         )
         activeWindow?.orderOut(nil)
         closeActiveSurfaces()
+        surfaceFailures.removeAll()
     }
 
     private func closeActiveSurfaces() {

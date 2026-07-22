@@ -272,9 +272,12 @@ final class WorkspaceViewController: NSViewController {
     func displayTerminal(
         root: SplitNode?,
         surfaces: [PaneID: GhosttySurfaceView],
+        failures: [PaneID: SurfaceFailurePresentation],
         palette: GhosttyChromePalette,
         onResize: @escaping (UUID, Double) -> Void,
-        onEqualize: @escaping (UUID) -> Void
+        onEqualize: @escaping (UUID) -> Void,
+        onRetryUnavailablePane: @escaping (PaneID) -> Void,
+        onCloseUnavailablePane: @escaping (PaneID) -> Void
     ) {
         loadViewIfNeeded()
         guard let root else {
@@ -301,9 +304,12 @@ final class WorkspaceViewController: NSViewController {
         let splitTreeView = GhosttySplitTreeView(
             root: root,
             surfaces: surfaces,
+            failures: failures,
             palette: palette,
             onResize: onResize,
-            onEqualize: onEqualize
+            onEqualize: onEqualize,
+            onRetryUnavailablePane: onRetryUnavailablePane,
+            onCloseUnavailablePane: onCloseUnavailablePane
         )
         if let splitHostingController {
             splitHostingController.rootView = splitTreeView

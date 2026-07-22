@@ -653,6 +653,82 @@ struct WorkspaceStoreTests {
     }
 
     @Test
+    func resettingBroadcastingTargetsHiddenTabWithoutChangingSelection() throws {
+        let hiddenWorkspaceID = workspaceID(1)
+        let activeWorkspaceID = workspaceID(2)
+        let targetTab = try makeNestedTab(1, isBroadcasting: true)
+        let untouchedTab = try makeNestedTab(2, isBroadcasting: true)
+        let activeTab = try makeNestedTab(3, isBroadcasting: true)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(
+                    id: hiddenWorkspaceID,
+                    name: "Hidden",
+                    tabs: [targetTab, untouchedTab],
+                    activeTabID: targetTab.id
+                ),
+                Workspace(
+                    id: activeWorkspaceID,
+                    name: "Active",
+                    tabs: [activeTab],
+                    activeTabID: activeTab.id
+                ),
+            ],
+            activeWorkspaceID: activeWorkspaceID
+        )
+
+        try store.resetBroadcasting(for: targetTab.id, in: hiddenWorkspaceID)
+
+        #expect(store.tab(id: targetTab.id)?.isBroadcasting == false)
+        #expect(store.tab(id: untouchedTab.id)?.isBroadcasting == true)
+        #expect(store.tab(id: activeTab.id)?.isBroadcasting == true)
+        #expect(store.activeWorkspaceID == activeWorkspaceID)
+        #expect(store.workspace(id: hiddenWorkspaceID)?.activeTabID == targetTab.id)
+        #expect(store.workspace(id: activeWorkspaceID)?.activeTabID == activeTab.id)
+
+        let afterFirstReset = store
+        try store.resetBroadcasting(for: targetTab.id, in: hiddenWorkspaceID)
+        #expect(store == afterFirstReset)
+    }
+
+    @Test
+    func resettingBroadcastingUsesSetBroadcastingOwnershipErrors() throws {
+        let firstWorkspaceID = workspaceID(1)
+        let secondWorkspaceID = workspaceID(2)
+        let firstTab = makeTab(1)
+        let secondTab = makeTab(2)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstWorkspaceID, name: "First", tabs: [firstTab]),
+                Workspace(id: secondWorkspaceID, name: "Second", tabs: [secondTab]),
+            ],
+            activeWorkspaceID: firstWorkspaceID
+        )
+
+        let missingWorkspaceID = workspaceID(999)
+        let beforeMissingWorkspace = store
+        expectError(.workspaceNotFound(missingWorkspaceID)) {
+            try store.resetBroadcasting(for: firstTab.id, in: missingWorkspaceID)
+        }
+        #expect(store == beforeMissingWorkspace)
+
+        let missingTabID = tabID(999)
+        let beforeMissingTab = store
+        expectError(.tabNotFound(missingTabID)) {
+            try store.resetBroadcasting(for: missingTabID, in: firstWorkspaceID)
+        }
+        #expect(store == beforeMissingTab)
+
+        let beforeWrongOwnership = store
+        expectError(
+            .tabNotInWorkspace(tabID: secondTab.id, workspaceID: firstWorkspaceID)
+        ) {
+            try store.resetBroadcasting(for: secondTab.id, in: firstWorkspaceID)
+        }
+        #expect(store == beforeWrongOwnership)
+    }
+
+    @Test
     func nestedModelCodableRoundTripPreservesPersistentStateAndDropsBroadcast() throws {
         let workspaceID = workspaceID(1)
         let tab = try makeNestedTab(1, isBroadcasting: true)

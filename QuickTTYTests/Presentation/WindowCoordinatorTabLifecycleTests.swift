@@ -1937,33 +1937,1003 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
-    func startRollsBackEveryCreatedSurfaceWhenRestorationFails() throws {
-        let store = try restoredWorkspaceStore()
-        let failingPaneID = try #require(
-            store.workspaces.first?.tabs.first?.root.leaves.dropFirst().first
+    func startupModelMutationFailureCanRetryOnceThenRemainsIdempotent() throws {
+        let initialStore = WorkspaceStore()
+        let expectedError = WorkspaceError.workspaceNotFound(initialStore.activeWorkspaceID)
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: initialStore,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        coordinator.failNextStartupModelMutationForTesting()
+
+        #expect(throws: expectedError) {
+            try coordinator.start()
+        }
+
+        #expect(coordinator.workspaceStoreForTesting == initialStore)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
+
+        try coordinator.start()
+
+        let startedStore = coordinator.workspaceStoreForTesting
+        let workspace = try #require(startedStore.workspace(id: startedStore.activeWorkspaceID))
+        let tab = try #require(workspace.tabs.first)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let surfaceIdentity = ObjectIdentifier(surface)
+        #expect(workspace.tabs.count == 1)
+        #expect(tab.activePaneID == surface.paneID)
+        #expect(surfaceIDs == [surface.paneID])
+        #expect(bridge.activeSurfaceIDs == [surface.paneID])
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(persistence.snapshots == [startedStore])
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 1
+        )
+
+        try coordinator.start()
+
+        #expect(coordinator.workspaceStoreForTesting == startedStore)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceIDs == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting.map(ObjectIdentifier.init) == surfaceIdentity)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(persistence.snapshots == [startedStore])
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 1
+        )
+
+        coordinator.prepareForBridgeShutdownForTesting()
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
+    }
+
+    @Test
+    func emptyStoreStartupKeepsCreatedModelAndPresentationWhenSurfaceCreationFails() throws {
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/startup-failure",
+                command: "exec /bin/cat",
+                initialInput: "printf startup"
+            ),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failNextSurfaceCreationForTesting()
+
+        do {
+            try coordinator.start()
+        } catch {
+            Issue.record("Expected a nonfatal startup surface failure, got \(error)")
+        }
+
+        let store = coordinator.workspaceStoreForTesting
+        let workspace = try #require(store.workspace(id: store.activeWorkspaceID))
+        let tab = try #require(workspace.tabs.first)
+        let paneID = try #require(tab.root.leaves.first)
+        #expect(workspace.tabs.count == 1)
+        #expect(tab.title == "Shell")
+        #expect(tab.root == .pane(paneID))
+        #expect(
+            tab.paneDescriptor(for: paneID)
+                == TerminalPaneDescriptor(
+                    id: paneID,
+                    cwd: "/tmp/startup-failure",
+                    startupCommand: .custom("exec /bin/cat")
+                )
+        )
+        #expect(persistence.snapshots == [store])
+        #expect(persistence.snapshots.first?.tab(id: tab.id)?.activePaneID == paneID)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting == [paneID])
+        #expect(
+            coordinator.surfaceFailureMessagesForTesting[paneID]
+                == GhosttyBridgeError.surfaceCreationFailed(paneID).localizedDescription
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+                != nil
+        )
+        #expect(
+            !coordinator.workspaceViewControllerForTesting.emptyWorkspaceLabelIsVisibleForTesting
+        )
+        let window = try #require(coordinator.windowForTesting)
+        #expect(window.isVisible)
+        #expect(window.delegate === coordinator)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
+
+        let failureMessages = coordinator.surfaceFailureMessagesForTesting
+        let persistedSnapshots = persistence.snapshots
+
+        try coordinator.start()
+
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.activePaneID == paneID)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting == [paneID])
+        #expect(coordinator.surfaceFailureMessagesForTesting == failureMessages)
+        #expect(persistence.snapshots == persistedSnapshots)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
+    }
+
+    @Test
+    func unavailablePaneActionRoutesRetryWithSameIdentity() throws {
+        let paneID = PaneID()
+        let descriptor = TerminalPaneDescriptor(
+            id: paneID,
+            cwd: "/tmp",
+            startupCommand: .custom("printf should-not-run")
+        )
+        let tab = TerminalTab(title: "Unavailable", pane: descriptor)
+        let workspace = Workspace(name: "Retry", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var errors: [Error] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/ignored",
+                command: "printf base-should-not-run",
+                initialInput: "printf input-should-not-run"
+            ),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            onError: { errors.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: paneID)
+        try coordinator.start()
+        persistence.reset()
+
+        coordinator.invokeRetryUnavailablePanePresentationCallbackForTesting(paneID)
+
+        let surface = try #require(coordinator.surfaceForTesting(id: paneID))
+        let configuration = try #require(bridge.surfaceConfigurationForTesting(id: paneID))
+        #expect(surface.paneID == paneID)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.root == tab.root)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tab.id)?.paneDescriptor(for: paneID)
+                == descriptor
+        )
+        #expect(coordinator.surfaceIDsForTesting == [paneID])
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs == [paneID])
+        #expect(configuration.workingDirectory == descriptor.cwd)
+        #expect(configuration.command == nil)
+        #expect(configuration.initialInput == nil)
+        #expect(configuration.context == .newTab)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === surface)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(errors.isEmpty)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 1
+        )
+    }
+
+    @Test
+    func closeUnavailablePaneCollapsesSplitWithoutTouchingLiveSurfaceAndIsIdempotent() throws {
+        let livePaneID = PaneID()
+        let unavailablePaneID = PaneID()
+        let root = SplitNode.split(
+            id: UUID(),
+            axis: .horizontal,
+            ratio: 0.35,
+            first: .pane(livePaneID),
+            second: .pane(unavailablePaneID)
+        )
+        let tab = try TerminalTab(
+            title: "Unavailable split",
+            root: root,
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: livePaneID, cwd: "/tmp/live"),
+                TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp/unavailable"),
+            ],
+            activePaneID: unavailablePaneID,
+            isBroadcasting: true
+        )
+        let workspace = Workspace(name: "Split", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
         )
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
+        var snapshots: [WorkspaceStore] = []
+        var closeDidBeginCount = 0
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let liveSurface = try #require(coordinator.surfaceForTesting(id: livePaneID))
+        let liveIdentity = ObjectIdentifier(liveSurface)
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        let contextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.isBroadcasting == false)
+        #expect(coordinator.surfaceForTesting(id: unavailablePaneID) == nil)
+        #expect(coordinator.surfaceFailureIDsForTesting == [unavailablePaneID])
+        snapshots = []
+        coordinator.setCloseUnavailablePaneDidBeginHookForTesting { [weak coordinator] paneID in
+            closeDidBeginCount += 1
+            coordinator?.invokeCloseUnavailablePanePresentationCallbackForTesting(paneID)
+        }
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingTab = try #require(resultingStore.tab(id: tab.id))
+        #expect(closeDidBeginCount == 1)
+        #expect(snapshots == [resultingStore])
+        #expect(resultingTab.root == .pane(livePaneID))
+        #expect(resultingTab.activePaneID == livePaneID)
+        #expect(resultingTab.paneDescriptor(for: unavailablePaneID) == nil)
+        #expect(!resultingTab.isBroadcasting)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceIDsForTesting == [livePaneID])
+        #expect(bridge.activeSurfaceIDs == [livePaneID])
+        #expect(
+            coordinator.surfaceForTesting(id: livePaneID).map(ObjectIdentifier.init)
+                == liveIdentity
+        )
+        #expect(coordinator.activeSurfaceForTesting === liveSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === liveSurface)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == contextCount)
+
+        let firstResponder = coordinator.activeWindowForTesting?.firstResponder
+        snapshots = []
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(livePaneID)
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(PaneID())
+
+        #expect(coordinator.workspaceStoreForTesting == resultingStore)
+        #expect(snapshots.isEmpty)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstResponder)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == contextCount)
+    }
+
+    @Test
+    func closeUnavailablePaneInvalidatesConfirmationBeforeCommitAndClearsFailureAfterCommit() throws
+    {
+        let unavailablePaneID = PaneID()
+        let tab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Confirmations", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        var dismissCount = 0
+        var snapshots: [WorkspaceStore] = []
+        var confirmationWasClearedDuringPersistence = false
+        var failureWasPresentDuringPersistence = false
+        weak var coordinatorReference: WindowCoordinator?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { snapshot in
+                snapshots.append(snapshot)
+                confirmationWasClearedDuringPersistence =
+                    coordinatorReference?.activeConfirmationForTesting == nil
+                    && coordinatorReference?.pendingConfirmationCountForTesting == 0
+                    && dismissCount == 1
+                failureWasPresentDuringPersistence =
+                    coordinatorReference?.surfaceFailureIDsForTesting == [unavailablePaneID]
+            },
+            confirmationPresenter: { _, _ in
+                { dismissCount += 1 }
+            }
+        )
+        coordinatorReference = coordinator
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        snapshots = []
+        coordinator.enqueueCloseConfirmationForTesting(unavailablePaneID)
+        #expect(coordinator.activeConfirmationForTesting == .close(unavailablePaneID))
+        #expect(coordinator.pendingConfirmationCountForTesting == 0)
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        #expect(dismissCount == 1)
+        #expect(coordinator.activeConfirmationForTesting == nil)
+        #expect(coordinator.pendingConfirmationCountForTesting == 0)
+        #expect(confirmationWasClearedDuringPersistence)
+        #expect(failureWasPresentDuringPersistence)
+        #expect(snapshots == [resultingStore])
+        #expect(resultingStore.workspace(id: workspace.id)?.tabs.isEmpty == true)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+    }
+
+    @Test
+    func closeUnavailablePaneRebasesAfterConfirmationDismissalMutatesWorkspace() throws {
+        let unavailablePaneID = PaneID()
+        let unavailableTab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(
+            name: "Reentrant confirmation",
+            tabs: [unavailableTab],
+            activeTabID: unavailableTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        var snapshots: [WorkspaceStore] = []
+        var dismissalDidCreateTab = false
+        weak var coordinatorReference: WindowCoordinator?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { snapshots.append($0) },
+            confirmationPresenter: { _, _ in
+                {
+                    dismissalDidCreateTab = true
+                    coordinatorReference?.createNewTab()
+                }
+            }
+        )
+        coordinatorReference = coordinator
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        snapshots = []
+        coordinator.enqueueCloseConfirmationForTesting(unavailablePaneID)
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingWorkspace = try #require(resultingStore.workspace(id: workspace.id))
+        let createdTab = try #require(resultingWorkspace.tabs.first)
+        let createdPaneID = createdTab.activePaneID
+        let createdSurface = try #require(coordinator.surfaceForTesting(id: createdPaneID))
+        #expect(dismissalDidCreateTab)
+        #expect(snapshots.count == 2)
+        #expect(snapshots.first?.workspace(id: workspace.id)?.tabs.count == 2)
+        #expect(snapshots.first?.tab(id: unavailableTab.id) != nil)
+        #expect(snapshots.last == resultingStore)
+        #expect(resultingWorkspace.tabs.map(\.id) == [createdTab.id])
+        #expect(resultingWorkspace.activeTabID == createdTab.id)
+        #expect(resultingStore.tab(id: unavailableTab.id) == nil)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceIDsForTesting == [createdPaneID])
+        #expect(bridge.activeSurfaceIDs == [createdPaneID])
+        #expect(coordinator.activeSurfaceForTesting === createdSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === createdSurface)
+        #expect(coordinator.activeConfirmationForTesting == nil)
+        #expect(coordinator.pendingConfirmationCountForTesting == 0)
+    }
+
+    @Test
+    func genericUnavailablePaneCloseCallbackClosesModelPaneWithoutFailureEntry() throws {
+        let unavailablePaneID = PaneID()
+        let tab = TerminalTab(
+            title: "Generic unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Generic", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        coordinator.clearSurfaceFailureForTesting(unavailablePaneID)
+        persistence.reset()
+        #expect(coordinator.surfaceForTesting(id: unavailablePaneID) == nil)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        #expect(resultingStore.workspace(id: workspace.id)?.tabs.isEmpty == true)
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake])
+    func closeLastUnavailablePaneLeavesWorkspaceEmptyAndPhysicalWindowOpen(
+        mode: PresentationMode
+    ) throws {
+        let unavailablePaneID = PaneID()
+        let tab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Empty after close", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var errors: [Error] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: mode,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            onError: { errors.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let window = try #require(coordinator.activeWindowForTesting)
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        persistence.reset()
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingWorkspace = try #require(resultingStore.workspace(id: workspace.id))
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(resultingStore.workspaces.map(\.id) == [workspace.id])
+        #expect(resultingStore.activeWorkspaceID == workspace.id)
+        #expect(resultingWorkspace.tabs.isEmpty)
+        #expect(resultingWorkspace.activeTabID == nil)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
+        #expect(coordinator.activeSurfaceForTesting == nil)
+        #expect(coordinator.activeWindowForTesting === window)
+        #expect(window.isVisible)
+        #expect(errors.isEmpty)
+    }
+
+    @Test
+    func closeUnavailablePaneInBackgroundKeepsVisibleWorkspaceTabAndFocus() throws {
+        let unavailablePaneID = PaneID()
+        let backgroundLivePaneID = PaneID()
+        let visiblePaneID = PaneID()
+        let unavailableTab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp/unavailable")
+        )
+        let backgroundLiveTab = TerminalTab(
+            title: "Background live",
+            pane: TerminalPaneDescriptor(id: backgroundLivePaneID, cwd: "/tmp/background")
+        )
+        let visibleTab = TerminalTab(
+            title: "Visible",
+            pane: TerminalPaneDescriptor(id: visiblePaneID, cwd: "/tmp/visible")
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [unavailableTab, backgroundLiveTab],
+            activeTabID: unavailableTab.id
+        )
+        let visibleWorkspace = Workspace(
+            name: "Visible",
+            tabs: [visibleTab],
+            activeTabID: visibleTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [backgroundWorkspace, visibleWorkspace],
+            activeWorkspaceID: visibleWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let backgroundLiveSurface = try #require(
+            coordinator.surfaceForTesting(id: backgroundLivePaneID)
+        )
+        let visibleSurface = try #require(coordinator.surfaceForTesting(id: visiblePaneID))
+        let visibleFirstResponder = coordinator.activeWindowForTesting?.firstResponder
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        let contextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        persistence.reset()
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingBackground = try #require(
+            resultingStore.workspace(id: backgroundWorkspace.id)
+        )
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(resultingStore.activeWorkspaceID == visibleWorkspace.id)
+        #expect(resultingBackground.tabs.map(\.id) == [backgroundLiveTab.id])
+        #expect(resultingBackground.activeTabID == backgroundLiveTab.id)
+        #expect(
+            resultingStore.workspace(id: visibleWorkspace.id)?.activeTabID == visibleTab.id
+        )
+        #expect(coordinator.activeSurfaceForTesting === visibleSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === visibleFirstResponder)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(
+            Set(coordinator.surfaceIDsForTesting) == [backgroundLivePaneID, visiblePaneID]
+        )
+        #expect(Set(bridge.activeSurfaceIDs) == [backgroundLivePaneID, visiblePaneID])
+        #expect(coordinator.surfaceForTesting(id: backgroundLivePaneID) === backgroundLiveSurface)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == contextCount)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == [visiblePaneID: ObjectIdentifier(visibleSurface)]
+        )
+    }
+
+    @Test
+    func closeUnavailablePaneInInactiveTabKeepsVisibleSelectionAndFocus() throws {
+        let unavailablePaneID = PaneID()
+        let visiblePaneID = PaneID()
+        let unavailableTab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let visibleTab = TerminalTab(
+            title: "Visible",
+            pane: TerminalPaneDescriptor(id: visiblePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(
+            name: "Active",
+            tabs: [unavailableTab, visibleTab],
+            activeTabID: visibleTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let visibleSurface = try #require(coordinator.surfaceForTesting(id: visiblePaneID))
+        let window = try #require(coordinator.activeWindowForTesting)
+        _ = window.makeFirstResponder(nil)
+        let firstResponder = window.firstResponder
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        let contextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingWorkspace = try #require(resultingStore.workspace(id: workspace.id))
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(resultingWorkspace.tabs.map(\.id) == [visibleTab.id])
+        #expect(resultingWorkspace.activeTabID == visibleTab.id)
+        #expect(coordinator.activeSurfaceForTesting === visibleSurface)
+        #expect(window.firstResponder === firstResponder)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceIDsForTesting == [visiblePaneID])
+        #expect(bridge.activeSurfaceIDs == [visiblePaneID])
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == contextCount)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+    }
+
+    @Test
+    func retryFailurePreservesSplitRuntimeAndRetrySuccessUsesSavedShellConfiguration() throws {
+        let siblingPaneID = PaneID()
+        let unavailablePaneID = PaneID()
+        let root = SplitNode.split(
+            id: UUID(),
+            axis: .vertical,
+            ratio: 0.35,
+            first: .pane(siblingPaneID),
+            second: .pane(unavailablePaneID)
+        )
+        let unavailableDescriptor = TerminalPaneDescriptor(
+            id: unavailablePaneID,
+            cwd: "/tmp",
+            startupCommand: .custom("printf never-run")
+        )
+        let tab = try TerminalTab(
+            title: "Retry split",
+            root: root,
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: siblingPaneID, cwd: "/"),
+                unavailableDescriptor,
+            ],
+            activePaneID: unavailablePaneID
+        )
+        let workspace = Workspace(name: "Retry", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var errors: [Error] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/var/empty",
+                command: "printf base-never-run",
+                initialInput: "printf input-never-run"
+            ),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            onError: { errors.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let siblingSurface = try #require(coordinator.surfaceForTesting(id: siblingPaneID))
+        let siblingIdentity = ObjectIdentifier(siblingSurface)
+        let failureMessage = try #require(
+            coordinator.surfaceFailureMessagesForTesting[unavailablePaneID]
+        )
+        persistence.reset()
+
+        bridge.failNextSurfaceCreationForTesting()
+        coordinator.retryUnavailablePaneForTesting(unavailablePaneID)
+
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.root == root)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tab.id)?
+                .paneDescriptor(for: unavailablePaneID) == unavailableDescriptor
+        )
+        #expect(coordinator.surfaceIDsForTesting == [siblingPaneID])
+        #expect(bridge.activeSurfaceIDs == [siblingPaneID])
+        #expect(
+            coordinator.surfaceForTesting(id: siblingPaneID).map(ObjectIdentifier.init)
+                == siblingIdentity
+        )
+        #expect(coordinator.surfaceFailureIDsForTesting == [unavailablePaneID])
+        #expect(
+            coordinator.surfaceFailureMessagesForTesting[unavailablePaneID]
+                == GhosttyBridgeError.surfaceCreationFailed(unavailablePaneID)
+                .localizedDescription
+        )
+        #expect(coordinator.surfaceFailureMessagesForTesting[unavailablePaneID] == failureMessage)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(errors.isEmpty)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 1
+        )
+
+        coordinator.retryUnavailablePaneForTesting(unavailablePaneID)
+
+        let retriedSurface = try #require(
+            coordinator.surfaceForTesting(id: unavailablePaneID)
+        )
+        let configuration = try #require(
+            bridge.surfaceConfigurationForTesting(id: unavailablePaneID)
+        )
+        #expect(retriedSurface.paneID == unavailablePaneID)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.root == root)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tab.id)?
+                .paneDescriptor(for: unavailablePaneID) == unavailableDescriptor
+        )
+        #expect(Set(coordinator.surfaceIDsForTesting) == [siblingPaneID, unavailablePaneID])
+        #expect(Set(bridge.activeSurfaceIDs) == [siblingPaneID, unavailablePaneID])
+        #expect(
+            coordinator.surfaceForTesting(id: siblingPaneID).map(ObjectIdentifier.init)
+                == siblingIdentity
+        )
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(configuration.workingDirectory == unavailableDescriptor.cwd)
+        #expect(configuration.command == nil)
+        #expect(configuration.initialInput == nil)
+        #expect(configuration.context == .split)
+        #expect(coordinator.activeSurfaceForTesting === retriedSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === retriedSurface)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(errors.isEmpty)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 2
+        )
+    }
+
+    @Test
+    func retryInInactiveTabAndWorkspaceDoesNotChangeSelectionOrFocus() throws {
+        let unavailablePaneID = PaneID()
+        let backgroundPaneID = PaneID()
+        let activePaneID = PaneID()
+        let unavailableTab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let backgroundTab = TerminalTab(
+            title: "Background active",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp")
+        )
+        let activeTab = TerminalTab(
+            title: "Visible",
+            pane: TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp")
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [unavailableTab, backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let activeWorkspace = Workspace(
+            name: "Visible",
+            tabs: [activeTab],
+            activeTabID: activeTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [backgroundWorkspace, activeWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+        let activeSurface = try #require(coordinator.surfaceForTesting(id: activePaneID))
+        let firstResponder = coordinator.activeWindowForTesting?.firstResponder
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        coordinator.retryUnavailablePaneForTesting(unavailablePaneID)
+
+        let retriedSurface = try #require(
+            coordinator.surfaceForTesting(id: unavailablePaneID)
+        )
+        #expect(retriedSurface.paneID == unavailablePaneID)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.workspaceStoreForTesting.activeWorkspaceID == activeWorkspace.id)
+        #expect(
+            coordinator.workspaceStoreForTesting.workspace(id: backgroundWorkspace.id)?
+                .activeTabID == backgroundTab.id
+        )
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstResponder)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+    }
+
+    @Test
+    func retryAlreadyLiveDeletedAndUnknownPanesIsNoOp() throws {
+        let deletedPaneID = PaneID()
+        let livePaneID = PaneID()
+        let deletedTab = TerminalTab(
+            title: "Delete",
+            pane: TerminalPaneDescriptor(id: deletedPaneID, cwd: "/tmp")
+        )
+        let liveTab = TerminalTab(
+            title: "Live",
+            pane: TerminalPaneDescriptor(id: livePaneID, cwd: "/tmp")
+        )
+        let deletedWorkspace = Workspace(
+            name: "Delete",
+            tabs: [deletedTab],
+            activeTabID: deletedTab.id
+        )
+        let liveWorkspace = Workspace(
+            name: "Live",
+            tabs: [liveTab],
+            activeTabID: liveTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [deletedWorkspace, liveWorkspace],
+            activeWorkspaceID: deletedWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var deletionResponse: (@MainActor (Bool) -> Void)?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            workspaceDeletionConfirmationPresenter: { _, completion in
+                deletionResponse = completion
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: deletedPaneID)
+        try coordinator.start()
+        coordinator.workspaceViewControllerForTesting.onDeleteWorkspace?()
+        let respondToDeletion = try #require(deletionResponse)
+        respondToDeletion(true)
+        let liveSurface = try #require(coordinator.surfaceForTesting(id: livePaneID))
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let bridgeSurfaceIDs = bridge.activeSurfaceIDs
+        let liveIdentity = ObjectIdentifier(liveSurface)
+        let firstResponder = coordinator.activeWindowForTesting?.firstResponder
+        persistence.reset()
+
+        coordinator.retryUnavailablePaneForTesting(livePaneID)
+        coordinator.retryUnavailablePaneForTesting(deletedPaneID)
+        coordinator.retryUnavailablePaneForTesting(PaneID())
+
+        #expect(coordinator.workspaceStoreForTesting == resultingStore)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceIDs == bridgeSurfaceIDs)
+        #expect(
+            coordinator.surfaceForTesting(id: livePaneID).map(ObjectIdentifier.init)
+                == liveIdentity
+        )
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstResponder)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func startKeepsSuccessfulSplitSurfaceAndFailedPaneDuringPartialRestore(
+        isBroadcasting: Bool
+    ) throws {
+        let successfulPaneID = PaneID()
+        let failingPaneID = PaneID()
+        let root = SplitNode.split(
+            id: UUID(),
+            axis: .horizontal,
+            ratio: 0.4,
+            first: .pane(successfulPaneID),
+            second: .pane(failingPaneID)
+        )
+        let tab = try TerminalTab(
+            title: "Restored split",
+            root: root,
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: successfulPaneID, cwd: "/tmp/success"),
+                TerminalPaneDescriptor(id: failingPaneID, cwd: "/tmp/failure"),
+            ],
+            activePaneID: failingPaneID,
+            isBroadcasting: isBroadcasting
+        )
+        let workspace = Workspace(name: "Restored", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let initialContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp/ignored",
+                command: "printf should-not-run",
+                initialInput: "printf should-not-run"
+            ),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: failingPaneID)
 
         do {
-            let coordinator = WindowCoordinator(
-                ghosttyBridge: bridge,
-                initialWorkspaceStore: store
-            )
-            defer { coordinator.prepareForBridgeShutdownForTesting() }
-            bridge.failSurfaceCreationForTesting(id: failingPaneID)
-
-            do {
-                try coordinator.start()
-                Issue.record("Expected restoration to fail")
-            } catch let error as GhosttyBridgeError {
-                #expect(error == .surfaceCreationFailed(failingPaneID))
-            }
-
-            #expect(bridge.activeSurfaceIDs.isEmpty)
-            #expect(coordinator.surfaceIDsForTesting.isEmpty)
-            #expect(coordinator.workspaceStoreForTesting == store)
+            try coordinator.start()
+        } catch {
+            Issue.record("Expected a nonfatal restore surface failure, got \(error)")
         }
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        let resultingTab = try #require(resultingStore.tab(id: tab.id))
+        let successfulSurface = try #require(
+            coordinator.surfaceForTesting(id: successfulPaneID)
+        )
+        #expect(resultingTab.root == root)
+        #expect(resultingTab.root.leaves == [successfulPaneID, failingPaneID])
+        #expect(resultingTab.paneDescriptors == tab.paneDescriptors)
+        #expect(!resultingTab.isBroadcasting)
+        #expect(coordinator.surfaceIDsForTesting == [successfulPaneID])
+        #expect(bridge.activeSurfaceIDs == [successfulPaneID])
+        #expect(coordinator.surfaceForTesting(id: successfulPaneID) === successfulSurface)
+        #expect(coordinator.surfaceForTesting(id: failingPaneID) == nil)
+        #expect(coordinator.surfaceFailureIDsForTesting == [failingPaneID])
+        #expect(
+            coordinator.surfaceFailureMessagesForTesting[failingPaneID]
+                == GhosttyBridgeError.surfaceCreationFailed(failingPaneID).localizedDescription
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == [successfulPaneID: ObjectIdentifier(successfulSurface)]
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.splitHostingControllerIdentifierForTesting
+                != nil
+        )
+        let configuration = try #require(
+            bridge.surfaceConfigurationForTesting(id: successfulPaneID)
+        )
+        #expect(configuration.workingDirectory == "/tmp/success")
+        #expect(configuration.command == nil)
+        #expect(configuration.initialInput == nil)
+        #expect(configuration.context == .newTab)
+        #expect(
+            persistence.snapshots == (isBroadcasting ? [resultingStore] : [])
+        )
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount + 1
+        )
+
+        coordinator.prepareForBridgeShutdownForTesting()
+
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+        #expect(
+            GhosttyBridge.surfaceCallbackContextCountForTesting == initialContextCount
+        )
     }
 
     @Test
@@ -2127,6 +3097,7 @@ struct WindowCoordinatorTabLifecycleTests {
         )
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
+        bridge.failSurfaceCreationForTesting(id: deletedSecondPaneID)
         let persistence = WorkspacePersistenceRecorder()
         var closePresentations: [GhosttyConfirmationPresentation] = []
         var closeDismissalCount = 0
@@ -2149,6 +3120,14 @@ struct WindowCoordinatorTabLifecycleTests {
         try coordinator.start()
         let beforeSurface = try #require(coordinator.surfaceForTesting(id: beforePaneID))
         let afterSurface = try #require(coordinator.surfaceForTesting(id: afterPaneID))
+        let deletedFailureMessage = try #require(
+            coordinator.surfaceFailureMessagesForTesting[deletedSecondPaneID]
+        )
+        #expect(
+            deletedFailureMessage
+                == GhosttyBridgeError.surfaceCreationFailed(deletedSecondPaneID)
+                .localizedDescription
+        )
 
         persistence.reset()
         coordinator.surfaceDidRequestCloseForTesting(id: deletedFirstPaneID, processAlive: true)
@@ -2176,6 +3155,8 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.surfaceForTesting(id: afterPaneID) === afterSurface)
         #expect(coordinator.surfaceForTesting(id: deletedFirstPaneID) == nil)
         #expect(coordinator.surfaceForTesting(id: deletedSecondPaneID) == nil)
+        #expect(!coordinator.surfaceFailureIDsForTesting.contains(deletedSecondPaneID))
+        #expect(coordinator.surfaceFailureMessagesForTesting[deletedSecondPaneID] == nil)
         #expect(coordinator.activeSurfaceForTesting === afterSurface)
         #expect(
             coordinator.workspaceViewControllerForTesting.renderedSurfaceIdentifiersForTesting
@@ -2183,9 +3164,8 @@ struct WindowCoordinatorTabLifecycleTests {
         )
         #expect(coordinator.activeConfirmationForTesting == nil)
         #expect(closeDismissalCount == 1)
-        #expect(closeObservations.count == 2)
-        #expect(closeObservations.filter { $0 == deletedFirstPaneID }.count == 1)
-        #expect(closeObservations.filter { $0 == deletedSecondPaneID }.count == 1)
+        #expect(closeObservations == [deletedFirstPaneID])
+        #expect(closeObservations.filter { $0 == deletedSecondPaneID }.isEmpty)
         #expect(closeObservations.filter { $0 == beforePaneID }.isEmpty)
         #expect(closeObservations.filter { $0 == afterPaneID }.isEmpty)
 

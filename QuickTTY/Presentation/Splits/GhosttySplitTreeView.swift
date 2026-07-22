@@ -44,6 +44,8 @@ indirect enum GhosttySplitTreeDescriptor: Equatable {
 struct GhosttySplitTreeCallbacks {
     let onResize: (UUID, Double) -> Void
     let onEqualize: (UUID) -> Void
+    let onRetryUnavailablePane: (PaneID) -> Void
+    let onCloseUnavailablePane: (PaneID) -> Void
 
     func resize(_ splitID: UUID, ratio: Double) {
         onResize(splitID, ratio)
@@ -52,28 +54,45 @@ struct GhosttySplitTreeCallbacks {
     func equalize(_ splitID: UUID) {
         onEqualize(splitID)
     }
+
+    func retryUnavailablePane(_ paneID: PaneID) {
+        onRetryUnavailablePane(paneID)
+    }
+
+    func closeUnavailablePane(_ paneID: PaneID) {
+        onCloseUnavailablePane(paneID)
+    }
 }
 
 @MainActor
 struct GhosttySplitTreeView: View {
     private let root: GhosttySplitTreeDescriptor
     private let surfaces: [PaneID: GhosttySurfaceView]
+    private let failures: [PaneID: SurfaceFailurePresentation]
+    private let palette: GhosttyChromePalette
     private let dividerColor: Color
     private let callbacks: GhosttySplitTreeCallbacks
 
     init(
         root: SplitNode,
         surfaces: [PaneID: GhosttySurfaceView],
+        failures: [PaneID: SurfaceFailurePresentation],
         palette: GhosttyChromePalette,
         onResize: @escaping (UUID, Double) -> Void,
-        onEqualize: @escaping (UUID) -> Void
+        onEqualize: @escaping (UUID) -> Void,
+        onRetryUnavailablePane: @escaping (PaneID) -> Void,
+        onCloseUnavailablePane: @escaping (PaneID) -> Void
     ) {
         self.root = GhosttySplitTreeDescriptor(root: root)
         self.surfaces = surfaces
+        self.failures = failures
+        self.palette = palette
         dividerColor = Self.dividerColor(for: palette)
         callbacks = GhosttySplitTreeCallbacks(
             onResize: onResize,
-            onEqualize: onEqualize
+            onEqualize: onEqualize,
+            onRetryUnavailablePane: onRetryUnavailablePane,
+            onCloseUnavailablePane: onCloseUnavailablePane
         )
     }
 
@@ -81,6 +100,8 @@ struct GhosttySplitTreeView: View {
         GhosttySplitNodeView(
             node: root,
             surfaces: surfaces,
+            failures: failures,
+            palette: palette,
             dividerColor: dividerColor,
             callbacks: callbacks
         )
@@ -97,6 +118,8 @@ struct GhosttySplitTreeView: View {
 private struct GhosttySplitNodeView: View {
     let node: GhosttySplitTreeDescriptor
     let surfaces: [PaneID: GhosttySurfaceView]
+    let failures: [PaneID: SurfaceFailurePresentation]
+    let palette: GhosttyChromePalette
     let dividerColor: Color
     let callbacks: GhosttySplitTreeCallbacks
 
@@ -108,7 +131,16 @@ private struct GhosttySplitNodeView: View {
                 GhosttySurfaceRepresentable(surface: surface)
                     .id(paneID)
             } else {
-                Color.clear.accessibilityLabel("Terminal pane unavailable")
+                SurfaceErrorPlaceholder(
+                    presentation: failures[paneID]
+                        ?? SurfaceFailurePresentation(
+                            message: "The terminal surface is unavailable."
+                        ),
+                    palette: palette,
+                    onRetry: { callbacks.retryUnavailablePane(paneID) },
+                    onClosePane: { callbacks.closeUnavailablePane(paneID) }
+                )
+                .id(paneID)
             }
         case .split(let id, let direction, let ratio, let first, let second):
             SplitView(
@@ -122,6 +154,8 @@ private struct GhosttySplitNodeView: View {
                     GhosttySplitNodeView(
                         node: first,
                         surfaces: surfaces,
+                        failures: failures,
+                        palette: palette,
                         dividerColor: dividerColor,
                         callbacks: callbacks
                     )
@@ -130,6 +164,8 @@ private struct GhosttySplitNodeView: View {
                     GhosttySplitNodeView(
                         node: second,
                         surfaces: surfaces,
+                        failures: failures,
+                        palette: palette,
                         dividerColor: dividerColor,
                         callbacks: callbacks
                     )

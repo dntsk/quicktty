@@ -101,6 +101,15 @@
 - **Отклонено:** Собственный формат themes; жёстко заданная light/dark схема.
 - **Последствия:** Appearance вычисляется по яркости фона; при разных split backgrounds используется верхняя pane у tab bar.
 
+## Ошибка surface сохраняет pane и split layout
+
+- **Дата:** 2026-07-22
+- **Статус:** принято
+- **Контекст:** Ошибка создания одной Ghostty surface при startup или restore не должна завершать приложение, уничтожать соседние sessions либо оставлять прозрачную пустую pane.
+- **Решение:** `WorkspaceStore` остаётся источником identity/layout, а `WindowCoordinator` хранит неперсистентное failure-state по `PaneID`. Startup создаёт model-first tab, restore обрабатывает panes независимо. Retry создаёт fresh shell с тем же `PaneID` и saved CWD; Close Pane изменяет только модель и не создаёт replacement shell.
+- **Отклонено:** Полный rollback restore; fatal startup alert для surface creation; synthetic error-tab после неудачного New Tab/Split; собственный render-failure callback без поддержки pinned Ghostty API.
+- **Последствия:** Обычные New Tab/Split остаются транзакционными; persisted custom commands не запускаются при Retry; broadcast повреждённой tab сбрасывается; runtime render failures можно подключить позже только через реальный upstream signal.
+
 ## Идентичность QuickTTY и чистый старт
 
 - **Дата:** 2026-07-22

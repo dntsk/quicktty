@@ -273,9 +273,12 @@ struct WorkspacePresentationTests {
         controller.displayTerminal(
             root: .pane(PaneID()),
             surfaces: [:],
+            failures: [:],
             palette: .fallback,
             onResize: { _, _ in },
-            onEqualize: { _ in }
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
         )
 
         let terminalContent = try #require(
@@ -491,9 +494,12 @@ struct WorkspacePresentationTests {
                 firstSurface.paneID: firstSurface,
                 secondSurface.paneID: secondSurface,
             ],
+            failures: [:],
             palette: .fallback,
             onResize: { _, _ in },
-            onEqualize: { _ in }
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
         )
         Self.layoutWorkspace(controller, in: window)
         await Task.yield()

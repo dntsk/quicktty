@@ -191,7 +191,11 @@ Real PTY test создаёт только временный explicit config с 
 
 ## Ошибки
 
-- Ошибка одной surface преобразуется в состояние placeholder с действиями `Retry` и `Close Pane`; broadcast выключается.
+- Ошибка создания одной surface преобразуется в неперсистентное Swift-состояние placeholder по `PaneID`; C handle и `Error` в presentation не сохраняются. Broadcast затронутой tab выключается.
+- Startup создаёт model identity до surface; restore создаёт каждую pane независимо. Успешные соседние surfaces не закрываются из-за одной ошибки.
+- `Retry` повторно вызывает существующий `GhosttyBridge.makeSurface` с тем же `PaneID`, saved CWD, `command = nil` и `initialInput = nil`. Persisted custom command не выполняется.
+- `Close Pane` для отсутствующей surface использует только `SplitCoordinator`; `GhosttyBridge.closeSurface`, generic live-close path и replacement shell не вызываются. Confirmation invalidation завершается до повторного resolve актуальной модели, чтобы reentrant callbacks не затирали изменения.
+- Pinned Ghostty API не предоставляет отдельный render-failure callback; QuickTTY не создаёт неподтверждённый C API или synthetic signal.
 - Ошибка инициализации `libghostty` передаётся приложению для отдельного error window и указания пути к логам.
 - Ошибка config reload не уничтожает последнюю валидную конфигурацию.
 - Ошибка перехода в Quake не должна уничтожать surface или процесс и приводит к возврату в normal mode.
@@ -211,6 +215,7 @@ Real PTY test создаёт только временный explicit config с 
 
 | Дата | Изменение | Причина |
 |---|---|---|
+| 2026-07-22 | Surface creation failures получили model-first startup, partial restore, leaf placeholder, same-ID fresh-shell Retry и model-only Close Pane; `make check` прошёл 473 теста в 26 suites | Ошибка одной pane не должна разрушать layout, соседние surfaces или приложение; pinned Ghostty API и C boundary не изменены |
 | 2026-07-15 | Task 3 закрыт после добавления monitor для Command-`keyUp`, перехвата `performClose`, C-backed resize, реального selection-copy, строгой C import boundary и исправленного teardown-контракта; финальный `make check` прошёл 76 тестов в 5 suites | Финальные проверки дали spec PASS и quality APPROVED |
 | 2026-07-15 | Clipboard callbacks переведены на asynchronous owned state machine с synchronous two-call confirm transition, отдельным selection board, injected MainActor client, drain-before-free, FIFO AppKit confirmation/close queue и точными binding actions; реальные PTY/FIFO tests проверяют safe/unsafe paste и OSC52 | Реализация Task 3C2 подготовлена к review; Task 3C и tasks-completed не закрываются до принятия review |
 | 2026-07-15 | Mouse/scroll обрабатываются напрямую source `GhosttySurfaceView`, зафиксированы ABI mapping/packing, logical-point coordinates, core-owned multiplier/reporting, focus-only suppression, tracking/monitor lifetime, post-close no-op и pinned update strategy; real PTY DECRQM+FIFO проверяет точные SGR bytes | Реализован контракт Task 3C1 без clipboard; Task 3C и tasks-completed не закрываются до 3C2/review |
