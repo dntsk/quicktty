@@ -202,6 +202,17 @@ esac
 . "$release_helpers"
 . "$notarize_helpers"
 
+sha256_64=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+sha256_63=${sha256_64%f}
+sha256_65=${sha256_64}0
+sha256_nonhex=g${sha256_63}
+notarize_is_valid_sha256 "$sha256_64" || fail 'valid 64-character SHA-256 was rejected'
+for invalid_sha256 in "$sha256_63" "$sha256_65" "$sha256_nonhex"; do
+    if notarize_is_valid_sha256 "$invalid_sha256"; then
+        fail "invalid SHA-256 was accepted: $invalid_sha256"
+    fi
+done
+
 notarize_validate_profile ghostterm-notary
 release_validate_team "$test_development_team"
 release_validate_identity "$test_code_sign_identity"

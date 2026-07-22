@@ -64,6 +64,15 @@ notarize_resolve_dmg_path() {
     printf '%s\n' "$notarize_dmg_canonical"
 }
 
+notarize_is_valid_sha256() {
+    notarize_sha256=$1
+
+    [ "${#notarize_sha256}" -eq 64 ] || return 1
+    case "$notarize_sha256" in
+        *[!0-9A-Fa-f]*) return 1 ;;
+    esac
+}
+
 notarize_validate_submission_id() {
     notarize_submission_id=$1
 
