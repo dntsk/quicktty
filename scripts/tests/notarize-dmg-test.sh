@@ -83,7 +83,7 @@ test_development_team=ABCDE12345
 test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
 default_developer_dir=/Applications/Xcode.app/Contents/Developer
 test_developer_dir=$default_developer_dir
-test_release_label=0.1.0-alpha.2
+test_release_label=0.1.0-beta.1
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"
@@ -129,7 +129,7 @@ grep -F -x 'DMG=$(notarize_resolve_dmg_path "$DMG" "$repo_root" "$expected_dmg_p
 grep -F -x 'notary_result_tmp=$("$mktemp_path" "$release_dir/.QuickTTY-notary-result.XXXXXX") \' \
     "$notarize_script" >/dev/null \
     || fail 'notarization script does not use a QuickTTY temporary result prefix'
-if grep -E '^(release|notarize|signed-alpha):[[:space:]]+export[[:space:]]' "$makefile" >/dev/null; then
+if grep -E '^(release|notarize|signed-release|signed-alpha):[[:space:]]+export[[:space:]]' "$makefile" >/dev/null; then
     fail 'release targets must not use target-specific exported variables'
 fi
 if grep -E '^[[:space:]]+.*(DEVELOPMENT_TEAM|CODE_SIGN_IDENTITY|DMG|NOTARY_PROFILE)' "$makefile" >/dev/null; then
@@ -299,8 +299,10 @@ expect_notarize_failure 'error: DMG must not contain .. path components'
 
 make_path=/usr/bin/make
 [ -x "$make_path" ] || fail "make is not executable: $make_path"
-grep -F -x 'ifneq ($(filter release notarize signed-alpha,$(MAKECMDGOALS)),)' "$makefile" >/dev/null \
+grep -F -x 'ifneq ($(filter release notarize signed-release signed-alpha,$(MAKECMDGOALS)),)' "$makefile" >/dev/null \
     || fail 'Makefile does not scope command-line variable rejection to release goals'
+grep -F -x 'signed-alpha: signed-release' "$makefile" >/dev/null \
+    || fail 'Makefile does not preserve signed-alpha as a signed-release alias'
 for release_make_variable in \
     DEVELOPMENT_TEAM \
     CODE_SIGN_IDENTITY \
@@ -319,6 +321,8 @@ make_notarize_capture=$tmp_root/make-notarize-capture
 make_release_capture=$tmp_root/make-release-capture
 make_signed_release_capture=$tmp_root/make-signed-release-capture
 make_signed_notarize_capture=$tmp_root/make-signed-notarize-capture
+make_signed_alpha_release_capture=$tmp_root/make-signed-alpha-release-capture
+make_signed_alpha_notarize_capture=$tmp_root/make-signed-alpha-notarize-capture
 make_default_release_capture=$tmp_root/make-default-release-capture
 make_command_line_release_capture=$tmp_root/make-command-line-release-capture
 make_command_line_notarize_capture=$tmp_root/make-command-line-notarize-capture
@@ -364,7 +368,7 @@ expect_make_command_line_rejection() {
     assert_missing "$make_expansion_marker"
 }
 
-for make_target in release notarize signed-alpha; do
+for make_target in release notarize signed-release signed-alpha; do
     for make_variable in \
         DEVELOPMENT_TEAM \
         CODE_SIGN_IDENTITY \
@@ -430,10 +434,17 @@ assert_make_capture "$make_notarize_capture" "$test_development_team" "$test_cod
     ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
 
 run_make_fixture_dry_run \
-    signed-alpha "$make_signed_release_capture" "$make_signed_notarize_capture" "$test_developer_dir"
+    signed-release "$make_signed_release_capture" "$make_signed_notarize_capture" "$test_developer_dir"
 assert_make_capture "$make_signed_release_capture" "$test_development_team" "$test_code_sign_identity" \
     ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
 assert_make_capture "$make_signed_notarize_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
+
+run_make_fixture_dry_run \
+    signed-alpha "$make_signed_alpha_release_capture" "$make_signed_alpha_notarize_capture" "$test_developer_dir"
+assert_make_capture "$make_signed_alpha_release_capture" "$test_development_team" "$test_code_sign_identity" \
+    ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
+assert_make_capture "$make_signed_alpha_notarize_capture" "$test_development_team" "$test_code_sign_identity" \
     ".build/Release/$RELEASE_DMG_NAME" fixture-notary "$test_developer_dir" "$test_release_label"
 
 (

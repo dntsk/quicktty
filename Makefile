@@ -1,4 +1,4 @@
-ifneq ($(filter release notarize signed-alpha,$(MAKECMDGOALS)),)
+ifneq ($(filter release notarize signed-release signed-alpha,$(MAKECMDGOALS)),)
 ifeq ($(origin DEVELOPMENT_TEAM),command line)
 $(error DEVELOPMENT_TEAM must be passed through the process environment before make, not on the command line)
 endif
@@ -31,7 +31,7 @@ SWIFT_SOURCES := QuickTTY QuickTTYTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract signed-alpha format callback-contract lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract signed-release signed-alpha format callback-contract lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -57,9 +57,11 @@ notarize:
 notarize-contract:
 	./scripts/tests/notarize-dmg-test.sh
 
-signed-alpha:
+signed-release:
 	$(MAKE) release
 	$(MAKE) notarize
+
+signed-alpha: signed-release
 
 format:
 	swift format format --recursive --in-place $(SWIFT_SOURCES)
