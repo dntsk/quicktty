@@ -584,6 +584,240 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func tabTitlesResolveOverrideActivePaneAutomaticAndFallbackWithoutNormalizingText() throws {
+        let fallbackPaneID = PaneID()
+        let automaticPaneID = PaneID()
+        let emptyAutomaticPaneID = PaneID()
+        let overridePaneID = PaneID()
+        let fallbackTab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: fallbackPaneID, cwd: "/tmp")
+        )
+        let automaticTab = TerminalTab(
+            title: "Automatic fallback",
+            pane: TerminalPaneDescriptor(id: automaticPaneID, cwd: "/tmp")
+        )
+        let emptyAutomaticTab = TerminalTab(
+            title: "Must not appear",
+            pane: TerminalPaneDescriptor(id: emptyAutomaticPaneID, cwd: "/tmp")
+        )
+        let overrideTab = TerminalTab(
+            title: "Override fallback",
+            titleOverride: "  Manual 🛠️  ",
+            pane: TerminalPaneDescriptor(id: overridePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(
+            name: "Titles",
+            tabs: [fallbackTab, automaticTab, emptyAutomaticTab, overrideTab],
+            activeTabID: fallbackTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let controller = WorkspaceViewController()
+
+        controller.apply(
+            store,
+            liveTitles: [
+                automaticPaneID: "  build 🚀  ",
+                emptyAutomaticPaneID: "",
+                overridePaneID: "hidden automatic",
+            ]
+        )
+
+        #expect(
+            controller.tabBarViewController.displayedTabsForTesting
+                == [fallbackTab, automaticTab, emptyAutomaticTab, overrideTab]
+        )
+        #expect(
+            controller.tabBarViewController.displayedTitlesForTesting
+                == [
+                    fallbackTab.id: "Fallback",
+                    automaticTab.id: "  build 🚀  ",
+                    emptyAutomaticTab.id: "",
+                    overrideTab.id: "  Manual 🛠️  ",
+                ]
+        )
+    }
+
+    @Test
+    func titleOnlyRefreshUpdatesResolvedTitlesWithoutReloadingTabsOrChangingSelection() throws {
+        let paneID = PaneID()
+        let tab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: paneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Titles", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let controller = WorkspaceViewController()
+        controller.apply(store, liveTitles: [:])
+        let reloadGeneration =
+            controller.tabBarViewController.dataReloadGenerationForTesting
+
+        controller.refreshTabTitles(in: store, liveTitles: [paneID: "latest 🟢"])
+
+        #expect(
+            controller.tabBarViewController.displayedTitlesForTesting
+                == [tab.id: "latest 🟢"]
+        )
+        #expect(controller.tabBarViewController.displayedTabsForTesting == [tab])
+        #expect(controller.tabBarViewController.activeTabIDForTesting == tab.id)
+        #expect(
+            controller.tabBarViewController.dataReloadGenerationForTesting
+                == reloadGeneration
+        )
+    }
+
+    @Test
+    func tabRenameContextMenuAndPlainDoubleClickBeginInlineEditorWithEffectiveTitle() throws {
+        let tab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        tabBar.refreshDisplayedTitles([tab.id: "  current 🧪  "])
+        let clickedItem = tabBar.tabItemForTesting(at: 0)
+        let menu = tabBar.contextMenu(for: tab.id)
+        let renameItem = try #require(menu.items.first { $0.title == "Rename Tab…" })
+
+        #expect(renameItem.target === tabBar)
+        #expect(renameItem.action?.description == "renameTab:")
+        #expect(renameItem.representedObject as? NSUUID == tab.id.rawValue as NSUUID)
+
+        NSApp.sendAction(try #require(renameItem.action), to: renameItem.target, from: renameItem)
+        #expect(tabBar.editedTabIDForTesting == tab.id)
+        #expect(
+            tabBar.tabItemForTesting(at: 0).renameEditorForTesting?.stringValue == "  current 🧪  ")
+        tabBar.cancelRenameForTesting()
+
+        clickedItem.backgroundViewForTesting.mouseDown(
+            with: try Self.mouseDownEvent(clickCount: 2)
+        )
+        let item = tabBar.tabItemForTesting(at: 0)
+
+        #expect(tabBar.editedTabIDForTesting == tab.id)
+        #expect(item.isRenamingForTesting)
+        #expect(item.renameEditorForTesting?.stringValue == "  current 🧪  ")
+        #expect(fixture.window.firstResponder === item.renameEditorForTesting?.currentEditor())
+        #expect(item.renameEditorForTesting?.currentEditor()?.selectedRange == NSRange(0..<14))
+    }
+
+    @Test
+    func modifiedDoubleClickKeepsSelectionSemanticsWithoutStartingRename() throws {
+        let tabs = Self.makeTabs(count: 2)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+
+        tabBar.tabItemForTesting(at: 1).backgroundViewForTesting.mouseDown(
+            with: try Self.mouseDownEvent(
+                modifierFlags: [.command],
+                clickCount: 2
+            )
+        )
+
+        #expect(tabBar.editedTabIDForTesting == nil)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == tabs.map(\.id))
+    }
+
+    @Test
+    func inlineRenameEnterBlurAndEscapeFinishExactlyOnceWithExactText() throws {
+        let tab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        var commits: [String] = []
+        var editingStates: [Bool] = []
+        tabBar.onRenameTab = { _, title in commits.append(title) }
+        tabBar.onRenameEditingChanged = { editingStates.append($0) }
+
+        tabBar.beginRenameForTesting(tab.id)
+        let enterItem = tabBar.tabItemForTesting(at: 0)
+        enterItem.renameEditorForTesting?.stringValue = "  rename 🚀  "
+        enterItem.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+        enterItem.endRenameEditingForTesting()
+
+        #expect(commits == ["  rename 🚀  "])
+        #expect(editingStates == [true, false])
+        #expect(tabBar.editedTabIDForTesting == nil)
+
+        tabBar.beginRenameForTesting(tab.id)
+        let blurItem = tabBar.tabItemForTesting(at: 0)
+        blurItem.renameEditorForTesting?.stringValue = ""
+        blurItem.endRenameEditingForTesting()
+        blurItem.endRenameEditingForTesting()
+
+        #expect(commits == ["  rename 🚀  ", ""])
+        #expect(editingStates == [true, false, true, false])
+
+        tabBar.beginRenameForTesting(tab.id)
+        let escapeItem = tabBar.tabItemForTesting(at: 0)
+        escapeItem.renameEditorForTesting?.stringValue = "cancel me"
+        escapeItem.invokeRenameCommandForTesting(#selector(NSResponder.cancelOperation(_:)))
+        escapeItem.endRenameEditingForTesting()
+
+        #expect(commits == ["  rename 🚀  ", ""])
+        #expect(editingStates == [true, false, true, false, true, false])
+    }
+
+    @Test
+    func automaticTitleRefreshDuringRenamePreservesEditorAndCancelRevealsLatestTitle() {
+        let tab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        tabBar.refreshDisplayedTitles([tab.id: "initial automatic"])
+        tabBar.beginRenameForTesting(tab.id)
+        let item = tabBar.tabItemForTesting(at: 0)
+        item.renameEditorForTesting?.stringValue = "user typing 📝"
+
+        tabBar.refreshDisplayedTitles([tab.id: "latest automatic 🌙"])
+
+        #expect(tabBar.tabItemForTesting(at: 0) === item)
+        #expect(item.renameEditorForTesting?.stringValue == "user typing 📝")
+        #expect(item.latestDisplayedTitleForTesting == "latest automatic 🌙")
+        item.invokeRenameCommandForTesting(#selector(NSResponder.cancelOperation(_:)))
+        #expect(item.visibleTitleForTesting == "latest automatic 🌙")
+    }
+
+    @Test
+    func disappearingOrReusedEditedItemCancelsWithoutStaleCommit() {
+        let tabs = Self.makeTabs(count: 2)
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: tabs[0].id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        var commits: [String] = []
+        var editingStates: [Bool] = []
+        tabBar.onRenameTab = { _, title in commits.append(title) }
+        tabBar.onRenameEditingChanged = { editingStates.append($0) }
+        tabBar.beginRenameForTesting(tabs[0].id)
+        let editedItem = tabBar.tabItemForTesting(at: 0)
+        editedItem.renameEditorForTesting?.stringValue = "stale"
+
+        tabBar.apply(tabs: [tabs[1]], activeTabID: tabs[1].id, destinations: [])
+        editedItem.prepareForReuse()
+        editedItem.endRenameEditingForTesting()
+
+        #expect(commits.isEmpty)
+        #expect(editingStates == [true, false])
+        #expect(tabBar.editedTabIDForTesting == nil)
+        #expect(!editedItem.isRenamingForTesting)
+        #expect(editedItem.renameEditorForTesting?.stringValue.isEmpty == true)
+    }
+
+    @Test
     func tabBarHasNoNewTabControl() {
         let workspaceController = WorkspaceViewController()
         workspaceController.apply(WorkspaceStore())
@@ -1225,7 +1459,8 @@ struct WorkspacePresentationTests {
     }
 
     private static func mouseDownEvent(
-        modifierFlags: NSEvent.ModifierFlags = []
+        modifierFlags: NSEvent.ModifierFlags = [],
+        clickCount: Int = 1
     ) throws -> NSEvent {
         try #require(
             NSEvent.mouseEvent(
@@ -1236,7 +1471,7 @@ struct WorkspacePresentationTests {
                 windowNumber: 0,
                 context: nil,
                 eventNumber: 0,
-                clickCount: 1,
+                clickCount: clickCount,
                 pressure: 1
             )
         )

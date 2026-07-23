@@ -49,3 +49,15 @@ Required behavior:
 **Status:** Завершено 2026-07-23.
 
 Закреплённый Ghostty владеет detection/highlight и `Cmd+click`; QuickTTY принимает `open_url`, открывает schemes/file paths через `NSWorkspace` и применяет surface-local cursor shape через cursor rects. Preview UI и keyboard action `open-url` не добавлены. Контракт зафиксирован в `docs/plans/2026-07-23-url-hover-open-design.md`.
+
+## Dynamic tab titles and rename
+
+**Status:** Завершено 2026-07-23.
+
+QuickTTY отображает opaque live title активной pane, поддерживает отдельный persisted manual override и inline rename через double-click или `Rename Tab…`. Automatic titles остаются ephemeral. Контракт зафиксирован в `docs/plans/2026-07-23-dynamic-tab-titles-design.md`.
+
+## Agent-aware title/status integration
+
+**Status:** Отложено; протокол не выбран.
+
+Дизайн dynamic tab titles намеренно не включает AI parsing, badges, icon registry или отдельную status model. Raw Unicode/emoji OSC titles уже совместимы с будущим текстом статуса агента; отдельный протокол должен быть спроектирован до расширения UI или persistence.

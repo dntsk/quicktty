@@ -148,6 +148,21 @@ struct WorkspaceStore: Codable, Equatable, Sendable {
         }
     }
 
+    mutating func setTitleOverride(_ titleOverride: String, for tabID: TabID) throws {
+        for workspaceIndex in workspaces.indices {
+            guard
+                let tabIndex = workspaces[workspaceIndex].tabs.firstIndex(where: {
+                    $0.id == tabID
+                })
+            else {
+                continue
+            }
+            workspaces[workspaceIndex].tabs[tabIndex].setTitleOverride(titleOverride)
+            return
+        }
+        throw WorkspaceError.tabNotFound(tabID)
+    }
+
     mutating func updateWorkingDirectory(_ cwd: String, for paneID: PaneID) throws {
         guard let location = paneDescriptorLocation(for: paneID) else {
             throw WorkspaceError.paneNotFound(paneID)

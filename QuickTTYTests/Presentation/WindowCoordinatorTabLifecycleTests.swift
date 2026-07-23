@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -1500,6 +1501,528 @@ struct WindowCoordinatorTabLifecycleTests {
 
         #expect(persistence.snapshots.isEmpty)
         #expect(coordinator.workspaceStoreForTesting == storeBeforeStaleCallback)
+    }
+
+    @Test
+    func automaticTitleRefreshIsEphemeralAndDoesNotRebuildOrRefocusTerminalPresentation()
+        async throws
+    {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        await Task.yield()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tab = activeTab(of: coordinator)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let store = coordinator.workspaceStoreForTesting
+        let splitHostID = try #require(
+            coordinator.workspaceViewControllerForTesting
+                .splitHostingControllerIdentifierForTesting
+        )
+        let hostedSurfaces =
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+        let fullRefreshCount =
+            coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let tabReloadGeneration =
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+            .dataReloadGenerationForTesting
+        persistence.reset()
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("  command 🚀  ".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.currentTitle == "  command 🚀  ")
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tab.id] == "  command 🚀  "
+        )
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == hostedSurfaces
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting
+                .splitHostingControllerIdentifierForTesting == splitHostID
+        )
+        #expect(
+            coordinator.refreshWorkspacePresentationInvocationCountForTesting
+                == fullRefreshCount
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .dataReloadGenerationForTesting == tabReloadGeneration
+        )
+        #expect(window.firstResponder === surface)
+    }
+
+    @Test
+    func inactiveSplitTitleStaysHiddenUntilItsPaneBecomesActive() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        let tabID = activeTab(of: coordinator).id
+
+        #expect(
+            secondSurface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("active second".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+        #expect(
+            firstSurface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("latest inactive 💤".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(firstSurface.currentTitle == "latest inactive 💤")
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tabID] == "active second"
+        )
+
+        coordinator.focusNextPane()
+
+        #expect(coordinator.activeSurfaceForTesting === firstSurface)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tabID] == "latest inactive 💤"
+        )
+    }
+
+    @Test
+    func inactiveWorkspaceTitleAppearsFromItsLiveSurfaceAfterWorkspaceActivation() async throws {
+        let backgroundPaneID = PaneID()
+        let activePaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background fallback",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp/background")
+        )
+        let activeTab = TerminalTab(
+            title: "Active fallback",
+            pane: TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp/active")
+        )
+        let backgroundWorkspace = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let activeWorkspace = Workspace(
+            name: "Active",
+            tabs: [activeTab],
+            activeTabID: activeTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [backgroundWorkspace, activeWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let backgroundSurface = try #require(
+            coordinator.surfaceForTesting(id: backgroundPaneID)
+        )
+        persistence.reset()
+
+        #expect(
+            backgroundSurface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("background live 🌙".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(backgroundSurface.currentTitle == "background live 🌙")
+        #expect(persistence.snapshots.isEmpty)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[activeTab.id] == "Active fallback"
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[backgroundTab.id] == nil
+        )
+
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .performWorkspaceSelectionForTesting(backgroundWorkspace.id)
+
+        #expect(coordinator.activeSurfaceForTesting === backgroundSurface)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[backgroundTab.id] == "background live 🌙"
+        )
+    }
+
+    @Test
+    func inlineRenamePersistsExactTextClearsOverrideAndRestoresLiveSurfaceFocus() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        await Task.yield()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tabID = activeTab(of: coordinator).id
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let bridgeInputs = bridge.inputObservationsForTesting
+        let surfaceInputs = surface.inputObservationsForTesting
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        persistence.reset()
+        tabBar.beginRenameForTesting(tabID)
+        var item = tabBar.tabItemForTesting(at: 0)
+        #expect(
+            coordinator.activeWindowForTesting?.firstResponder
+                === item.renameEditorForTesting?.currentEditor())
+        item.renameEditorForTesting?.stringValue = "  kept whitespace 🧷  "
+        item.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+
+        #expect(persistence.snapshots.count == 1)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tabID)?.titleOverride
+                == "  kept whitespace 🧷  "
+        )
+        #expect(coordinator.activeWindowForTesting?.firstResponder === surface)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("latest automatic 🌙".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+        persistence.reset()
+        tabBar.beginRenameForTesting(tabID)
+        item = tabBar.tabItemForTesting(at: 0)
+        item.renameEditorForTesting?.stringValue = ""
+        item.endRenameEditingForTesting()
+
+        #expect(persistence.snapshots.count == 1)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tabID)?.titleOverride == nil)
+        #expect(tabBar.displayedTitlesForTesting[tabID] == "latest automatic 🌙")
+        #expect(coordinator.activeWindowForTesting?.firstResponder === surface)
+        #expect(bridge.inputObservationsForTesting == bridgeInputs)
+        #expect(surface.inputObservationsForTesting == surfaceInputs)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+    }
+
+    @Test
+    func contextMenuRenamePersistsSelectedInactiveTabWithoutChangingActiveTabOrFocus() async throws
+    {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        await Task.yield()
+        let activeSurface = try #require(coordinator.activeSurfaceForTesting)
+        let activeTabID = activeTab(of: coordinator).id
+        coordinator.createNewTab()
+        await Task.yield()
+        let inactiveSurface = try #require(coordinator.activeSurfaceForTesting)
+        let inactiveTabID = activeTab(of: coordinator).id
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        tabBar.beginSelectionForTesting(activeTabID, gesture: .commandClick)
+        tabBar.finishSelectionForTesting()
+        #expect(activeTab(of: coordinator).id == activeTabID)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === activeSurface)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [activeTabID, inactiveTabID])
+
+        persistence.reset()
+        let menu = tabBar.contextMenu(for: inactiveTabID)
+        let renameItem = try #require(menu.item(withTitle: "Rename Tab…"))
+        #expect(activeTab(of: coordinator).id == activeTabID)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === activeSurface)
+
+        #expect(NSApp.sendAction(renameItem.action!, to: renameItem.target, from: renameItem))
+        let item = tabBar.tabItemForTesting(at: 1)
+        #expect(
+            coordinator.activeWindowForTesting?.firstResponder
+                === item.renameEditorForTesting?.currentEditor())
+        item.renameEditorForTesting?.stringValue = "selected inactive 💤"
+        item.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+
+        #expect(persistence.snapshots.count == 1)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: inactiveTabID)?.titleOverride
+                == "selected inactive 💤"
+        )
+        #expect(activeTab(of: coordinator).id == activeTabID)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === activeSurface)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [activeTabID, inactiveTabID])
+        #expect(coordinator.surfaceForTesting(id: inactiveSurface.paneID) === inactiveSurface)
+    }
+
+    @Test
+    func promptStartsInlineRenameOnlyForCurrentLiveTabAndDoesNotRecreateSurfaces() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        let firstTabID = activeTab(of: coordinator).id
+        coordinator.createNewTab()
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        let secondTabID = activeTab(of: coordinator).id
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let promptHandler = try #require(bridge.surfaceTabTitlePromptHandler)
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        promptHandler(firstSurface.paneID)
+        #expect(tabBar.editedTabIDForTesting == nil)
+
+        #expect(secondSurface.schedulePromptTitleCallbackForTesting(.tab))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(tabBar.editedTabIDForTesting == secondTabID)
+        #expect(tabBar.tabItemForTesting(at: 1).isRenamingForTesting)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
+        #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
+
+        tabBar.cancelRenameForTesting()
+        coordinator.activateTabForTesting(firstTabID)
+        promptHandler(secondSurface.paneID)
+        #expect(tabBar.editedTabIDForTesting == nil)
+    }
+
+    @Test
+    func closingEditedTabCancelsWithoutApplyingStaleEditorValue() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.createNewTab()
+        let editedTab = activeTab(of: coordinator)
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+        tabBar.beginRenameForTesting(editedTab.id)
+        let editedItem = tabBar.tabItemForTesting(at: 1)
+        editedItem.renameEditorForTesting?.stringValue = "must not persist"
+        persistence.reset()
+
+        coordinator.closeTabImmediatelyForTesting(editedTab.id)
+        editedItem.endRenameEditingForTesting()
+
+        #expect(coordinator.workspaceStoreForTesting.tab(id: editedTab.id) == nil)
+        #expect(tabBar.editedTabIDForTesting == nil)
+        #expect(
+            persistence.snapshots.allSatisfy {
+                $0.workspaces.flatMap(\.tabs).allSatisfy { $0.titleOverride != "must not persist" }
+            }
+        )
+    }
+
+    @Test
+    func quakeInlineRenameOwnsOneTransientInteractionAndTeardownEndsIt() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: .quake,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let tabID = activeTab(of: coordinator).id
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        tabBar.beginRenameForTesting(tabID)
+        tabBar.beginRenameForTesting(tabID)
+
+        #expect(coordinator.isTabRenameEditingForTesting)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 1)
+
+        tabBar.cancelRenameForTesting()
+        tabBar.cancelRenameForTesting()
+
+        #expect(!coordinator.isTabRenameEditingForTesting)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+
+        tabBar.beginRenameForTesting(tabID)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 1)
+        coordinator.prepareForBridgeShutdownForTesting()
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+    }
+
+    @Test
+    func closedPaneTitleRequestsAndPromptsAreIgnored() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tab = activeTab(of: coordinator)
+        let titleHandler = try #require(bridge.surfaceTitleHandler)
+        let tabTitleHandler = try #require(bridge.surfaceTabTitleHandler)
+        let promptHandler = try #require(bridge.surfaceTabTitlePromptHandler)
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+
+        #expect(surface.schedulePromptTitleCallbackForTesting(.tab))
+        await Task.yield()
+        await Task.yield()
+        #expect(tabBar.editedTabIDForTesting == tab.id)
+        tabBar.cancelRenameForTesting()
+
+        coordinator.closeTabImmediatelyForTesting(tab.id)
+        let storeAfterClose = coordinator.workspaceStoreForTesting
+        let displayedTitlesAfterClose =
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+            .displayedTitlesForTesting
+        persistence.reset()
+
+        titleHandler(surface.paneID, "stale automatic")
+        tabTitleHandler(surface.paneID, "stale override")
+        promptHandler(surface.paneID)
+        titleHandler(PaneID(), "non-owned automatic")
+        tabTitleHandler(PaneID(), "non-owned override")
+        promptHandler(PaneID())
+
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == storeAfterClose)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting == displayedTitlesAfterClose
+        )
+        #expect(tabBar.editedTabIDForTesting == nil)
+    }
+
+    @Test
+    func setTabTitlePersistsOverrideWhileAutomaticTitleContinuesUpdatingUnderIt() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tabID = activeTab(of: coordinator).id
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("initial automatic".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+        persistence.reset()
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .tabTitle,
+                bytes: Array("Pinned 🧷".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(persistence.snapshots.count == 1)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tabID)?.titleOverride == "Pinned 🧷")
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tabID] == "Pinned 🧷"
+        )
+        persistence.reset()
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("latest automatic 🚦".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.currentTitle == "latest automatic 🚦")
+        #expect(persistence.snapshots.isEmpty)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tabID] == "Pinned 🧷"
+        )
+
+        #expect(surface.scheduleTitleCallbackForTesting(.tabTitle, bytes: []))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(persistence.snapshots.count == 1)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tabID)?.titleOverride == nil)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .displayedTitlesForTesting[tabID] == "latest automatic 🚦"
+        )
     }
 
     @Test

@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class TabItemView: NSCollectionViewItem {
+final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     struct DisplayState: Equatable {
         enum BackgroundStyle: Equatable {
             case transparent
@@ -20,10 +20,18 @@ final class TabItemView: NSCollectionViewItem {
 
     private let backgroundView = TabItemBackgroundView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let renameEditor = NSTextField(string: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let broadcastIndicator = NSImageView()
     private let closeButton = NSButton()
+    private struct RenameSession {
+        let commit: (String) -> Void
+        let finish: () -> Void
+    }
+
     private var closeHandler: (() -> Void)?
+    private var renameSession: RenameSession?
+    private var isStartingRename = false
     private var tabIndex = 0
     private var isBroadcasting = false
 
@@ -36,6 +44,17 @@ final class TabItemView: NSCollectionViewItem {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        renameEditor.isBordered = false
+        renameEditor.drawsBackground = false
+        renameEditor.focusRingType = .none
+        renameEditor.font = titleLabel.font
+        renameEditor.lineBreakMode = .byTruncatingTail
+        renameEditor.maximumNumberOfLines = 1
+        renameEditor.usesSingleLineMode = true
+        renameEditor.delegate = self
+        renameEditor.isHidden = true
+        renameEditor.translatesAutoresizingMaskIntoConstraints = false
 
         shortcutLabel.alignment = .right
         shortcutLabel.font = .monospacedDigitSystemFont(
@@ -71,6 +90,7 @@ final class TabItemView: NSCollectionViewItem {
         }
 
         backgroundView.addSubview(titleLabel)
+        backgroundView.addSubview(renameEditor)
         backgroundView.addSubview(shortcutLabel)
         backgroundView.addSubview(broadcastIndicator)
         backgroundView.addSubview(closeButton)
@@ -98,6 +118,9 @@ final class TabItemView: NSCollectionViewItem {
                 lessThanOrEqualTo: shortcutLabel.leadingAnchor,
                 constant: -4
             ),
+            renameEditor.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            renameEditor.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            renameEditor.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
         ])
     }
 
@@ -113,9 +136,10 @@ final class TabItemView: NSCollectionViewItem {
         beginSelectionHandler: @escaping (TabSelectionModel.Gesture) -> Void,
         finishSelectionHandler: @escaping () -> Void,
         closeHandler: @escaping () -> Void,
+        renameHandler: @escaping () -> Void,
         menuProvider: @escaping () -> NSMenu
     ) {
-        titleLabel.stringValue = title
+        updateTitle(title)
         self.tabIndex = tabIndex
         self.isBroadcasting = isBroadcasting
         backgroundView.isActive = isActive
@@ -125,11 +149,69 @@ final class TabItemView: NSCollectionViewItem {
         backgroundView.dragSessionGenerationProvider = dragSessionGenerationProvider
         backgroundView.beginSelectionHandler = beginSelectionHandler
         backgroundView.finishSelectionHandler = finishSelectionHandler
+        backgroundView.plainDoubleClickHandler = renameHandler
         backgroundView.menuProvider = menuProvider
         self.closeHandler = closeHandler
+        updatePresentation()
+    }
+
+    func updateTitle(_ title: String) {
+        titleLabel.stringValue = title
         view.toolTip = title
         view.identifier = NSUserInterfaceItemIdentifier("tab-\(title)")
-        updatePresentation()
+    }
+
+    func beginRenaming(
+        title: String,
+        commit: @escaping (String) -> Void,
+        finish: @escaping () -> Void
+    ) {
+        guard renameSession == nil else { return }
+        renameSession = RenameSession(commit: commit, finish: finish)
+        renameEditor.stringValue = title
+        titleLabel.isHidden = true
+        renameEditor.isHidden = false
+        isStartingRename = true
+        view.window?.makeFirstResponder(renameEditor)
+        renameEditor.selectText(nil)
+        isStartingRename = false
+    }
+
+    func cancelRenaming() {
+        finishRenaming(commit: false)
+    }
+
+    override func prepareForReuse() {
+        cancelRenaming()
+        closeHandler = nil
+        backgroundView.beginSelectionHandler = nil
+        backgroundView.finishSelectionHandler = nil
+        backgroundView.plainDoubleClickHandler = nil
+        backgroundView.menuProvider = nil
+        renameEditor.stringValue = ""
+        super.prepareForReuse()
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard !isStartingRename else { return }
+        finishRenaming(commit: true)
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            finishRenaming(commit: true)
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            finishRenaming(commit: false)
+            return true
+        default:
+            return false
+        }
     }
 
     static func displayState(
@@ -164,10 +246,49 @@ final class TabItemView: NSCollectionViewItem {
         var backgroundViewForTesting: TabItemBackgroundView {
             backgroundView
         }
+
+        var renameEditorForTesting: NSTextField? {
+            renameEditor
+        }
+
+        var isRenamingForTesting: Bool {
+            renameSession != nil
+        }
+
+        var latestDisplayedTitleForTesting: String {
+            titleLabel.stringValue
+        }
+
+        var visibleTitleForTesting: String? {
+            titleLabel.isHidden ? nil : titleLabel.stringValue
+        }
+
+        func invokeRenameCommandForTesting(_ commandSelector: Selector) {
+            _ = control(renameEditor, textView: NSTextView(), doCommandBy: commandSelector)
+        }
+
+        func endRenameEditingForTesting() {
+            controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+        }
     #endif
 
     @objc private func closeTab() {
         closeHandler?()
+    }
+
+    private func finishRenaming(commit shouldCommit: Bool) {
+        guard let renameSession else { return }
+        self.renameSession = nil
+        let value = renameEditor.stringValue
+        titleLabel.isHidden = false
+        renameEditor.isHidden = true
+        if renameEditor.currentEditor() != nil {
+            view.window?.makeFirstResponder(nil)
+        }
+        if shouldCommit {
+            renameSession.commit(value)
+        }
+        renameSession.finish()
     }
 
     private func updatePresentation() {
@@ -211,6 +332,7 @@ final class TabItemBackgroundView: NSView {
     }
     var beginSelectionHandler: ((TabSelectionModel.Gesture) -> Void)?
     var finishSelectionHandler: (() -> Void)?
+    var plainDoubleClickHandler: (() -> Void)?
     var dragSessionGenerationProvider: () -> Int = { 0 }
     var menuProvider: (() -> NSMenu)?
     var onHoverChanged: (() -> Void)?
@@ -277,6 +399,7 @@ final class TabItemBackgroundView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let doubleClickHandler = plainDoubleClickHandler
         let gesture: TabSelectionModel.Gesture
         if event.modifierFlags.contains(.shift) {
             gesture = .shiftClick
@@ -286,9 +409,13 @@ final class TabItemBackgroundView: NSView {
             gesture = .click
         }
         guard gesture == .click, isPartOfMultiSelection else {
+            let dragSessionGeneration = dragSessionGenerationProvider()
             beginSelectionHandler?(gesture)
             super.mouseDown(with: nativeSelectionMouseDownEvent(from: event, gesture: gesture))
             finishSelectionHandler?()
+            if isPlainDoubleClick(event), dragSessionGeneration == dragSessionGenerationProvider() {
+                doubleClickHandler?()
+            }
             return
         }
 
@@ -298,6 +425,14 @@ final class TabItemBackgroundView: NSView {
             beginSelectionHandler?(.click)
         }
         finishSelectionHandler?()
+        if isPlainDoubleClick(event), dragSessionGeneration == dragSessionGenerationProvider() {
+            doubleClickHandler?()
+        }
+    }
+
+    private func isPlainDoubleClick(_ event: NSEvent) -> Bool {
+        event.clickCount == 2
+            && event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty
     }
 
     private func nativeSelectionMouseDownEvent(

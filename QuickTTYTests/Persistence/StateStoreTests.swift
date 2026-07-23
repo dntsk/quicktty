@@ -39,6 +39,7 @@ struct StateStoreTests {
                 == .custom("printf 'pending command'")
         )
         #expect(tab.isBroadcasting == false)
+        #expect(tab.titleOverride == nil)
         #expect(
             decoded.normalWindowFrame
                 == NormalWindowFrame(x: 12, y: 34, width: 900, height: 600)
@@ -52,6 +53,49 @@ struct StateStoreTests {
         #expect(object["version"] as? Int == 1)
         #expect(String(decoding: encoded, as: UTF8.self).contains("\"_0\"") == false)
         #expect(try StateMigration.decode(encoded) == decoded)
+    }
+
+    @Test
+    func persistedTitleOverrideKeepsVersionAndSurvivesWorkingDirectoryNormalization() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let literalOverride = " \t猫 👩🏽‍💻\n "
+        let tab = TerminalTab(
+            id: Self.tabID(200),
+            title: "Fallback",
+            titleOverride: literalOverride,
+            pane: TerminalPaneDescriptor(
+                id: Self.paneID(200),
+                cwd: fixture.directoryURL.appending(path: "missing").path
+            )
+        )
+        let workspace = Workspace(
+            id: Self.workspaceID(200),
+            name: "Persisted",
+            tabs: [tab],
+            activeTabID: tab.id
+        )
+        let state = ApplicationState(
+            workspaceStore: try WorkspaceStore(
+                workspaces: [workspace],
+                activeWorkspaceID: workspace.id
+            )
+        )
+        let store = try fixture.makeStore()
+
+        try store.saveNow(state)
+
+        let savedObject = try jsonObject(Data(contentsOf: fixture.stateURL))
+        #expect(savedObject["version"] as? Int == 1)
+        let savedWorkspaces = try #require(savedObject["workspaces"] as? [[String: Any]])
+        let savedTabs = try #require(savedWorkspaces.first?["tabs"] as? [[String: Any]])
+        #expect(savedTabs.first?["title"] as? String == "Fallback")
+        #expect(savedTabs.first?["titleOverride"] as? String == literalOverride)
+
+        let restoredTab = try #require(store.load().workspaceStore.tab(id: tab.id))
+        #expect(restoredTab.title == "Fallback")
+        #expect(restoredTab.titleOverride == literalOverride)
+        #expect(restoredTab.paneDescriptors.first?.cwd == fixture.homeURL.path)
     }
 
     @Test

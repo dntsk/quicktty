@@ -65,10 +65,13 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID], TabID) -> Bool)?
     var onFinishReorderTabs: (() -> Void)?
+    var onRenameTab: ((TabID, String) -> Void)?
+    var onRenameEditingChanged: ((Bool) -> Void)?
 
     private let collectionView = NSCollectionView()
     private let collectionViewLayout = NSCollectionViewFlowLayout()
     private var tabs: [TerminalTab] = []
+    private var displayedTitles: [TabID: String] = [:]
     private var destinations: [WorkspaceDestination] = []
     private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
@@ -77,6 +80,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var hasAppliedPresentation = false
     private var lastAppliedActiveTabID: TabID?
     private var pendingReorder: PendingReorder?
+    private var editedTabID: TabID?
 
     override func loadView() {
         let rootView = NSView()
@@ -130,22 +134,59 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     func apply(
         tabs: [TerminalTab],
         activeTabID: TabID?,
-        destinations: [WorkspaceDestination]
+        destinations: [WorkspaceDestination],
+        displayedTitles: [TabID: String] = [:]
     ) {
-        let previousTabs = self.tabs
-        let previousDestinations = self.destinations
-        let previousSelection = selection
+        let resolvedTitles = Self.resolvedDisplayedTitles(
+            for: tabs,
+            displayedTitles: displayedTitles
+        )
+        var synchronizedSelection = selection
+        synchronizedSelection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
+        let needsReload =
+            !hasAppliedPresentation || self.tabs != tabs
+            || self.displayedTitles != resolvedTitles
+            || self.destinations != destinations
+            || selection != synchronizedSelection
+        guard needsReload else { return }
+
+        cancelRename()
         self.tabs = tabs
+        self.displayedTitles = resolvedTitles
         self.destinations = destinations
-        selection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
+        selection = synchronizedSelection
         lastAppliedActiveTabID = selection.activeTabID
         updateLayoutMetrics()
-        guard
-            !hasAppliedPresentation || previousTabs != tabs || previousDestinations != destinations
-                || previousSelection != selection
-        else { return }
         hasAppliedPresentation = true
         reloadCollectionView()
+    }
+
+    func refreshDisplayedTitles(_ displayedTitles: [TabID: String]) {
+        let resolvedTitles = Self.resolvedDisplayedTitles(
+            for: tabs,
+            displayedTitles: displayedTitles
+        )
+        guard resolvedTitles != self.displayedTitles else { return }
+        self.displayedTitles = resolvedTitles
+        guard isViewLoaded else { return }
+
+        for indexPath in collectionView.indexPathsForVisibleItems()
+        where tabs.indices.contains(indexPath.item) {
+            guard let item = collectionView.item(at: indexPath) as? TabItemView else { continue }
+            let tab = tabs[indexPath.item]
+            item.updateTitle(resolvedTitles[tab.id] ?? tab.title)
+        }
+    }
+
+    private static func resolvedDisplayedTitles(
+        for tabs: [TerminalTab],
+        displayedTitles: [TabID: String]
+    ) -> [TabID: String] {
+        Dictionary(
+            uniqueKeysWithValues: tabs.map { tab in
+                (tab.id, displayedTitles[tab.id] ?? tab.titleOverride ?? tab.title)
+            }
+        )
     }
 
     func clearSelectionAfterMove() {
@@ -158,6 +199,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             tabs
         }
 
+        var displayedTitlesForTesting: [TabID: String] {
+            displayedTitles
+        }
+
         var selectedTabIDsInOrderForTesting: [TabID] {
             selection.selectedTabIDsInOrder
         }
@@ -168,6 +213,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         var activeTabIDForTesting: TabID? {
             selection.activeTabID
+        }
+
+        var editedTabIDForTesting: TabID? {
+            editedTabID
         }
 
         var dragSessionGenerationForTesting: Int {
@@ -207,6 +256,14 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         func recordDragSessionStartForTesting() {
             recordDragSessionStart()
         }
+
+        func beginRenameForTesting(_ tabID: TabID) {
+            beginRename(tabID)
+        }
+
+        func cancelRenameForTesting() {
+            cancelRename()
+        }
     #endif
 
     func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
@@ -235,7 +292,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             selection.selectedTabIDs.count > 1
             && selection.selectedTabIDs.contains(tab.id)
         item.configure(
-            title: tab.title,
+            title: displayedTitles[tab.id] ?? tab.title,
             tabIndex: indexPath.item,
             isActive: selection.activeTabID == tab.id,
             isSelected: selection.selectedTabIDs.contains(tab.id),
@@ -253,6 +310,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             },
             closeHandler: { [weak self] in
                 self?.onCloseTab?(tab.id)
+            },
+            renameHandler: { [weak self] in
+                self?.beginRename(tab.id)
             },
             menuProvider: { [weak self] in
                 self?.contextMenu(for: tab.id) ?? NSMenu()
@@ -394,6 +454,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     private func reloadCollectionView() {
+        cancelRename()
         dataReloadGeneration += 1
         collectionView.reloadData()
         collectionView.layoutSubtreeIfNeeded()
@@ -416,6 +477,16 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         }
 
         let menu = NSMenu()
+        let rename = NSMenuItem(
+            title: "Rename Tab…",
+            action: #selector(renameTab(_:)),
+            keyEquivalent: ""
+        )
+        rename.target = self
+        rename.representedObject = tabID.rawValue as NSUUID
+        menu.addItem(rename)
+        menu.addItem(.separator())
+
         let isBroadcasting = tabs.first(where: { $0.id == tabID })?.isBroadcasting ?? false
         let broadcast = NSMenuItem(
             title: "Broadcast Input",
@@ -487,6 +558,56 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private static func areEqual(_ lhs: NSEdgeInsets, _ rhs: NSEdgeInsets) -> Bool {
         lhs.top == rhs.top && lhs.left == rhs.left && lhs.bottom == rhs.bottom
             && lhs.right == rhs.right
+    }
+
+    func beginRename(_ tabID: TabID) {
+        guard pendingReorder == nil,
+            let index = tabs.firstIndex(where: { $0.id == tabID })
+        else { return }
+        if editedTabID == tabID { return }
+        cancelRename()
+        guard
+            let item = collectionView.item(
+                at: IndexPath(item: index, section: 0)
+            ) as? TabItemView
+        else { return }
+
+        editedTabID = tabID
+        onRenameEditingChanged?(true)
+        item.beginRenaming(
+            title: displayedTitles[tabID] ?? tabs[index].title,
+            commit: { [weak self] title in
+                guard self?.editedTabID == tabID else { return }
+                self?.onRenameTab?(tabID, title)
+            },
+            finish: { [weak self] in
+                self?.finishRename(tabID)
+            }
+        )
+    }
+
+    func cancelRename() {
+        guard let editedTabID else { return }
+        if let index = tabs.firstIndex(where: { $0.id == editedTabID }),
+            let item = collectionView.item(
+                at: IndexPath(item: index, section: 0)
+            ) as? TabItemView
+        {
+            item.cancelRenaming()
+            return
+        }
+        finishRename(editedTabID)
+    }
+
+    private func finishRename(_ tabID: TabID) {
+        guard editedTabID == tabID else { return }
+        editedTabID = nil
+        onRenameEditingChanged?(false)
+    }
+
+    @objc private func renameTab(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? NSUUID else { return }
+        beginRename(TabID(rawValue: rawID as UUID))
     }
 
     @objc private func toggleBroadcast() {

@@ -325,6 +325,9 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     )
     case close(processAlive: Bool)
     case mouseShapeChanged(GhosttyMouseShape)
+    case titleChanged(String)
+    case tabTitleChanged(String)
+    case tabTitlePrompt
     case pwdChanged(String)
 }
 
@@ -360,6 +363,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private var currentMouseShape: GhosttyMouseShape = .text
     private var lastPerformKeyEvent: TimeInterval?
     private(set) var isActive = false
+    private(set) var currentTitle: String?
     private(set) var currentWorkingDirectory: String?
 
     var latestWorkingDirectoryForPersistence: String? {
@@ -714,6 +718,36 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         ) -> Bool {
             callbackContextOwnership?.takeUnretainedValue()
                 .scheduleWorkingDirectoryChange(workingDirectory) ?? false
+        }
+
+        @discardableResult
+        func scheduleTitleCallbackForTesting(
+            _ kind: GhosttyTitleCallbackKindForTesting,
+            bytes: [UInt8]?,
+            target: GhosttyTitleCallbackTargetForTesting = .surface,
+            overwritePayloadAfterCallback: Bool = false
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeTitleCallbackForTesting(
+                surface: surface,
+                kind: kind,
+                bytes: bytes,
+                target: target,
+                overwritePayloadAfterCallback: overwritePayloadAfterCallback
+            )
+        }
+
+        @discardableResult
+        func schedulePromptTitleCallbackForTesting(
+            _ kind: GhosttyPromptTitleKindForTesting,
+            target: GhosttyTitleCallbackTargetForTesting = .surface
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimePromptTitleCallbackForTesting(
+                surface: surface,
+                kind: kind,
+                target: target
+            )
         }
 
     #endif
@@ -1711,6 +1745,10 @@ extension GhosttySurfaceView {
             break
         case .mouseShapeChanged(let shape):
             updateMouseShape(shape)
+        case .titleChanged(let title):
+            currentTitle = title
+        case .tabTitleChanged, .tabTitlePrompt:
+            break
         case .pwdChanged(let workingDirectory):
             currentWorkingDirectory = workingDirectory
         }
@@ -1859,6 +1897,9 @@ final class SurfaceCallbackContext: Sendable {
         var isActive = true
         var pendingProcessAlive: Bool?
         var pendingMouseShape: GhosttyMouseShape?
+        var pendingTitle: String?
+        var pendingTabTitles: [String] = []
+        var pendingTabTitlePromptCount = 0
         var pendingWorkingDirectory: String?
         var reads: [UInt: PendingRead] = [:]
         var writes: [UUID: GhosttyClipboardConfirmationRequest] = [:]
@@ -1881,6 +1922,9 @@ final class SurfaceCallbackContext: Sendable {
             state.isActive = false
             state.pendingProcessAlive = nil
             state.pendingMouseShape = nil
+            state.pendingTitle = nil
+            state.pendingTabTitles.removeAll()
+            state.pendingTabTitlePromptCount = 0
             state.pendingWorkingDirectory = nil
             let tokens = Array(state.reads.keys)
             state.reads.removeAll()
@@ -2062,6 +2106,60 @@ final class SurfaceCallbackContext: Sendable {
     }
 
     @discardableResult
+    func scheduleTitleChange(_ title: String) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingTitle == nil
+            state.pendingTitle = title
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverTitleChangeIfActive()
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    func scheduleTabTitleChange(_ title: String) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingTabTitles.isEmpty
+            state.pendingTabTitles.append(title)
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverTabTitleChangesIfActive()
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    func scheduleTabTitlePrompt() -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingTabTitlePromptCount == 0
+            state.pendingTabTitlePromptCount += 1
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverTabTitlePromptsIfActive()
+            }
+        }
+        return true
+    }
+
+    @discardableResult
     func scheduleWorkingDirectoryChange(_ workingDirectory: String) -> Bool {
         let result = state.withLock { state in
             guard state.isActive else { return (accepted: false, shouldSchedule: false) }
@@ -2143,6 +2241,48 @@ final class SurfaceCallbackContext: Sendable {
         }
         guard let shape else { return }
         eventHandler(paneID, .mouseShapeChanged(shape))
+    }
+
+    @MainActor
+    private func deliverTitleChangeIfActive() {
+        let title = state.withLock { state -> String? in
+            guard state.isActive else { return nil }
+            let title = state.pendingTitle
+            state.pendingTitle = nil
+            return title
+        }
+        guard let title else { return }
+        eventHandler(paneID, .titleChanged(title))
+    }
+
+    @MainActor
+    private func deliverTabTitleChangesIfActive() {
+        let titles = state.withLock { state -> [String] in
+            guard state.isActive else { return [] }
+            let titles = state.pendingTabTitles
+            state.pendingTabTitles.removeAll()
+            return titles
+        }
+        for title in titles {
+            let isActive = state.withLock { $0.isActive }
+            guard isActive else { return }
+            eventHandler(paneID, .tabTitleChanged(title))
+        }
+    }
+
+    @MainActor
+    private func deliverTabTitlePromptsIfActive() {
+        let count = state.withLock { state -> Int in
+            guard state.isActive else { return 0 }
+            let count = state.pendingTabTitlePromptCount
+            state.pendingTabTitlePromptCount = 0
+            return count
+        }
+        for _ in 0..<count {
+            let isActive = state.withLock { $0.isActive }
+            guard isActive else { return }
+            eventHandler(paneID, .tabTitlePrompt)
+        }
     }
 
     @MainActor

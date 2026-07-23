@@ -146,6 +146,55 @@ struct TerminalTabTests {
     }
 
     @Test
+    func titleOverrideRoundTripsSeparatelyFromFallbackAndOlderJSONDefaultsToNil() throws {
+        let literalOverride = "  猫 👩🏽‍💻  "
+        let tab = TerminalTab(
+            id: tabID(1),
+            title: "Fallback",
+            titleOverride: literalOverride,
+            pane: descriptor(paneID(1))
+        )
+
+        var object = try encodedObject(tab)
+        #expect(object["title"] as? String == "Fallback")
+        #expect(object["titleOverride"] as? String == literalOverride)
+
+        let decoded = try JSONDecoder().decode(
+            TerminalTab.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.title == "Fallback")
+        #expect(decoded.titleOverride == literalOverride)
+
+        object.removeValue(forKey: "titleOverride")
+        let decodedOlderJSON = try JSONDecoder().decode(
+            TerminalTab.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decodedOlderJSON.title == "Fallback")
+        #expect(decodedOlderJSON.titleOverride == nil)
+    }
+
+    @Test
+    func titleOverrideMutationClearsOnlyExactEmptyAndSurvivesDescriptorMapping() throws {
+        var tab = TerminalTab(title: "Fallback", pane: descriptor(paneID(1)))
+        let literalOverride = " \t猫 👩🏽‍💻\n "
+
+        tab.setTitleOverride(literalOverride)
+        let mapped = try tab.mappingPaneDescriptors { $0 }
+
+        #expect(tab.title == "Fallback")
+        #expect(tab.titleOverride == literalOverride)
+        #expect(mapped.titleOverride == literalOverride)
+
+        tab.setTitleOverride("   ")
+        #expect(tab.titleOverride == "   ")
+
+        tab.setTitleOverride("")
+        #expect(tab.titleOverride == nil)
+    }
+
+    @Test
     func splitPaneUpdatesLayoutDescriptorsAndFocusAtomically() throws {
         let firstPaneID = paneID(1)
         let secondPaneID = paneID(2)

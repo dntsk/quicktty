@@ -13,6 +13,7 @@ enum TerminalTabError: Error, Equatable, Sendable {
 struct TerminalTab: Codable, Equatable, Sendable {
     let id: TabID
     var title: String
+    private(set) var titleOverride: String?
     private(set) var root: SplitNode
     private(set) var paneDescriptors: [TerminalPaneDescriptor]
     private(set) var activePaneID: PaneID
@@ -21,6 +22,7 @@ struct TerminalTab: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case title
+        case titleOverride
         case root
         case paneDescriptors
         case activePaneID
@@ -29,6 +31,7 @@ struct TerminalTab: Codable, Equatable, Sendable {
     init(
         id: TabID = TabID(),
         title: String,
+        titleOverride: String? = nil,
         root: SplitNode,
         paneDescriptors: [TerminalPaneDescriptor],
         activePaneID: PaneID? = nil,
@@ -44,6 +47,7 @@ struct TerminalTab: Codable, Equatable, Sendable {
 
         self.id = id
         self.title = title
+        self.titleOverride = titleOverride
         self.root = root
         self.paneDescriptors = paneDescriptors
         self.activePaneID = activePaneID.flatMap { leaves.contains($0) ? $0 : nil } ?? firstPaneID
@@ -53,10 +57,12 @@ struct TerminalTab: Codable, Equatable, Sendable {
     init(
         id: TabID = TabID(),
         title: String,
+        titleOverride: String? = nil,
         pane: TerminalPaneDescriptor
     ) {
         self.id = id
         self.title = title
+        self.titleOverride = titleOverride
         root = .pane(pane.id)
         paneDescriptors = [pane]
         activePaneID = pane.id
@@ -79,6 +85,7 @@ struct TerminalTab: Codable, Equatable, Sendable {
             try self.init(
                 id: container.decode(TabID.self, forKey: .id),
                 title: container.decode(String.self, forKey: .title),
+                titleOverride: container.decodeIfPresent(String.self, forKey: .titleOverride),
                 root: decodedRoot,
                 paneDescriptors: decodedDescriptors,
                 activePaneID: decodedActivePaneID
@@ -120,6 +127,7 @@ struct TerminalTab: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(titleOverride, forKey: .titleOverride)
         try container.encode(root, forKey: .root)
         try container.encode(paneDescriptors, forKey: .paneDescriptors)
         try container.encode(encodedActivePaneID, forKey: .activePaneID)
@@ -135,11 +143,16 @@ struct TerminalTab: Codable, Equatable, Sendable {
         try TerminalTab(
             id: id,
             title: title,
+            titleOverride: titleOverride,
             root: root,
             paneDescriptors: paneDescriptors.map(transform),
             activePaneID: activePaneID,
             isBroadcasting: isBroadcasting
         )
+    }
+
+    mutating func setTitleOverride(_ titleOverride: String) {
+        self.titleOverride = titleOverride.isEmpty ? nil : titleOverride
     }
 
     func validateInvariant() throws {

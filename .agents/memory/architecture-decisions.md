@@ -136,3 +136,12 @@
 - **Решение:** QuickTTY обрабатывает только surface-targeted `mouse_shape` и app-lifetime `open_url`. Cursor хранится локально в `GhosttySurfaceView` и применяется через cursor rects; stable URL payload открывается узким injectable MainActor client по upstream macOS policy. `mouse_over_link`, preview UI и keyboard action `open-url` не добавляются; существующий `copy-url` не меняется.
 - **Отклонено:** First-party URL parser/hit testing; preview popup/state; `NSCursor.push/pop/set`; allowlist URL schemes; новый shortcut для открытия ссылки.
 - **Последствия:** `Cmd+hover`/`Cmd+click` полностью следуют detection Ghostty, custom schemes разрешены, accepted action не запускает Ghostty fallback второй раз, а cursor state и teardown изолированы по surface.
+
+## Opaque Ghostty title отделён от persisted manual override
+
+- **Дата:** 2026-07-23
+- **Статус:** принято
+- **Контекст:** Ghostty уже формирует terminal/PWD/shell-integration title, а ручное имя tab должно переживать restart и иметь стабильный приоритет. Automatic title часто меняется и может содержать произвольный Unicode или текст агента.
+- **Решение:** QuickTTY принимает title как opaque strict UTF-8 строку, хранит automatic value только у live surface и отдельно сериализует exact manual override. Effective title: override, затем live title активной pane, затем существующий `Shell`/`Config` fallback. AI-specific parsing, protocol, icons, badges и status model пока не вводятся.
+- **Отклонено:** Persist automatic title; смешивать automatic и manual значения в одном поле; разбирать команды, пути или agent status; выбирать AI protocol без отдельного дизайна.
+- **Последствия:** Empty string снимает override, whitespace/Unicode/emoji сохраняются буквально; inactive split/workspace titles остаются surface-local. Raw OSC title уже совместим с будущим agent status text, но структурированная agent-aware интеграция остаётся отдельным решением.

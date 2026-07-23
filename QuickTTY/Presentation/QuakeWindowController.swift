@@ -591,6 +591,10 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         var hasTransientInteractionForTesting: Bool {
             hasTransientInteraction
         }
+
+        var transientInteractionCountForTesting: Int {
+            transientInteractionIDs.count
+        }
     #endif
 }
 

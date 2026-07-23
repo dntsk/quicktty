@@ -50,6 +50,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var configuredGlobalChord = ShortcutChord(key: .f12)
     private var configEditor = "nano"
     private var workspaceMenuTransientInteraction: QuakeWindowController.TransientInteraction?
+    private var tabRenameTransientInteraction: QuakeWindowController.TransientInteraction?
+    private var isTabRenameEditing = false
+    private var isPreparingForTermination = false
 
     #if DEBUG
         private var failsNextStartupModelMutationForTesting = false
@@ -205,6 +208,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
             self?.surfaceDidBecomeFirstResponder(id: paneID)
         }
+        ghosttyBridge.surfaceTitleHandler = { [weak self] paneID, _ in
+            self?.surfaceTitleDidChange(id: paneID)
+        }
+        ghosttyBridge.surfaceTabTitleHandler = { [weak self] paneID, title in
+            self?.surfaceTabTitleDidChange(id: paneID, title: title)
+        }
+        ghosttyBridge.surfaceTabTitlePromptHandler = { [weak self] paneID in
+            self?.surfaceDidRequestTabTitlePrompt(id: paneID)
+        }
         ghosttyBridge.surfaceWorkingDirectoryHandler = { [weak self] paneID, workingDirectory in
             self?.surfaceWorkingDirectoryDidChange(id: paneID, workingDirectory: workingDirectory)
         }
@@ -234,6 +246,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         prepareForApplicationTermination()
         try? hotKeyController.unregister()
         ghosttyBridge.surfaceFocusHandler = nil
+        ghosttyBridge.surfaceTitleHandler = nil
+        ghosttyBridge.surfaceTabTitleHandler = nil
+        ghosttyBridge.surfaceTabTitlePromptHandler = nil
         ghosttyBridge.surfaceWorkingDirectoryHandler = nil
         ghosttyBridge.inputTargetProvider = { [$0] }
         ghosttyBridge.clipboardConfirmationHandler = nil
@@ -332,6 +347,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceStore = candidate
         persistWorkspaceStore(workspaceStore)
         return true
+    }
+
+    private func surfaceTitleDidChange(id paneID: PaneID) {
+        guard liveOwningTab(for: paneID) != nil else { return }
+        refreshWorkspaceTitlePresentation()
+    }
+
+    private func surfaceTabTitleDidChange(id paneID: PaneID, title: String) {
+        guard let tab = liveOwningTab(for: paneID) else { return }
+        var candidate = workspaceStore
+        guard (try? candidate.setTitleOverride(title, for: tab.id)) != nil else { return }
+        _ = commitWorkspaceStore(candidate)
+        refreshWorkspaceTitlePresentation()
+    }
+
+    private func surfaceDidRequestTabTitlePrompt(id paneID: PaneID) {
+        guard let tab = liveOwningTab(for: paneID), tab.id == activeTab?.id else { return }
+        workspaceViewController.presentTabTitlePrompt(for: tab.id)
     }
 
     private func surfaceWorkingDirectoryDidChange(
@@ -500,7 +533,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 in: workspaceID
             )
             guard commitWorkspaceStore(candidate) else { return }
-            workspaceViewController.apply(workspaceStore)
+            workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
             if let surface = activePaneID.flatMap({ surfaces[$0] }), let paneID = activePaneID {
                 focus(surface, paneID: paneID)
             }
@@ -848,7 +881,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         surfaceFailures.removeValue(forKey: paneID)
         guard ownerWorkspaceWasActive else { return }
         guard ownerTabWasActive else {
-            workspaceViewController.apply(workspaceStore)
+            workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
             return
         }
 
@@ -895,6 +928,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         } catch {
             onError(error)
         }
+        synchronizeTabRenameTransientInteraction()
     }
 
     func togglePresentationMode() {
@@ -909,6 +943,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         } catch {
             onError(error)
         }
+        synchronizeTabRenameTransientInteraction()
     }
 
     private func configurePresentationCallbacks() {
@@ -957,6 +992,45 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onFinishReorderTabs = { [weak self] in
             self?.finishTabReorder()
         }
+        workspaceViewController.onRenameTab = { [weak self] tabID, title in
+            self?.commitTabRename(tabID, title: title)
+        }
+        workspaceViewController.onRenameEditingChanged = { [weak self] isEditing in
+            self?.setTabRenameEditing(isEditing)
+        }
+    }
+
+    private func commitTabRename(_ tabID: TabID, title: String) {
+        guard
+            let workspace = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID),
+            let tab = workspace.tabs.first(where: { $0.id == tabID }),
+            surfaces[tab.activePaneID] != nil
+        else { return }
+        var candidate = workspaceStore
+        guard (try? candidate.setTitleOverride(title, for: tabID)) != nil else { return }
+        _ = commitWorkspaceStore(candidate)
+        refreshWorkspaceTitlePresentation()
+    }
+
+    private func setTabRenameEditing(_ isEditing: Bool) {
+        guard isEditing != isTabRenameEditing else { return }
+        isTabRenameEditing = isEditing
+        synchronizeTabRenameTransientInteraction()
+        guard !isEditing, !isPreparingForTermination,
+            let paneID = activePaneID,
+            let surface = surfaces[paneID]
+        else { return }
+        focus(surface, paneID: paneID)
+    }
+
+    private func synchronizeTabRenameTransientInteraction() {
+        if isTabRenameEditing, presentationMode == .quake {
+            guard tabRenameTransientInteraction == nil else { return }
+            tabRenameTransientInteraction = quakeWindowController.beginTransientInteraction()
+            return
+        }
+        tabRenameTransientInteraction?.end()
+        tabRenameTransientInteraction = nil
     }
 
     private func setWorkspaceMenuTracking(_ isTracking: Bool) {
@@ -1040,11 +1114,37 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         activeTab?.activePaneID
     }
 
+    private var liveSurfaceTitles: [PaneID: String] {
+        Dictionary(
+            uniqueKeysWithValues: surfaces.compactMap { entry in
+                guard let title = entry.value.currentTitle else { return nil }
+                return (entry.key, title)
+            }
+        )
+    }
+
+    private func liveOwningTab(for paneID: PaneID) -> TerminalTab? {
+        guard surfaces[paneID] != nil else { return nil }
+        for workspace in workspaceStore.workspaces {
+            if let tab = workspace.tabs.first(where: { $0.root.contains(paneID) }) {
+                return tab
+            }
+        }
+        return nil
+    }
+
+    private func refreshWorkspaceTitlePresentation() {
+        workspaceViewController.refreshTabTitles(
+            in: workspaceStore,
+            liveTitles: liveSurfaceTitles
+        )
+    }
+
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
         #if DEBUG
             refreshWorkspacePresentationInvocationCountForTestingStorage += 1
         #endif
-        workspaceViewController.apply(workspaceStore)
+        workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
         let activePaneIDs = activeTab?.root.leaves ?? []
         let activeTabSurfaces = Dictionary(
             uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
@@ -1592,6 +1692,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             workspaceMenuTransientInteraction != nil
         }
 
+        var isTabRenameEditingForTesting: Bool {
+            isTabRenameEditing
+        }
+
+        var quakeTransientInteractionCountForTesting: Int {
+            quakeWindowController.transientInteractionCountForTesting
+        }
+
         var activeSurfaceForTesting: GhosttySurfaceView? {
             activePaneID.flatMap { surfaces[$0] }
         }
@@ -1772,6 +1880,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func tearDownSurfaces() {
+        isPreparingForTermination = true
+        workspaceViewController.cancelTabRename()
+        tabRenameTransientInteraction?.end()
+        tabRenameTransientInteraction = nil
+        isTabRenameEditing = false
         endWorkspaceMenuTracking()
         _ = activeWindow?.makeFirstResponder(nil)
         workspaceViewController.displayTerminal(

@@ -98,6 +98,249 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func titleCallbacksCopyStrictUTF8AndInvokeTypedHandlersOnce() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var surfaceTitles: [(PaneID, String)] = []
+        var tabTitles: [(PaneID, String)] = []
+        var promptPaneIDs: [PaneID] = []
+        var titleAtObservation: String?
+        bridge.surfaceTitleHandler = { paneID, title in
+            surfaceTitles.append((paneID, title))
+            titleAtObservation = surface.currentTitle
+        }
+        bridge.surfaceTabTitleHandler = { paneID, title in
+            tabTitles.append((paneID, title))
+        }
+        bridge.surfaceTabTitlePromptHandler = { paneID in
+            promptPaneIDs.append(paneID)
+        }
+
+        #expect(surface.currentTitle == nil)
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("build 🚀".utf8),
+                overwritePayloadAfterCallback: true
+            )
+        )
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .tabTitle,
+                bytes: Array("manual 🧭".utf8),
+                overwritePayloadAfterCallback: true
+            )
+        )
+        #expect(surface.scheduleTitleCallbackForTesting(.tabTitle, bytes: []))
+        #expect(surface.schedulePromptTitleCallbackForTesting(.tab))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.currentTitle == "build 🚀")
+        #expect(titleAtObservation == "build 🚀")
+        #expect(surfaceTitles.count == 1)
+        #expect(surfaceTitles.first?.0 == surface.paneID)
+        #expect(surfaceTitles.first?.1 == "build 🚀")
+        #expect(tabTitles.count == 2)
+        #expect(tabTitles.map(\.0) == [surface.paneID, surface.paneID])
+        #expect(tabTitles.map(\.1) == ["manual 🧭", ""])
+        #expect(promptPaneIDs == [surface.paneID])
+    }
+
+    @Test
+    func titleCallbacksRejectNullInvalidUTF8AndUnsupportedTargets() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(!surface.scheduleTitleCallbackForTesting(.surfaceTitle, bytes: nil))
+        #expect(!surface.scheduleTitleCallbackForTesting(.surfaceTitle, bytes: [0xFF]))
+        #expect(!surface.scheduleTitleCallbackForTesting(.tabTitle, bytes: nil))
+        #expect(!surface.scheduleTitleCallbackForTesting(.tabTitle, bytes: [0xFF]))
+        #expect(
+            !surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("ignored".utf8),
+                target: .app
+            )
+        )
+        #expect(
+            !surface.scheduleTitleCallbackForTesting(
+                .tabTitle,
+                bytes: [],
+                target: .unknown
+            )
+        )
+        #expect(!surface.schedulePromptTitleCallbackForTesting(.surface))
+        #expect(!surface.schedulePromptTitleCallbackForTesting(.tab, target: .app))
+        #expect(!surface.schedulePromptTitleCallbackForTesting(.tab, target: .unknown))
+        #expect(!surface.schedulePromptTitleCallbackForTesting(.unknown))
+        #expect(surface.currentTitle == nil)
+    }
+
+    @Test
+    func automaticTitleCallbacksCoalesceToLatestValue() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var deliveredTitles: [String] = []
+        bridge.surfaceTitleHandler = { _, title in
+            deliveredTitles.append(title)
+        }
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("first".utf8)
+            )
+        )
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("second".utf8)
+            )
+        )
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("final 🟢".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.currentTitle == "final 🟢")
+        #expect(deliveredTitles == ["final 🟢"])
+    }
+
+    @Test
+    func queuedOldTitleEventsDoNotReachSamePaneIDReplacement() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let oldSurface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var surfaceTitles: [(PaneID, String)] = []
+        var tabTitles: [(PaneID, String)] = []
+        var promptPaneIDs: [PaneID] = []
+        bridge.surfaceTitleHandler = { surfaceTitles.append(($0, $1)) }
+        bridge.surfaceTabTitleHandler = { tabTitles.append(($0, $1)) }
+        bridge.surfaceTabTitlePromptHandler = { promptPaneIDs.append($0) }
+
+        #expect(
+            oldSurface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("stale automatic".utf8)
+            )
+        )
+        #expect(
+            oldSurface.scheduleTitleCallbackForTesting(
+                .tabTitle,
+                bytes: Array("stale override".utf8)
+            )
+        )
+        #expect(oldSurface.schedulePromptTitleCallbackForTesting(.tab))
+        bridge.closeSurface(id: paneID)
+        let replacement = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        await Task.yield()
+        await Task.yield()
+
+        #expect(replacement.currentTitle == nil)
+        #expect(surfaceTitles.isEmpty)
+        #expect(tabTitles.isEmpty)
+        #expect(promptPaneIDs.isEmpty)
+
+        #expect(
+            replacement.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("replacement title".utf8)
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(replacement.currentTitle == "replacement title")
+        #expect(surfaceTitles.count == 1)
+        #expect(surfaceTitles.first?.0 == paneID)
+        #expect(surfaceTitles.first?.1 == "replacement title")
+        #expect(tabTitles.isEmpty)
+        #expect(promptPaneIDs.isEmpty)
+    }
+
+    @Test
+    func inactiveSurfaceCallbackContextRejectsTitleEvents() {
+        let context = SurfaceCallbackContext(paneID: PaneID()) { _, _ in }
+
+        context.deactivateAndDrain()
+
+        #expect(!context.scheduleTitleChange("ignored"))
+        #expect(!context.scheduleTabTitleChange(""))
+        #expect(!context.scheduleTabTitlePrompt())
+    }
+
+    @Test
+    func queuedTitleEventsAreDroppedAfterSurfaceTeardown() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var surfaceTitles: [String] = []
+        var tabTitles: [String] = []
+        var promptCount = 0
+        bridge.surfaceTitleHandler = { _, title in
+            surfaceTitles.append(title)
+        }
+        bridge.surfaceTabTitleHandler = { _, title in
+            tabTitles.append(title)
+        }
+        bridge.surfaceTabTitlePromptHandler = { _ in
+            promptCount += 1
+        }
+
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("stale".utf8)
+            )
+        )
+        #expect(
+            surface.scheduleTitleCallbackForTesting(
+                .tabTitle,
+                bytes: Array("stale override".utf8)
+            )
+        )
+        #expect(surface.schedulePromptTitleCallbackForTesting(.tab))
+        bridge.closeSurface(id: surface.paneID)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.currentTitle == nil)
+        #expect(surfaceTitles.isEmpty)
+        #expect(tabTitles.isEmpty)
+        #expect(promptCount == 0)
+        #expect(
+            !surface.scheduleTitleCallbackForTesting(
+                .surfaceTitle,
+                bytes: Array("inactive".utf8)
+            )
+        )
+    }
+
+    @Test
     func resizeUpdatesRealCoreSurfaceMetricsInBackingPixels() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

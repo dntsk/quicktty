@@ -47,6 +47,47 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_SET_TITLE {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface),
+            let titlePointer = action.action.set_title.title,
+            let title = String(validatingCString: titlePointer)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleTitleChange(title)
+    }
+
+    if action.tag == GHOSTTY_ACTION_SET_TAB_TITLE {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface),
+            let titlePointer = action.action.set_tab_title.title,
+            let title = String(validatingCString: titlePointer)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleTabTitleChange(title)
+    }
+
+    if action.tag == GHOSTTY_ACTION_PROMPT_TITLE {
+        guard action.action.prompt_title == GHOSTTY_PROMPT_TITLE_TAB,
+            target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleTabTitlePrompt()
+    }
+
     if action.tag == GHOSTTY_ACTION_MOUSE_SHAPE,
         target.tag == GHOSTTY_TARGET_SURFACE,
         let surface = target.target.surface,
@@ -89,6 +130,99 @@ private func ghosttyRuntimeActionCallback(
 }
 
 #if DEBUG
+    enum GhosttyTitleCallbackKindForTesting {
+        case surfaceTitle
+        case tabTitle
+    }
+
+    enum GhosttyTitleCallbackTargetForTesting {
+        case surface
+        case app
+        case unknown
+    }
+
+    enum GhosttyPromptTitleKindForTesting {
+        case surface
+        case tab
+        case unknown
+    }
+
+    func ghosttyRuntimeTitleCallbackForTesting(
+        surface: ghostty_surface_t,
+        kind: GhosttyTitleCallbackKindForTesting,
+        bytes: [UInt8]?,
+        target: GhosttyTitleCallbackTargetForTesting,
+        overwritePayloadAfterCallback: Bool
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        let callbackTarget = ghostty_target_s(tag: targetTag, target: targetValue)
+
+        func invoke(_ title: UnsafePointer<CChar>?) -> Bool {
+            var payload = ghostty_action_u()
+            let actionTag: ghostty_action_tag_e
+            switch kind {
+            case .surfaceTitle:
+                payload.set_title = ghostty_action_set_title_s(title: title)
+                actionTag = GHOSTTY_ACTION_SET_TITLE
+            case .tabTitle:
+                payload.set_tab_title = ghostty_action_set_title_s(title: title)
+                actionTag = GHOSTTY_ACTION_SET_TAB_TITLE
+            }
+            return ghosttyRuntimeActionCallback(
+                nil,
+                callbackTarget,
+                ghostty_action_s(tag: actionTag, action: payload)
+            )
+        }
+
+        guard var bytes else { return invoke(nil) }
+        bytes.append(0)
+        let accepted = bytes.withUnsafeBytes { buffer in
+            invoke(buffer.baseAddress?.assumingMemoryBound(to: CChar.self))
+        }
+        if overwritePayloadAfterCallback {
+            for index in bytes.indices {
+                bytes[index] = 0
+            }
+        }
+        return accepted
+    }
+
+    func ghosttyRuntimePromptTitleCallbackForTesting(
+        surface: ghostty_surface_t,
+        kind: GhosttyPromptTitleKindForTesting,
+        target: GhosttyTitleCallbackTargetForTesting
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        let promptKind: ghostty_action_prompt_title_e =
+            switch kind {
+            case .surface: GHOSTTY_PROMPT_TITLE_SURFACE
+            case .tab: GHOSTTY_PROMPT_TITLE_TAB
+            case .unknown: ghostty_action_prompt_title_e(rawValue: UInt32.max)
+            }
+        var payload = ghostty_action_u()
+        payload.prompt_title = promptKind
+        return ghosttyRuntimeActionCallback(
+            nil,
+            ghostty_target_s(tag: targetTag, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_PROMPT_TITLE, action: payload)
+        )
+    }
+
     func ghosttyRuntimeMouseShapeCallbackForTesting(
         surface: ghostty_surface_t,
         rawValue: Int32
@@ -184,6 +318,9 @@ final class GhosttyBridge {
     typealias RuntimeActionDeliveryCompletion = @MainActor @Sendable (Bool) -> Void
     typealias SurfaceCloseHandler = GhosttySurfaceCloseHandler
     typealias SurfaceFocusHandler = @MainActor (PaneID) -> Void
+    typealias SurfaceTitleHandler = @MainActor (PaneID, String) -> Void
+    typealias SurfaceTabTitleHandler = @MainActor (PaneID, String) -> Void
+    typealias SurfaceTabTitlePromptHandler = @MainActor (PaneID) -> Void
     typealias SurfaceWorkingDirectoryHandler = @MainActor (PaneID, String) -> Void
     typealias InputTargetProvider = @MainActor (PaneID) -> [PaneID]
 
@@ -201,6 +338,9 @@ final class GhosttyBridge {
 
     var clipboardConfirmationHandler: GhosttyClipboardConfirmationHandler?
     var surfaceFocusHandler: SurfaceFocusHandler?
+    var surfaceTitleHandler: SurfaceTitleHandler?
+    var surfaceTabTitleHandler: SurfaceTabTitleHandler?
+    var surfaceTabTitlePromptHandler: SurfaceTabTitlePromptHandler?
     var surfaceWorkingDirectoryHandler: SurfaceWorkingDirectoryHandler?
     var inputTargetProvider: InputTargetProvider = { [$0] }
 
@@ -649,6 +789,16 @@ final class GhosttyBridge {
         switch event {
         case .close(let processAlive):
             surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+        case .titleChanged(let title):
+            surface.processCallbackEvent(
+                event,
+                confirmationHandler: clipboardConfirmationHandler
+            )
+            surfaceTitleHandler?(paneID, title)
+        case .tabTitleChanged(let title):
+            surfaceTabTitleHandler?(paneID, title)
+        case .tabTitlePrompt:
+            surfaceTabTitlePromptHandler?(paneID)
         case .pwdChanged(let workingDirectory):
             surface.processCallbackEvent(
                 event,

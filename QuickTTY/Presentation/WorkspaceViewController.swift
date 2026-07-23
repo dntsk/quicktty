@@ -17,6 +17,8 @@ final class WorkspaceViewController: NSViewController {
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
     var onReorderTabs: (([TabID], TabID) -> Bool)?
     var onFinishReorderTabs: (() -> Void)?
+    var onRenameTab: ((TabID, String) -> Void)?
+    var onRenameEditingChanged: ((Bool) -> Void)?
 
     let workspaceSelector = WorkspaceSelector()
     let tabBarViewController = TabBarViewController()
@@ -136,6 +138,12 @@ final class WorkspaceViewController: NSViewController {
         tabBarViewController.onFinishReorderTabs = { [weak self] in
             self?.onFinishReorderTabs?()
         }
+        tabBarViewController.onRenameTab = { [weak self] tabID, title in
+            self?.onRenameTab?(tabID, title)
+        }
+        tabBarViewController.onRenameEditingChanged = { [weak self] isEditing in
+            self?.onRenameEditingChanged?(isEditing)
+        }
     }
 
     func applyChromePalette(_ palette: GhosttyChromePalette) {
@@ -159,7 +167,10 @@ final class WorkspaceViewController: NSViewController {
         configurationDiagnosticView.apply(presentation)
     }
 
-    func apply(_ store: WorkspaceStore) {
+    func apply(
+        _ store: WorkspaceStore,
+        liveTitles: [PaneID: String] = [:]
+    ) {
         loadViewIfNeeded()
         workspaceSelector.apply(
             workspaces: store.workspaces,
@@ -174,10 +185,44 @@ final class WorkspaceViewController: NSViewController {
                     name: workspace.name
                 )
         }
+        let tabs = activeWorkspace?.tabs ?? []
         tabBarViewController.apply(
-            tabs: activeWorkspace?.tabs ?? [],
+            tabs: tabs,
             activeTabID: activeWorkspace?.activeTabID,
-            destinations: destinations
+            destinations: destinations,
+            displayedTitles: Self.displayedTitles(for: tabs, liveTitles: liveTitles)
+        )
+    }
+
+    func refreshTabTitles(
+        in store: WorkspaceStore,
+        liveTitles: [PaneID: String]
+    ) {
+        let tabs = store.workspace(id: store.activeWorkspaceID)?.tabs ?? []
+        tabBarViewController.refreshDisplayedTitles(
+            Self.displayedTitles(for: tabs, liveTitles: liveTitles)
+        )
+    }
+
+    func presentTabTitlePrompt(for tabID: TabID) {
+        tabBarViewController.beginRename(tabID)
+    }
+
+    func cancelTabRename() {
+        tabBarViewController.cancelRename()
+    }
+
+    private static func displayedTitles(
+        for tabs: [TerminalTab],
+        liveTitles: [PaneID: String]
+    ) -> [TabID: String] {
+        Dictionary(
+            uniqueKeysWithValues: tabs.map { tab in
+                (
+                    tab.id,
+                    tab.titleOverride ?? liveTitles[tab.activePaneID] ?? tab.title
+                )
+            }
         )
     }
 

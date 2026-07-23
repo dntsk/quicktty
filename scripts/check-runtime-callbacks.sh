@@ -49,6 +49,47 @@ do
     fi
 done
 
+for title_contract in \
+    'action.tag == GHOSTTY_ACTION_SET_TITLE' \
+    'action.tag == GHOSTTY_ACTION_SET_TAB_TITLE' \
+    'action.tag == GHOSTTY_ACTION_PROMPT_TITLE' \
+    'action.action.prompt_title == GHOSTTY_PROMPT_TITLE_TAB' \
+    'target.tag == GHOSTTY_TARGET_SURFACE' \
+    'String(validatingCString: titlePointer)' \
+    'context.scheduleTitleChange' \
+    'context.scheduleTabTitleChange' \
+    'context.scheduleTabTitlePrompt' \
+    'surfaceTitleHandler?(paneID, title)' \
+    'surfaceTabTitleHandler?(paneID, title)' \
+    'surfaceTabTitlePromptHandler?(paneID)' \
+    'var pendingTitle: String?' \
+    'let shouldSchedule = state.pendingTitle == nil' \
+    'state.pendingTitle = title' \
+    'state.pendingTitle = nil' \
+    'deliverTitleChangeIfActive'
+do
+    if ! grep -Fq "$title_contract" "$bridge" "$surface"; then
+        printf 'surface title callback contract is missing: %s\n' "$title_contract" >&2
+        exit 1
+    fi
+done
+
+title_route='case .titleChanged(let title):
+            surface.processCallbackEvent(
+                event,
+                confirmationHandler: clipboardConfirmationHandler
+            )
+            surfaceTitleHandler?(paneID, title)'
+if ! grep -Fq "$title_route" "$bridge"; then
+    printf 'automatic title must update its live surface before external routing\n' >&2
+    exit 1
+fi
+
+if ! grep -Fq 'guard let surface = surfaces[paneID] else { return }' "$bridge"; then
+    printf 'surface title callbacks must reject stale surface identities\n' >&2
+    exit 1
+fi
+
 if grep -Fq 'GHOSTTY_ACTION_MOUSE_OVER_LINK' "$bridge" "$surface"; then
     printf 'mouse-over-link state must not enter the bridge without preview UI\n' >&2
     exit 1

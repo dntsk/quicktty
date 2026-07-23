@@ -1100,6 +1100,48 @@ struct WorkspaceStoreTests {
     }
 
     @Test
+    func settingTitleOverrideByTabIDMutatesOnlyTheTargetAndClearsExactEmpty() throws {
+        let firstWorkspaceID = workspaceID(1)
+        let secondWorkspaceID = workspaceID(2)
+        let target = makeTab(1)
+        let untouched = makeTab(2)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstWorkspaceID, name: "First", tabs: [target]),
+                Workspace(id: secondWorkspaceID, name: "Second", tabs: [untouched]),
+            ],
+            activeWorkspaceID: secondWorkspaceID
+        )
+        let literalOverride = " \t猫 👩🏽‍💻\n "
+
+        try store.setTitleOverride(literalOverride, for: target.id)
+
+        #expect(store.tab(id: target.id)?.title == target.title)
+        #expect(store.tab(id: target.id)?.titleOverride == literalOverride)
+        #expect(store.tab(id: untouched.id) == untouched)
+        #expect(store.activeWorkspaceID == secondWorkspaceID)
+
+        try store.setTitleOverride("   ", for: target.id)
+        #expect(store.tab(id: target.id)?.titleOverride == "   ")
+
+        try store.setTitleOverride("", for: target.id)
+        #expect(store.tab(id: target.id)?.titleOverride == nil)
+    }
+
+    @Test
+    func settingTitleOverrideForUnknownTabFailsAtomically() {
+        var store = WorkspaceStore()
+        let missingTabID = tabID(999)
+        let beforeFailure = store
+
+        expectError(.tabNotFound(missingTabID)) {
+            try store.setTitleOverride("Manual", for: missingTabID)
+        }
+
+        #expect(store == beforeFailure)
+    }
+
+    @Test
     func updatingWorkingDirectoryChangesOnlyTheMatchingDescriptor() throws {
         let firstWorkspaceID = workspaceID(1)
         let secondWorkspaceID = workspaceID(2)
