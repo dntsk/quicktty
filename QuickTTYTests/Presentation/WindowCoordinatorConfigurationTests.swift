@@ -64,6 +64,67 @@ struct WindowCoordinatorConfigurationTests {
     }
 
     @Test
+    func splitAppearanceReloadUpdatesPresentationWithoutRecreatingSurface() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let initialURL = directory.appending(path: "initial")
+        let replacementURL = directory.appending(path: "replacement")
+        try Data(
+            "background = 112233\nforeground = ddeeff\nunfocused-split-opacity = 0.6\n".utf8
+        ).write(to: initialURL)
+        try Data(
+            "background = 445566\nforeground = 102030\nunfocused-split-fill = aabbcc\nunfocused-split-opacity = 0.8\n"
+                .utf8
+        ).write(to: replacementURL)
+        let bridge = try GhosttyBridge(configURL: initialURL)
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            hotKeyController: RecordingHotKeyController()
+        )
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceID = ObjectIdentifier(surface)
+        let splitHostID = try #require(
+            coordinator.workspaceViewControllerForTesting
+                .splitHostingControllerIdentifierForTesting
+        )
+        let hostedSurfaceIDs = coordinator.workspaceViewControllerForTesting
+            .hostedSurfaceIdentifiersForTesting
+        let initialPresentationPalette = coordinator.workspaceViewControllerForTesting
+            .splitPresentationPaletteForTesting
+        let initialDividerRGB = coordinator.workspaceViewControllerForTesting
+            .splitDividerRGBForTesting
+
+        try bridge.reloadConfig(at: replacementURL)
+        coordinator.applyConfiguration(QuickTTYConfig())
+
+        let workspaceController = coordinator.workspaceViewControllerForTesting
+        let appearance = workspaceController.splitAppearanceForTesting
+        let replacementPalette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x44, green: 0x55, blue: 0x66),
+            foreground: GhosttyRGB(red: 0x10, green: 0x20, blue: 0x30)
+        )
+        #expect(appearance.unfocusedFill == GhosttyRGB(red: 0xAA, green: 0xBB, blue: 0xCC))
+        #expect(abs(appearance.unfocusedOverlayOpacity - 0.2) < 0.000_001)
+        #expect(workspaceController.splitPresentationPaletteForTesting == replacementPalette)
+        #expect(
+            workspaceController.splitPresentationPaletteForTesting != initialPresentationPalette)
+        #expect(
+            workspaceController.splitDividerRGBForTesting
+                == GhosttySplitTreeView.dividerRGB(for: replacementPalette)
+        )
+        #expect(workspaceController.splitDividerRGBForTesting != initialDividerRGB)
+        #expect(ObjectIdentifier(try #require(coordinator.activeSurfaceForTesting)) == surfaceID)
+        #expect(workspaceController.hostedSurfaceIdentifiersForTesting == hostedSurfaceIDs)
+        #expect(workspaceController.splitHostingControllerIdentifierForTesting == splitHostID)
+    }
+
+    @Test
     func normalWindowFrameUsesSavedFrameWhileQuakeIsActive() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

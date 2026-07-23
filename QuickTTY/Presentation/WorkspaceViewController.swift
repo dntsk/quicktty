@@ -2,8 +2,19 @@ import AppKit
 import SwiftUI
 
 @MainActor
+private final class WorkspaceRootView: NSView {
+    var onWindowChanged: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChanged?(window)
+    }
+}
+
+@MainActor
 final class WorkspaceViewController: NSViewController {
     static let chromeHeight: CGFloat = 28
+    static let inactiveChromeAlpha: CGFloat = 0.72
 
     var onActivateWorkspace: ((WorkspaceID) -> Void)?
     var onCreateWorkspace: (() -> Void)?
@@ -24,6 +35,8 @@ final class WorkspaceViewController: NSViewController {
     let tabBarViewController = TabBarViewController()
     private let chromeView = NSView()
     private let terminalContentView = NSView()
+    private let presentationState = WorkspacePresentationState()
+    private weak var observedWindow: NSWindow?
     private let emptyLabel = NSTextField(labelWithString: "No tabs in this workspace")
     private let configurationDiagnosticView = ConfigDiagnosticView(frame: .zero)
     private var chromePalette = GhosttyChromePalette.fallback
@@ -37,8 +50,11 @@ final class WorkspaceViewController: NSViewController {
     #endif
 
     override func loadView() {
-        let rootView = NSView()
+        let rootView = WorkspaceRootView()
         rootView.wantsLayer = true
+        rootView.onWindowChanged = { [weak self] window in
+            self?.observeWindow(window)
+        }
 
         chromeView.wantsLayer = true
         chromeView.translatesAutoresizingMaskIntoConstraints = false
@@ -101,6 +117,7 @@ final class WorkspaceViewController: NSViewController {
         ])
         view = rootView
         applyChromePalette(chromePalette)
+        updateWindowPresentation(isKeyWindow: rootView.window?.isKeyWindow ?? false)
 
         workspaceSelector.onSelection = { [weak self] workspaceID in
             self?.onActivateWorkspace?(workspaceID)
@@ -146,8 +163,13 @@ final class WorkspaceViewController: NSViewController {
         }
     }
 
+    isolated deinit {
+        stopObservingWindow()
+    }
+
     func applyChromePalette(_ palette: GhosttyChromePalette) {
         chromePalette = palette
+        presentationState.setChromePalette(palette)
         loadViewIfNeeded()
 
         let backgroundColor = NSColor(ghosttyRGB: palette.background)
@@ -160,6 +182,10 @@ final class WorkspaceViewController: NSViewController {
         view.appearance = appearance
         chromeView.appearance = appearance
         tabBarViewController.applyChromePalette(palette)
+    }
+
+    func applySplitAppearance(_ splitAppearance: GhosttySplitAppearance) {
+        presentationState.setSplitAppearance(splitAppearance)
     }
 
     func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
@@ -229,6 +255,34 @@ final class WorkspaceViewController: NSViewController {
     #if DEBUG
         var chromePaletteForTesting: GhosttyChromePalette {
             chromePalette
+        }
+
+        var splitAppearanceForTesting: GhosttySplitAppearance {
+            presentationState.splitAppearance
+        }
+
+        var splitPresentationPaletteForTesting: GhosttyChromePalette {
+            presentationState.chromePalette
+        }
+
+        var splitDividerRGBForTesting: GhosttyRGB {
+            GhosttySplitTreeView.dividerRGB(for: presentationState.chromePalette)
+        }
+
+        var windowIsKeyForTesting: Bool {
+            presentationState.isKeyWindow
+        }
+
+        var observedWindowForTesting: NSWindow? {
+            observedWindow
+        }
+
+        var chromeAlphaForTesting: CGFloat {
+            chromeView.alphaValue
+        }
+
+        var terminalContentAlphaForTesting: CGFloat {
+            terminalContentView.alphaValue
         }
 
         var chromeAppearanceNameForTesting: NSAppearance.Name? {
@@ -319,12 +373,16 @@ final class WorkspaceViewController: NSViewController {
         surfaces: [PaneID: GhosttySurfaceView],
         failures: [PaneID: SurfaceFailurePresentation],
         palette: GhosttyChromePalette,
+        activePaneID: PaneID? = nil,
+        splitAppearance: GhosttySplitAppearance = .fallback,
         onResize: @escaping (UUID, Double) -> Void,
         onEqualize: @escaping (UUID) -> Void,
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
         onCloseUnavailablePane: @escaping (PaneID) -> Void
     ) {
         loadViewIfNeeded()
+        presentationState.setChromePalette(palette)
+        presentationState.setSplitAppearance(splitAppearance)
         guard let root else {
             splitResizeHandler = nil
             splitEqualizeHandler = nil
@@ -350,7 +408,8 @@ final class WorkspaceViewController: NSViewController {
             root: root,
             surfaces: surfaces,
             failures: failures,
-            palette: palette,
+            activePaneID: activePaneID,
+            presentationState: presentationState,
             onResize: onResize,
             onEqualize: onEqualize,
             onRetryUnavailablePane: onRetryUnavailablePane,
@@ -388,6 +447,69 @@ final class WorkspaceViewController: NSViewController {
             return directSurface + view.subviews.flatMap(surfaceViews)
         }
     #endif
+
+    private func observeWindow(_ window: NSWindow?) {
+        guard observedWindow !== window else {
+            updateWindowPresentation(isKeyWindow: window?.isKeyWindow ?? false)
+            return
+        }
+
+        stopObservingWindow()
+        observedWindow = window
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey(_:)),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidResignKey(_:)),
+                name: NSWindow.didResignKeyNotification,
+                object: window
+            )
+        }
+        updateWindowPresentation(isKeyWindow: window?.isKeyWindow ?? false)
+    }
+
+    private func stopObservingWindow() {
+        guard let observedWindow else { return }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didBecomeKeyNotification,
+            object: observedWindow
+        )
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didResignKeyNotification,
+            object: observedWindow
+        )
+        self.observedWindow = nil
+    }
+
+    @objc
+    private func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+            window === observedWindow,
+            view.window === window
+        else { return }
+        updateWindowPresentation(isKeyWindow: true)
+    }
+
+    @objc
+    private func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+            window === observedWindow,
+            view.window === window
+        else { return }
+        updateWindowPresentation(isKeyWindow: false)
+    }
+
+    private func updateWindowPresentation(isKeyWindow: Bool) {
+        presentationState.setKeyWindow(isKeyWindow)
+        chromeView.alphaValue = isKeyWindow ? 1 : Self.inactiveChromeAlpha
+    }
 
     private func removeSplitHost() {
         guard let splitHostingController else { return }

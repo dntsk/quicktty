@@ -9,6 +9,7 @@ final class GhosttyConfiguration {
     }
 
     let chromePalette: GhosttyChromePalette
+    let splitAppearance: GhosttySplitAppearance
     let diagnostics: [String]
     let source: Source
 
@@ -32,6 +33,10 @@ final class GhosttyConfiguration {
 
         self.handle = handle
         chromePalette = Self.chromePalette(from: handle)
+        splitAppearance = Self.splitAppearance(
+            from: handle,
+            background: chromePalette.background
+        )
         diagnostics = Self.loadDiagnostics(from: handle)
     }
 
@@ -69,11 +74,44 @@ final class GhosttyConfiguration {
         )
     }
 
+    private static func splitAppearance(
+        from handle: ghostty_config_t,
+        background: GhosttyRGB
+    ) -> GhosttySplitAppearance {
+        var surfaceOpacity = 0.7
+        let opacityKey = "unfocused-split-opacity"
+        _ = withUnsafeMutablePointer(to: &surfaceOpacity) { pointer in
+            opacityKey.withCString { key in
+                ghostty_config_get(
+                    handle,
+                    UnsafeMutableRawPointer(pointer),
+                    key,
+                    UInt(opacityKey.lengthOfBytes(using: .utf8))
+                )
+            }
+        }
+
+        return GhosttySplitAppearance(
+            unfocusedFill: configuredColor(
+                named: "unfocused-split-fill",
+                from: handle
+            ) ?? background,
+            unfocusedOverlayOpacity: min(max(1 - surfaceOpacity, 0), 1)
+        )
+    }
+
     private static func configuredColor(
         named name: String,
         from handle: ghostty_config_t,
         fallback: GhosttyRGB
     ) -> GhosttyRGB {
+        configuredColor(named: name, from: handle) ?? fallback
+    }
+
+    private static func configuredColor(
+        named name: String,
+        from handle: ghostty_config_t
+    ) -> GhosttyRGB? {
         var color = ghostty_config_color_s()
         let wasRead = withUnsafeMutablePointer(to: &color) { pointer in
             name.withCString { key in
@@ -85,7 +123,7 @@ final class GhosttyConfiguration {
                 )
             }
         }
-        guard wasRead else { return fallback }
+        guard wasRead else { return nil }
         return GhosttyRGB(red: color.r, green: color.g, blue: color.b)
     }
 

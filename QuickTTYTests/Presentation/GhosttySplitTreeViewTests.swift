@@ -62,6 +62,64 @@ struct GhosttySplitTreeViewTests {
     }
 
     @Test
+    func paneDecorationUsesOnlyActivePaneAndIgnoresWindowKeyState() {
+        let activePaneID = PaneID()
+        let inactivePaneID = PaneID()
+        let appearance = GhosttySplitAppearance(
+            unfocusedFill: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+            unfocusedOverlayOpacity: 0.35
+        )
+        let presentationState = WorkspacePresentationState(isKeyWindow: true)
+
+        let activeWhenKey = PaneFocusDecoration.resolve(
+            paneID: activePaneID,
+            activePaneID: activePaneID,
+            appearance: appearance
+        )
+        let inactiveWhenKey = PaneFocusDecoration.resolve(
+            paneID: inactivePaneID,
+            activePaneID: activePaneID,
+            appearance: appearance
+        )
+        presentationState.setKeyWindow(false)
+        let activeWhenNotKey = PaneFocusDecoration.resolve(
+            paneID: activePaneID,
+            activePaneID: activePaneID,
+            appearance: appearance
+        )
+        let inactiveWhenNotKey = PaneFocusDecoration.resolve(
+            paneID: inactivePaneID,
+            activePaneID: activePaneID,
+            appearance: appearance
+        )
+
+        #expect(
+            activeWhenKey
+                == PaneFocusDecoration(
+                    overlayFill: appearance.unfocusedFill,
+                    overlayOpacity: 0
+                )
+        )
+        #expect(
+            inactiveWhenKey
+                == PaneFocusDecoration(
+                    overlayFill: appearance.unfocusedFill,
+                    overlayOpacity: appearance.unfocusedOverlayOpacity
+                )
+        )
+        #expect(activeWhenNotKey == activeWhenKey)
+        #expect(inactiveWhenNotKey == inactiveWhenKey)
+        #expect(!presentationState.isKeyWindow)
+        #expect(
+            PaneFocusDecoration.resolve(
+                paneID: activePaneID,
+                activePaneID: nil,
+                appearance: appearance
+            ).overlayOpacity == appearance.unfocusedOverlayOpacity
+        )
+    }
+
+    @Test
     func switchingPaneRootsReplacesTheActualHostedSurfaceView() async throws {
         let fixture = try SizeSensitiveChildFixture()
         defer { fixture.remove() }
@@ -134,6 +192,122 @@ struct GhosttySplitTreeViewTests {
             })
     }
 
+    @Test
+    func activePaneDecorationUpdatesWithoutReplacingSurfacesAndPassesThroughHits() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/sleep 60")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/sleep 60")
+        )
+        let root = SplitNode.split(
+            id: UUID(),
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .pane(first.paneID),
+            second: .pane(second.paneID)
+        )
+        let controller = WorkspaceViewController()
+        let window = mountWorkspace(controller)
+        defer { window.orderOut(nil) }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        controller.displayTerminal(
+            root: root,
+            surfaces: [first.paneID: first, second.paneID: second],
+            failures: [:],
+            palette: .fallback,
+            activePaneID: first.paneID,
+            splitAppearance: GhosttySplitAppearance(
+                unfocusedFill: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+                unfocusedOverlayOpacity: 0.3
+            ),
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
+        )
+        await settleWorkspace(controller, in: window)
+        let hostID = try #require(controller.splitHostingControllerIdentifierForTesting)
+        let originalSurfaceIDs = controller.hostedSurfaceIdentifiersForTesting
+        let firstSizeRequestCount = first.sizeRequestObservationsForTesting.count
+        let secondSizeRequestCount = second.sizeRequestObservationsForTesting.count
+        let hitPoint = first.convert(first.bounds.center, to: controller.view)
+        let hitView = controller.view.hitTest(hitPoint)
+        #expect(hitView === first || hitView?.isDescendant(of: first) == true)
+
+        controller.displayTerminal(
+            root: root,
+            surfaces: [first.paneID: first, second.paneID: second],
+            failures: [:],
+            palette: .fallback,
+            activePaneID: second.paneID,
+            splitAppearance: GhosttySplitAppearance(
+                unfocusedFill: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+                unfocusedOverlayOpacity: 0.3
+            ),
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in }
+        )
+        await settleWorkspace(controller, in: window)
+
+        #expect(controller.splitHostingControllerIdentifierForTesting == hostID)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == originalSurfaceIDs)
+        #expect(
+            Set(controller.renderedSurfaceIdentifiersForTesting)
+                == Set([ObjectIdentifier(first), ObjectIdentifier(second)])
+        )
+
+        let replacementWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { replacementWindow.orderOut(nil) }
+        let replacementContent = try #require(replacementWindow.contentView)
+        controller.view.removeFromSuperview()
+        controller.view.frame = replacementContent.bounds
+        replacementContent.addSubview(controller.view)
+        await settleWorkspace(controller, in: replacementWindow)
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        NotificationCenter.default.post(
+            name: NSWindow.didBecomeKeyNotification,
+            object: replacementWindow
+        )
+        await settleWorkspace(controller, in: replacementWindow)
+
+        #expect(controller.splitHostingControllerIdentifierForTesting == hostID)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == originalSurfaceIDs)
+        #expect(
+            Set(controller.renderedSurfaceIdentifiersForTesting)
+                == Set([ObjectIdentifier(first), ObjectIdentifier(second)])
+        )
+        #expect(!first.processExitedForTesting)
+        #expect(!second.processExitedForTesting)
+        let newFirstSizeRequests = first.sizeRequestObservationsForTesting.dropFirst(
+            firstSizeRequestCount
+        )
+        let newSecondSizeRequests = second.sizeRequestObservationsForTesting.dropFirst(
+            secondSizeRequestCount
+        )
+        #expect(
+            newFirstSizeRequests.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            }
+        )
+        #expect(
+            newSecondSizeRequests.allSatisfy {
+                $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
+            }
+        )
+    }
+
     private func settleWorkspace(_ controller: WorkspaceViewController, in window: NSWindow) async {
         for _ in 0..<4 {
             layoutWorkspace(controller, in: window)
@@ -204,6 +378,10 @@ struct GhosttySplitTreeViewTests {
         let paneID = PaneID(
             rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!)
         let message = "Surface creation failed for this pane."
+        let initialPalette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),
+            foreground: GhosttyRGB(red: 0xDD, green: 0xEE, blue: 0xFF)
+        )
         var retriedPaneIDs: [PaneID] = []
         var closedPaneIDs: [PaneID] = []
         let window = mountWorkspace(controller)
@@ -214,7 +392,7 @@ struct GhosttySplitTreeViewTests {
             root: .pane(paneID),
             surfaces: [:],
             failures: [paneID: SurfaceFailurePresentation(message: message)],
-            palette: .fallback,
+            palette: initialPalette,
             onResize: { _, _ in },
             onEqualize: { _ in },
             onRetryUnavailablePane: { retriedPaneIDs.append($0) },
@@ -223,15 +401,55 @@ struct GhosttySplitTreeViewTests {
         await settleWorkspace(controller, in: window)
 
         let splitHost = try #require(controller.splitHostingViewForTesting)
-        let mountedViews = mountedViews(in: splitHost)
-        #expect(mountedViews.contains { $0 is SurfaceErrorPlaceholderView })
-        #expect(mountedText(in: mountedViews).contains("Terminal unavailable"))
-        #expect(mountedText(in: mountedViews).contains(message))
-        #expect(buttonTitles(in: mountedViews) == ["Retry", "Close Pane"])
-        let retryButton = try #require(button(titled: "Retry", in: mountedViews))
-        let closeButton = try #require(button(titled: "Close Pane", in: mountedViews))
+        let splitHostID = try #require(controller.splitHostingControllerIdentifierForTesting)
+        var hostedViews = mountedViews(in: splitHost)
+        #expect(hostedViews.contains { $0 is SurfaceErrorPlaceholderView })
+        #expect(mountedText(in: hostedViews).contains("Terminal unavailable"))
+        #expect(mountedText(in: hostedViews).contains(message))
+        #expect(buttonTitles(in: hostedViews) == ["Retry", "Close Pane"])
+
+        let replacementPalette = GhosttyChromePalette(
+            background: GhosttyRGB(red: 0x66, green: 0x55, blue: 0x44),
+            foreground: GhosttyRGB(red: 0x30, green: 0xE0, blue: 0x90)
+        )
+        controller.applyChromePalette(replacementPalette)
+        await settleWorkspace(controller, in: window)
+
+        #expect(controller.splitHostingControllerIdentifierForTesting == splitHostID)
+        #expect(controller.splitPresentationPaletteForTesting == replacementPalette)
+        hostedViews = mountedViews(in: splitHost)
+        let placeholder = try #require(
+            hostedViews.compactMap { $0 as? SurfaceErrorPlaceholderView }.first
+        )
+        let placeholderBackground = try #require(placeholder.layer?.backgroundColor)
+        #expect(
+            colorsMatch(
+                NSColor(cgColor: placeholderBackground),
+                NSColor(ghosttyRGB: replacementPalette.background)
+            )
+        )
+        let retryButton = try #require(button(titled: "Retry", in: hostedViews))
+        let closeButton = try #require(button(titled: "Close Pane", in: hostedViews))
         #expect(retryButton.accessibilityLabel() == "Retry")
         #expect(closeButton.accessibilityLabel() == "Close Pane")
+        #expect(
+            colorsMatch(
+                retryButton.contentTintColor,
+                NSColor(ghosttyRGB: replacementPalette.foreground)
+            )
+        )
+        #expect(
+            colorsMatch(
+                closeButton.contentTintColor,
+                NSColor(ghosttyRGB: replacementPalette.foreground)
+            )
+        )
+
+        for button in [retryButton, closeButton] {
+            let hitPoint = button.convert(button.bounds.center, to: controller.view)
+            let hitView = controller.view.hitTest(hitPoint)
+            #expect(hitView === button || hitView?.isDescendant(of: button) == true)
+        }
 
         retryButton.performClick(nil)
         #expect(retriedPaneIDs == [paneID])

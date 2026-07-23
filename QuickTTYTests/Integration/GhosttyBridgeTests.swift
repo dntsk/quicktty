@@ -119,6 +119,43 @@ struct GhosttyBridgeTests {
     }
 
     @Test
+    func configurationExtractsFinalizedSplitAppearance() throws {
+        let fixture = try TemporaryConfig(
+            contents:
+                "background = 112233\nunfocused-split-fill = 445566\nunfocused-split-opacity = 0.05\n"
+        )
+        defer { fixture.remove() }
+
+        let configuration = try GhosttyConfiguration(configURL: fixture.url)
+
+        #expect(
+            configuration.splitAppearance.unfocusedFill
+                == GhosttyRGB(red: 0x44, green: 0x55, blue: 0x66)
+        )
+        #expect(
+            abs(configuration.splitAppearance.unfocusedOverlayOpacity - 0.85)
+                < 0.000_001
+        )
+    }
+
+    @Test
+    func configurationFallsBackToBackgroundAndPinnedDefaultSplitOpacity() throws {
+        let fixture = try TemporaryConfig(contents: "background = 112233\n")
+        defer { fixture.remove() }
+
+        let configuration = try GhosttyConfiguration(configURL: fixture.url)
+
+        #expect(
+            configuration.splitAppearance.unfocusedFill
+                == GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33)
+        )
+        #expect(
+            abs(configuration.splitAppearance.unfocusedOverlayOpacity - 0.3)
+                < 0.000_001
+        )
+    }
+
+    @Test
     func reloadReplacesChromePaletteTransactionally() throws {
         let initial = try TemporaryConfig(contents: "background = 112233\nforeground = ddeeff\n")
         let replacement = try TemporaryConfig(
@@ -139,6 +176,45 @@ struct GhosttyBridgeTests {
                     foreground: GhosttyRGB(red: 0xAA, green: 0xBB, blue: 0xCC)
                 )
         )
+    }
+
+    @Test
+    func reloadReplacesSplitAppearanceTransactionallyAndRejectPreservesIt() throws {
+        let initial = try TemporaryConfig(
+            contents: "background = 112233\nunfocused-split-opacity = 0.6\n"
+        )
+        let malformed = try TemporaryConfig(contents: "not-a-ghostty-option = true\n")
+        let replacement = try TemporaryConfig(
+            contents:
+                "background = 445566\nunfocused-split-fill = aabbcc\nunfocused-split-opacity = 0.8\n"
+        )
+        defer {
+            initial.remove()
+            malformed.remove()
+            replacement.remove()
+        }
+        let bridge = try GhosttyBridge(configURL: initial.url)
+        defer { bridge.shutdown() }
+        let initialAppearance = bridge.splitAppearance
+
+        #expect(
+            initialAppearance.unfocusedFill
+                == GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33)
+        )
+        #expect(abs(initialAppearance.unfocusedOverlayOpacity - 0.4) < 0.000_001)
+
+        #expect(throws: GhosttyBridgeError.self) {
+            try bridge.reloadConfig(at: malformed.url)
+        }
+        #expect(bridge.splitAppearance == initialAppearance)
+
+        try bridge.reloadConfig(at: replacement.url)
+
+        #expect(
+            bridge.splitAppearance.unfocusedFill
+                == GhosttyRGB(red: 0xAA, green: 0xBB, blue: 0xCC)
+        )
+        #expect(abs(bridge.splitAppearance.unfocusedOverlayOpacity - 0.2) < 0.000_001)
     }
 
     @Test

@@ -322,6 +322,54 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func workspaceWindowKeyNotificationsUpdateChromeAndIgnoreStaleWindows() throws {
+        let controller = WorkspaceViewController()
+        let firstWindow = Self.mountWorkspace(controller)
+        defer { firstWindow.orderOut(nil) }
+
+        #expect(controller.observedWindowForTesting === firstWindow)
+        #expect(!controller.windowIsKeyForTesting)
+        #expect(controller.chromeAlphaForTesting == WorkspaceViewController.inactiveChromeAlpha)
+        #expect(controller.terminalContentAlphaForTesting == 1)
+
+        NotificationCenter.default.post(
+            name: NSWindow.didBecomeKeyNotification, object: firstWindow)
+        #expect(controller.windowIsKeyForTesting)
+        #expect(controller.chromeAlphaForTesting == 1)
+        #expect(controller.terminalContentAlphaForTesting == 1)
+
+        let secondWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { secondWindow.orderOut(nil) }
+        let secondContentView = try #require(secondWindow.contentView)
+        controller.view.removeFromSuperview()
+        controller.view.frame = secondContentView.bounds
+        secondContentView.addSubview(controller.view)
+        secondContentView.layoutSubtreeIfNeeded()
+
+        #expect(controller.observedWindowForTesting === secondWindow)
+        #expect(!controller.windowIsKeyForTesting)
+        NotificationCenter.default.post(
+            name: NSWindow.didBecomeKeyNotification, object: firstWindow)
+        #expect(!controller.windowIsKeyForTesting)
+        NotificationCenter.default.post(
+            name: NSWindow.didBecomeKeyNotification, object: secondWindow)
+        #expect(controller.windowIsKeyForTesting)
+        NotificationCenter.default.post(
+            name: NSWindow.didResignKeyNotification, object: firstWindow)
+        #expect(controller.windowIsKeyForTesting)
+        NotificationCenter.default.post(
+            name: NSWindow.didResignKeyNotification, object: secondWindow)
+        #expect(!controller.windowIsKeyForTesting)
+        #expect(controller.chromeAlphaForTesting == WorkspaceViewController.inactiveChromeAlpha)
+        #expect(controller.terminalContentAlphaForTesting == 1)
+    }
+
+    @Test
     func configurationDiagnosticPaletteMatchesDarkAndLightChrome() throws {
         let darkPalette = GhosttyChromePalette(
             background: GhosttyRGB(red: 0x11, green: 0x22, blue: 0x33),

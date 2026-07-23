@@ -1,5 +1,51 @@
 import AppKit
+import Combine
 import SwiftUI
+
+struct PaneFocusDecoration: Equatable, Sendable {
+    let overlayFill: GhosttyRGB
+    let overlayOpacity: Double
+
+    static func resolve(
+        paneID: PaneID,
+        activePaneID: PaneID?,
+        appearance: GhosttySplitAppearance
+    ) -> PaneFocusDecoration {
+        PaneFocusDecoration(
+            overlayFill: appearance.unfocusedFill,
+            overlayOpacity: paneID == activePaneID ? 0 : appearance.unfocusedOverlayOpacity
+        )
+    }
+}
+
+@MainActor
+final class WorkspacePresentationState: ObservableObject {
+    @Published private(set) var isKeyWindow: Bool
+    @Published private(set) var splitAppearance: GhosttySplitAppearance
+    @Published private(set) var chromePalette: GhosttyChromePalette
+
+    init(
+        isKeyWindow: Bool = false,
+        splitAppearance: GhosttySplitAppearance = .fallback,
+        chromePalette: GhosttyChromePalette = .fallback
+    ) {
+        self.isKeyWindow = isKeyWindow
+        self.splitAppearance = splitAppearance
+        self.chromePalette = chromePalette
+    }
+
+    func setKeyWindow(_ isKeyWindow: Bool) {
+        self.isKeyWindow = isKeyWindow
+    }
+
+    func setSplitAppearance(_ splitAppearance: GhosttySplitAppearance) {
+        self.splitAppearance = splitAppearance
+    }
+
+    func setChromePalette(_ chromePalette: GhosttyChromePalette) {
+        self.chromePalette = chromePalette
+    }
+}
 
 indirect enum GhosttySplitTreeDescriptor: Equatable {
     enum Direction: Equatable {
@@ -69,15 +115,16 @@ struct GhosttySplitTreeView: View {
     private let root: GhosttySplitTreeDescriptor
     private let surfaces: [PaneID: GhosttySurfaceView]
     private let failures: [PaneID: SurfaceFailurePresentation]
-    private let palette: GhosttyChromePalette
-    private let dividerColor: Color
+    private let activePaneID: PaneID?
+    @ObservedObject private var presentationState: WorkspacePresentationState
     private let callbacks: GhosttySplitTreeCallbacks
 
     init(
         root: SplitNode,
         surfaces: [PaneID: GhosttySurfaceView],
         failures: [PaneID: SurfaceFailurePresentation],
-        palette: GhosttyChromePalette,
+        activePaneID: PaneID? = nil,
+        presentationState: WorkspacePresentationState = WorkspacePresentationState(),
         onResize: @escaping (UUID, Double) -> Void,
         onEqualize: @escaping (UUID) -> Void,
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
@@ -86,8 +133,8 @@ struct GhosttySplitTreeView: View {
         self.root = GhosttySplitTreeDescriptor(root: root)
         self.surfaces = surfaces
         self.failures = failures
-        self.palette = palette
-        dividerColor = Self.dividerColor(for: palette)
+        self.activePaneID = activePaneID
+        self.presentationState = presentationState
         callbacks = GhosttySplitTreeCallbacks(
             onResize: onResize,
             onEqualize: onEqualize,
@@ -97,20 +144,23 @@ struct GhosttySplitTreeView: View {
     }
 
     var body: some View {
+        let palette = presentationState.chromePalette
+        let dividerColor = Color(nsColor: NSColor(ghosttyRGB: Self.dividerRGB(for: palette)))
+
         GhosttySplitNodeView(
             node: root,
             surfaces: surfaces,
             failures: failures,
             palette: palette,
+            activePaneID: activePaneID,
+            splitAppearance: presentationState.splitAppearance,
             dividerColor: dividerColor,
             callbacks: callbacks
         )
     }
 
-    private static func dividerColor(for palette: GhosttyChromePalette) -> Color {
-        let foreground = NSColor(ghosttyRGB: palette.foreground)
-        let background = NSColor(ghosttyRGB: palette.background)
-        return Color(nsColor: foreground.blended(withFraction: 0.7, of: background) ?? foreground)
+    static func dividerRGB(for palette: GhosttyChromePalette) -> GhosttyRGB {
+        palette.foreground.blended(with: palette.background, fraction: 0.7)
     }
 }
 
@@ -120,6 +170,8 @@ private struct GhosttySplitNodeView: View {
     let surfaces: [PaneID: GhosttySurfaceView]
     let failures: [PaneID: SurfaceFailurePresentation]
     let palette: GhosttyChromePalette
+    let activePaneID: PaneID?
+    let splitAppearance: GhosttySplitAppearance
     let dividerColor: Color
     let callbacks: GhosttySplitTreeCallbacks
 
@@ -127,20 +179,26 @@ private struct GhosttySplitNodeView: View {
     var body: some View {
         switch node {
         case .pane(let paneID):
-            if let surface = surfaces[paneID] {
-                GhosttySurfaceRepresentable(surface: surface)
+            GhosttySplitLeafView(
+                paneID: paneID,
+                activePaneID: activePaneID,
+                appearance: splitAppearance
+            ) {
+                if let surface = surfaces[paneID] {
+                    GhosttySurfaceRepresentable(surface: surface)
+                        .id(paneID)
+                } else {
+                    SurfaceErrorPlaceholder(
+                        presentation: failures[paneID]
+                            ?? SurfaceFailurePresentation(
+                                message: "The terminal surface is unavailable."
+                            ),
+                        palette: palette,
+                        onRetry: { callbacks.retryUnavailablePane(paneID) },
+                        onClosePane: { callbacks.closeUnavailablePane(paneID) }
+                    )
                     .id(paneID)
-            } else {
-                SurfaceErrorPlaceholder(
-                    presentation: failures[paneID]
-                        ?? SurfaceFailurePresentation(
-                            message: "The terminal surface is unavailable."
-                        ),
-                    palette: palette,
-                    onRetry: { callbacks.retryUnavailablePane(paneID) },
-                    onClosePane: { callbacks.closeUnavailablePane(paneID) }
-                )
-                .id(paneID)
+                }
             }
         case .split(let id, let direction, let ratio, let first, let second):
             SplitView(
@@ -156,6 +214,8 @@ private struct GhosttySplitNodeView: View {
                         surfaces: surfaces,
                         failures: failures,
                         palette: palette,
+                        activePaneID: activePaneID,
+                        splitAppearance: splitAppearance,
                         dividerColor: dividerColor,
                         callbacks: callbacks
                     )
@@ -166,6 +226,8 @@ private struct GhosttySplitNodeView: View {
                         surfaces: surfaces,
                         failures: failures,
                         palette: palette,
+                        activePaneID: activePaneID,
+                        splitAppearance: splitAppearance,
                         dividerColor: dividerColor,
                         callbacks: callbacks
                     )
@@ -175,6 +237,41 @@ private struct GhosttySplitNodeView: View {
                 }
             )
         }
+    }
+}
+
+@MainActor
+private struct GhosttySplitLeafView<Content: View>: View {
+    let paneID: PaneID
+    let activePaneID: PaneID?
+    let appearance: GhosttySplitAppearance
+    let content: Content
+
+    init(
+        paneID: PaneID,
+        activePaneID: PaneID?,
+        appearance: GhosttySplitAppearance,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.paneID = paneID
+        self.activePaneID = activePaneID
+        self.appearance = appearance
+        self.content = content()
+    }
+
+    var body: some View {
+        let decoration = PaneFocusDecoration.resolve(
+            paneID: paneID,
+            activePaneID: activePaneID,
+            appearance: appearance
+        )
+
+        content
+            .overlay {
+                Color(nsColor: NSColor(ghosttyRGB: decoration.overlayFill))
+                    .opacity(decoration.overlayOpacity)
+                    .allowsHitTesting(false)
+            }
     }
 }
 

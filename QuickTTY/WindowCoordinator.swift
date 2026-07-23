@@ -201,6 +201,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         super.init()
 
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
+        workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
         normalWindowController.window?.delegate = self
         hotKeyRelay.action = { [weak self] in
             self?.presentationController.toggleQuakeVisibility()
@@ -328,6 +329,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         do {
             workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
+            workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
             if workspaceStore.workspaces.allSatisfy({ $0.tabs.isEmpty }) {
                 try createStartupShellTab()
             } else {
@@ -903,6 +905,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     func applyConfiguration(_ config: QuickTTYConfig) {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
+        workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
         configEditor = config.configEditor
         let geometry =
             QuakeWindowGeometry(
@@ -1172,6 +1175,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces: activeTabSurfaces,
             failures: activeSurfaceFailures,
             palette: ghosttyBridge.chromePalette,
+            activePaneID: activePaneID,
+            splitAppearance: ghosttyBridge.splitAppearance,
             onResize: { [weak self] splitID, ratio in
                 self?.updateActiveSplitRatio(id: splitID, ratio: ratio)
             },

@@ -355,6 +355,7 @@ final class GhosttyBridge {
 
     private(set) var diagnostics: [String]
     private(set) var chromePalette: GhosttyChromePalette
+    private(set) var splitAppearance: GhosttySplitAppearance
 
     var isReady: Bool {
         application != nil
@@ -399,6 +400,7 @@ final class GhosttyBridge {
         callbackContextOwnership = retainedCallbackContext
         diagnostics = configuration.diagnostics
         chromePalette = configuration.chromePalette
+        splitAppearance = configuration.splitAppearance
 
         #if DEBUG
             ghosttyCallbackContextOwnershipCount.withLock { count in
@@ -547,6 +549,7 @@ final class GhosttyBridge {
 
         diagnostics = []
         chromePalette = replacement.chromePalette
+        splitAppearance = replacement.splitAppearance
         configuration?.release()
         configuration = replacement
     }

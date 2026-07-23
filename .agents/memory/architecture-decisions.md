@@ -145,3 +145,12 @@
 - **Решение:** QuickTTY принимает title как opaque strict UTF-8 строку, хранит automatic value только у live surface и отдельно сериализует exact manual override. Effective title: override, затем live title активной pane, затем существующий `Shell`/`Config` fallback. AI-specific parsing, protocol, icons, badges и status model пока не вводятся.
 - **Отклонено:** Persist automatic title; смешивать automatic и manual значения в одном поле; разбирать команды, пути или agent status; выбирать AI protocol без отдельного дизайна.
 - **Последствия:** Empty string снимает override, whitespace/Unicode/emoji сохраняются буквально; inactive split/workspace titles остаются surface-local. Raw OSC title уже совместим с будущим agent status text, но структурированная agent-aware интеграция остаётся отдельным решением.
+
+## Pane selection, window activation и terminal focus разделены
+
+- **Дата:** 2026-07-23
+- **Статус:** принято после visual smoke
+- **Контекст:** В splits было трудно отличить выбранную pane и понять, принимает ли окно terminal input. Pinned Ghostty уже удачно меняет text cursor при потере focus и предоставляет параметры затемнения неактивных splits.
+- **Решение:** `TerminalTab.activePaneID`, `NSWindow.isKeyWindow` и фактический first responder остаются независимыми источниками состояния. Неактивные panes затемняются через finalized `unfocused-split-opacity`/`unfocused-split-fill`; active pane остаётся без overlay и без border. Custom chrome приглушается отдельно. Terminal cursor полностью остаётся у Ghostty и получает только существующий `ghostty_surface_set_focus`.
+- **Отклонено:** Собственный cursor renderer; изменение Metal surface opacity; очистка active pane при resign-key; новые QuickTTY config keys; пересоздание surfaces при focus/theme update; accent или neutral pane frame. Первая 2px accent/1px neutral frame полностью удалена после visual smoke как слишком резкая и раздражающая независимо от толщины и цвета.
+- **Последствия:** Normal/Quake переносит один observable presentation state между окнами без перезапуска shell и transient PTY resize. Theme hot reload транзакционно обновляет dimming, divider и failure placeholder. Активность pane определяется только контрастом с затемнёнными соседями, активность окна — chrome и Ghostty cursor.
