@@ -30,7 +30,7 @@ Required behavior:
 
 ## Interactive terminal search
 
-**Status:** Required after configurable shortcuts.
+**Status:** Следующая обязательная интеграция.
 
 Implement the search UI supported by pinned libghostty instead of exposing only headless search actions.
 
@@ -46,16 +46,6 @@ Required behavior:
 
 ## URL hover and opening
 
-**Status:** Required after configurable shortcuts.
+**Status:** Завершено 2026-07-23.
 
-Integrate pinned libghostty link detection with QuickTTY-owned AppKit presentation and opening policy.
-
-Required behavior:
-
-- receive mouse-over-link state from the active terminal surface;
-- update cursor and hover presentation without injecting terminal input;
-- open a detected URL only after an explicit user action;
-- support a configurable QuickTTY action for opening the URL under the pointer;
-- preserve normal terminal mouse reporting and selection behavior when no link action is performed;
-- clear stale hover state on pointer exit, pane switch, surface close, workspace switch, and teardown;
-- add callback lifetime, hit-testing, mouse-reporting coexistence, unsupported URL, and stale-state tests.
+Закреплённый Ghostty владеет detection/highlight и `Cmd+click`; QuickTTY принимает `open_url`, открывает schemes/file paths через `NSWorkspace` и применяет surface-local cursor shape через cursor rects. Preview UI и keyboard action `open-url` не добавлены. Контракт зафиксирован в `docs/plans/2026-07-23-url-hover-open-design.md`.

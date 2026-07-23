@@ -47,6 +47,19 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_MOUSE_SHAPE,
+        target.tag == GHOSTTY_TARGET_SURFACE,
+        let surface = target.target.surface,
+        let userdata = ghostty_surface_userdata(surface)
+    {
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleMouseShape(
+            GhosttyMouseShape(cValue: action.action.mouse_shape)
+        )
+    }
+
     if action.tag == GHOSTTY_ACTION_PWD,
         target.tag == GHOSTTY_TARGET_SURFACE,
         let surface = target.target.surface,
@@ -74,6 +87,25 @@ private func ghosttyRuntimeActionCallback(
         deliveryCompletion: nil
     )
 }
+
+#if DEBUG
+    func ghosttyRuntimeMouseShapeCallbackForTesting(
+        surface: ghostty_surface_t,
+        rawValue: Int32
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        var payload = ghostty_action_u()
+        payload.mouse_shape = ghostty_action_mouse_shape_e(
+            rawValue: UInt32(bitPattern: rawValue)
+        )
+        return ghosttyRuntimeActionCallback(
+            nil,
+            ghostty_target_s(tag: GHOSTTY_TARGET_SURFACE, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_MOUSE_SHAPE, action: payload)
+        )
+    }
+#endif
 
 private func ghosttyRuntimeReadClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
@@ -208,11 +240,15 @@ final class GhosttyBridge {
         configURL: URL? = nil,
         shortcutConfiguration: ShortcutConfiguration = .defaults,
         runtimeActionHandler: RuntimeActionHandler? = nil,
+        workspaceURLClient: GhosttyWorkspaceURLClient = .system,
         clipboardClient: GhosttyClipboardClient = .system,
         applicationIsActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
     ) throws {
         let configuration = try GhosttyConfiguration(configURL: configURL)
-        let callbackContext = CallbackContext(runtimeActionHandler: runtimeActionHandler)
+        let callbackContext = CallbackContext(
+            runtimeActionHandler: runtimeActionHandler,
+            workspaceURLClient: workspaceURLClient
+        )
         let retainedCallbackContext = Unmanaged.passRetained(callbackContext)
 
         self.applicationIsActive = applicationIsActive
@@ -403,12 +439,14 @@ final class GhosttyBridge {
             UInt32(GHOSTTY_ACTION_NEW_TAB.rawValue),
             UInt32(GHOSTTY_ACTION_CLOSE_ALL_WINDOWS.rawValue),
             UInt32(GHOSTTY_ACTION_TOGGLE_VISIBILITY.rawValue),
+            UInt32(GHOSTTY_ACTION_MOUSE_SHAPE.rawValue),
             UInt32(GHOSTTY_ACTION_OPEN_CONFIG.rawValue),
             UInt32(GHOSTTY_ACTION_RELOAD_CONFIG.rawValue),
             UInt32(GHOSTTY_ACTION_CONFIG_CHANGE.rawValue),
+            UInt32(GHOSTTY_ACTION_OPEN_URL.rawValue),
             UInt32(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue),
         ]
-        return actual == [0, 1, 2, 5, 12, 40, 47, 48, 55]
+        return actual == [0, 1, 2, 5, 12, 36, 40, 47, 48, 54, 55]
     }
 
     #if DEBUG
@@ -460,6 +498,34 @@ final class GhosttyBridge {
                     action: payload
                 )
             )
+        }
+
+        static func runtimeOpenURLActionForTesting(
+            bytes: inout [UInt8],
+            kind: GhosttyOpenURL.Kind
+        ) -> GhosttyRuntimeAction {
+            bytes.withUnsafeBufferPointer { buffer in
+                let cKind: ghostty_action_open_url_kind_e =
+                    switch kind {
+                    case .unknown: GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN
+                    case .text: GHOSTTY_ACTION_OPEN_URL_KIND_TEXT
+                    case .html: GHOSTTY_ACTION_OPEN_URL_KIND_HTML
+                    }
+                var payload = ghostty_action_u()
+                payload.open_url = ghostty_action_open_url_s(
+                    kind: cKind,
+                    url: buffer.baseAddress.map {
+                        UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)
+                    },
+                    len: UInt(buffer.count)
+                )
+                return runtimeAction(
+                    from: ghostty_action_s(
+                        tag: GHOSTTY_ACTION_OPEN_URL,
+                        action: payload
+                    )
+                )
+            }
         }
 
         static func copyScopedClipboardContentsForTesting(
@@ -545,6 +611,24 @@ final class GhosttyBridge {
         case UInt32(GHOSTTY_ACTION_CONFIG_CHANGE.rawValue):
             // The callback-scoped config handle intentionally stays inside the bridge.
             return .configChanged
+        case UInt32(GHOSTTY_ACTION_OPEN_URL.rawValue):
+            let openURL = action.action.open_url
+            guard openURL.len > 0,
+                openURL.len <= UInt(Int.max),
+                let bytes = openURL.url
+            else { return .unknown(rawValue: tagRawValue) }
+
+            let data = Data(bytes: bytes, count: Int(openURL.len))
+            guard let url = String(data: data, encoding: .utf8), !url.isEmpty else {
+                return .unknown(rawValue: tagRawValue)
+            }
+            let kind: GhosttyOpenURL.Kind =
+                switch openURL.kind {
+                case GHOSTTY_ACTION_OPEN_URL_KIND_TEXT: .text
+                case GHOSTTY_ACTION_OPEN_URL_KIND_HTML: .html
+                default: .unknown
+                }
+            return .openURL(GhosttyOpenURL(kind: kind, url: url))
         case UInt32(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue):
             return .showChildExited
         default:
@@ -746,9 +830,14 @@ final class GhosttyBridge {
 
         private let state = Mutex(State())
         private let runtimeActionHandler: RuntimeActionHandler?
+        private let workspaceURLClient: GhosttyWorkspaceURLClient
 
-        init(runtimeActionHandler: RuntimeActionHandler?) {
+        init(
+            runtimeActionHandler: RuntimeActionHandler?,
+            workspaceURLClient: GhosttyWorkspaceURLClient
+        ) {
             self.runtimeActionHandler = runtimeActionHandler
+            self.workspaceURLClient = workspaceURLClient
         }
 
         func activate(application: ghostty_app_t) {
@@ -787,7 +876,12 @@ final class GhosttyBridge {
             from application: ghostty_app_t,
             deliveryCompletion: RuntimeActionDeliveryCompletion?
         ) -> Bool {
-            guard action.isSupported, runtimeActionHandler != nil else { return false }
+            guard action.isSupported else { return false }
+            if case .openURL = action {
+                // URL opening is owned by the bridge even without an external action handler.
+            } else if runtimeActionHandler == nil {
+                return false
+            }
 
             let applicationAddress = UInt(bitPattern: application)
             let isActiveApplication = state.withLock { state in
@@ -814,12 +908,15 @@ final class GhosttyBridge {
             let isActiveApplication = state.withLock { state in
                 state.applicationAddress == applicationAddress
             }
-            guard isActiveApplication, let runtimeActionHandler else {
+            guard isActiveApplication else {
                 deliveryCompletion?(false)
                 return
             }
 
-            runtimeActionHandler(action)
+            if case .openURL(let openURL) = action {
+                workspaceURLClient.open(openURL)
+            }
+            runtimeActionHandler?(action)
             deliveryCompletion?(true)
         }
 

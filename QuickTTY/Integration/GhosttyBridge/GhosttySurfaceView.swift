@@ -133,6 +133,149 @@ func conservativeMinimumSurfaceSize(
     )
 }
 
+struct GhosttyMouseShape: RawRepresentable, Equatable, Hashable, Sendable {
+    let rawValue: Int32
+
+    static let `default` = GhosttyMouseShape(rawValue: 0)
+    static let contextMenu = GhosttyMouseShape(rawValue: 1)
+    static let help = GhosttyMouseShape(rawValue: 2)
+    static let pointer = GhosttyMouseShape(rawValue: 3)
+    static let progress = GhosttyMouseShape(rawValue: 4)
+    static let wait = GhosttyMouseShape(rawValue: 5)
+    static let cell = GhosttyMouseShape(rawValue: 6)
+    static let crosshair = GhosttyMouseShape(rawValue: 7)
+    static let text = GhosttyMouseShape(rawValue: 8)
+    static let verticalText = GhosttyMouseShape(rawValue: 9)
+    static let alias = GhosttyMouseShape(rawValue: 10)
+    static let copy = GhosttyMouseShape(rawValue: 11)
+    static let move = GhosttyMouseShape(rawValue: 12)
+    static let noDrop = GhosttyMouseShape(rawValue: 13)
+    static let notAllowed = GhosttyMouseShape(rawValue: 14)
+    static let grab = GhosttyMouseShape(rawValue: 15)
+    static let grabbing = GhosttyMouseShape(rawValue: 16)
+    static let allScroll = GhosttyMouseShape(rawValue: 17)
+    static let columnResize = GhosttyMouseShape(rawValue: 18)
+    static let rowResize = GhosttyMouseShape(rawValue: 19)
+    static let northResize = GhosttyMouseShape(rawValue: 20)
+    static let eastResize = GhosttyMouseShape(rawValue: 21)
+    static let southResize = GhosttyMouseShape(rawValue: 22)
+    static let westResize = GhosttyMouseShape(rawValue: 23)
+    static let northEastResize = GhosttyMouseShape(rawValue: 24)
+    static let northWestResize = GhosttyMouseShape(rawValue: 25)
+    static let southEastResize = GhosttyMouseShape(rawValue: 26)
+    static let southWestResize = GhosttyMouseShape(rawValue: 27)
+    static let eastWestResize = GhosttyMouseShape(rawValue: 28)
+    static let northSouthResize = GhosttyMouseShape(rawValue: 29)
+    static let northEastSouthWestResize = GhosttyMouseShape(rawValue: 30)
+    static let northWestSouthEastResize = GhosttyMouseShape(rawValue: 31)
+    static let zoomIn = GhosttyMouseShape(rawValue: 32)
+    static let zoomOut = GhosttyMouseShape(rawValue: 33)
+
+    static let allPinned: [GhosttyMouseShape] = (0...33).map(GhosttyMouseShape.init)
+
+    nonisolated init(rawValue: Int32) {
+        self.rawValue = rawValue
+    }
+
+    nonisolated init(cValue: ghostty_action_mouse_shape_e) {
+        self.init(rawValue: Int32(cValue.rawValue))
+    }
+
+    static var pinnedABIMatchesHeader: Bool {
+        let actual = [
+            GHOSTTY_MOUSE_SHAPE_DEFAULT,
+            GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU,
+            GHOSTTY_MOUSE_SHAPE_HELP,
+            GHOSTTY_MOUSE_SHAPE_POINTER,
+            GHOSTTY_MOUSE_SHAPE_PROGRESS,
+            GHOSTTY_MOUSE_SHAPE_WAIT,
+            GHOSTTY_MOUSE_SHAPE_CELL,
+            GHOSTTY_MOUSE_SHAPE_CROSSHAIR,
+            GHOSTTY_MOUSE_SHAPE_TEXT,
+            GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT,
+            GHOSTTY_MOUSE_SHAPE_ALIAS,
+            GHOSTTY_MOUSE_SHAPE_COPY,
+            GHOSTTY_MOUSE_SHAPE_MOVE,
+            GHOSTTY_MOUSE_SHAPE_NO_DROP,
+            GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED,
+            GHOSTTY_MOUSE_SHAPE_GRAB,
+            GHOSTTY_MOUSE_SHAPE_GRABBING,
+            GHOSTTY_MOUSE_SHAPE_ALL_SCROLL,
+            GHOSTTY_MOUSE_SHAPE_COL_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_ROW_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_N_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_E_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_S_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_W_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_NE_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_NW_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_SE_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_SW_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_EW_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_NS_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_NESW_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_NWSE_RESIZE,
+            GHOSTTY_MOUSE_SHAPE_ZOOM_IN,
+            GHOSTTY_MOUSE_SHAPE_ZOOM_OUT,
+        ].map { Int32($0.rawValue) }
+        return actual == Array(0...33)
+    }
+
+    @MainActor
+    var cursor: NSCursor? {
+        switch self {
+        case .default, .help, .progress, .wait:
+            NSCursor.arrow
+        case .contextMenu:
+            NSCursor.contextualMenu
+        case .pointer:
+            NSCursor.pointingHand
+        case .cell, .crosshair:
+            NSCursor.crosshair
+        case .text:
+            NSCursor.iBeam
+        case .verticalText:
+            NSCursor.iBeamCursorForVerticalLayout
+        case .alias:
+            NSCursor.dragLink
+        case .copy:
+            NSCursor.dragCopy
+        case .move, .allScroll, .grab:
+            NSCursor.openHand
+        case .noDrop, .notAllowed:
+            NSCursor.operationNotAllowed
+        case .grabbing:
+            NSCursor.closedHand
+        case .columnResize, .eastWestResize:
+            NSCursor.columnResize
+        case .rowResize, .northSouthResize:
+            NSCursor.rowResize
+        case .northResize:
+            NSCursor.rowResize(directions: .up)
+        case .eastResize:
+            NSCursor.columnResize(directions: .right)
+        case .southResize:
+            NSCursor.rowResize(directions: .down)
+        case .westResize:
+            NSCursor.columnResize(directions: .left)
+        case .northEastResize, .northEastSouthWestResize:
+            NSCursor.frameResize(position: .topRight, directions: .all)
+        case .northWestResize, .northWestSouthEastResize:
+            NSCursor.frameResize(position: .topLeft, directions: .all)
+        case .southEastResize:
+            NSCursor.frameResize(position: .bottomRight, directions: .all)
+        case .southWestResize:
+            NSCursor.frameResize(position: .bottomLeft, directions: .all)
+        case .zoomIn:
+            NSCursor.zoomIn
+        case .zoomOut:
+            NSCursor.zoomOut
+        default:
+            nil
+        }
+    }
+}
+
 typealias GhosttySurfaceCloseHandler = @MainActor @Sendable (PaneID, Bool) -> Void
 typealias GhosttySurfaceInputRoute = @MainActor (PaneID, NSEvent) -> Void
 typealias GhosttySurfaceFocusRoute = @MainActor (PaneID) -> Void
@@ -181,6 +324,7 @@ enum GhosttySurfaceCallbackEvent: Sendable {
         contents: [GhosttyClipboardContent]
     )
     case close(processAlive: Bool)
+    case mouseShapeChanged(GhosttyMouseShape)
     case pwdChanged(String)
 }
 
@@ -213,6 +357,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private var suppressNextLeftMouseUp = false
     private var markedText = NSMutableAttributedString()
     private var keyTextAccumulator: [String]?
+    private var currentMouseShape: GhosttyMouseShape = .text
     private var lastPerformKeyEvent: TimeInterval?
     private(set) var isActive = false
     private(set) var currentWorkingDirectory: String?
@@ -231,6 +376,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         private var mouseButtonObservations: [GhosttySurfaceMouseButtonObservation] = []
         private var mousePositionObservations: [GhosttySurfaceMousePositionObservation] = []
         private var mouseScrollObservations: [GhosttySurfaceMouseScrollObservation] = []
+        private var mouseShapeUpdateCount = 0
         private var terminalActionObservations: [GhosttySurfaceTerminalActionObservation] = []
         private var clipboardObservations: [GhosttySurfaceClipboardObservation] = []
         var clipboardObservationHandlerForTesting:
@@ -344,6 +490,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             stopLocalEventHandling()
             suppressNextLeftMouseUp = false
             clearLocalInputState()
+            clearLocalCursorState()
             releaseCallbackContextOwnership()
             return
         }
@@ -371,6 +518,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         self.surface = nil
         isActive = false
+        clearLocalCursorState()
 
         // The renderer and IO threads must stop while the unretained platform view is alive.
         ghostty_surface_free(surface)
@@ -421,6 +569,12 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         synchronizeSurfaceSize()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard surface != nil, let cursor = currentMouseShape.cursor else { return }
+        addCursorRect(bounds, cursor: cursor)
     }
 
     // Adapted from SurfaceView_AppKit.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
@@ -499,6 +653,18 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             mouseScrollObservations
         }
 
+        var currentMouseShapeForTesting: GhosttyMouseShape {
+            currentMouseShape
+        }
+
+        var currentMouseCursorForTesting: NSCursor? {
+            currentMouseShape.cursor
+        }
+
+        var mouseShapeUpdateCountForTesting: Int {
+            mouseShapeUpdateCount
+        }
+
         var terminalActionObservationsForTesting: [GhosttySurfaceTerminalActionObservation] {
             terminalActionObservations
         }
@@ -530,6 +696,15 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             ghosttyRuntimeCloseSurfaceCallback(
                 callbackContextOwnership?.toOpaque(),
                 processAlive
+            )
+        }
+
+        @discardableResult
+        func scheduleMouseShapeForTesting(rawValue: Int32) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeMouseShapeCallbackForTesting(
+                surface: surface,
+                rawValue: rawValue
             )
         }
 
@@ -707,6 +882,11 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         markedText.mutableString.setString("")
         keyTextAccumulator = nil
         lastPerformKeyEvent = nil
+    }
+
+    private func clearLocalCursorState() {
+        currentMouseShape = .text
+        window?.invalidateCursorRects(for: self)
     }
 
     // Adapted from SurfaceView_AppKit.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
@@ -1529,9 +1709,21 @@ extension GhosttySurfaceView {
             processClipboardWrite(location: location, contents: contents)
         case .close:
             break
+        case .mouseShapeChanged(let shape):
+            updateMouseShape(shape)
         case .pwdChanged(let workingDirectory):
             currentWorkingDirectory = workingDirectory
         }
+    }
+
+    private func updateMouseShape(_ shape: GhosttyMouseShape) {
+        guard shape.cursor != nil, currentMouseShape != shape else { return }
+        currentMouseShape = shape
+        window?.invalidateCursorRects(for: self)
+
+        #if DEBUG
+            mouseShapeUpdateCount += 1
+        #endif
     }
 
     private func processClipboardRead(token: UInt, location: GhosttyClipboardLocation) {
@@ -1666,6 +1858,7 @@ final class SurfaceCallbackContext: Sendable {
     private struct State: Sendable {
         var isActive = true
         var pendingProcessAlive: Bool?
+        var pendingMouseShape: GhosttyMouseShape?
         var pendingWorkingDirectory: String?
         var reads: [UInt: PendingRead] = [:]
         var writes: [UUID: GhosttyClipboardConfirmationRequest] = [:]
@@ -1687,6 +1880,7 @@ final class SurfaceCallbackContext: Sendable {
             guard state.isActive else { return [] }
             state.isActive = false
             state.pendingProcessAlive = nil
+            state.pendingMouseShape = nil
             state.pendingWorkingDirectory = nil
             let tokens = Array(state.reads.keys)
             state.reads.removeAll()
@@ -1850,6 +2044,24 @@ final class SurfaceCallbackContext: Sendable {
     }
 
     @discardableResult
+    func scheduleMouseShape(_ shape: GhosttyMouseShape) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingMouseShape == nil
+            state.pendingMouseShape = shape
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverMouseShapeIfActive()
+            }
+        }
+        return true
+    }
+
+    @discardableResult
     func scheduleWorkingDirectoryChange(_ workingDirectory: String) -> Bool {
         let result = state.withLock { state in
             guard state.isActive else { return (accepted: false, shouldSchedule: false) }
@@ -1919,6 +2131,18 @@ final class SurfaceCallbackContext: Sendable {
         }
         guard isQueued else { return }
         eventHandler(paneID, .clipboardConfirmation(request))
+    }
+
+    @MainActor
+    private func deliverMouseShapeIfActive() {
+        let shape = state.withLock { state -> GhosttyMouseShape? in
+            guard state.isActive else { return nil }
+            let shape = state.pendingMouseShape
+            state.pendingMouseShape = nil
+            return shape
+        }
+        guard let shape else { return }
+        eventHandler(paneID, .mouseShapeChanged(shape))
     }
 
     @MainActor

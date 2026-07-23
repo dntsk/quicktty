@@ -126,4 +126,13 @@
 - **Контекст:** Жёстко заданные AppKit shortcuts и отдельная таблица Ghostty bindings создавали нескольких владельцев одного keyboard event, не позволяли безопасно применять изменения через hot reload и усложняли performable fallback.
 - **Решение:** Локальные действия задаются стабильным typed registry `ShortcutAction` и конфигурируются повторяемой строкой `quicktty-shortcut`; global Quake toggle остаётся отдельным Carbon scope с той же grammar. Ghostty `keybind` не участвует в dispatch: top-level assignments молча фильтруются, а effective config завершается `keybind = clear`.
 - **Отклонено:** Произвольные Ghostty action strings в пользовательском shortcut config; одновременное владение сочетаниями AppKit и Ghostty; пересоздание terminal surfaces при reload.
-- **Последствия:** Last-valid и last-owner-wins semantics детерминированы, global chord имеет приоритет над local scope, Carbon replacement откатывается к последней успешной registration, а неназначенные события сохраняют normal terminal/IME path. Stateful terminal modes отложены до видимого состояния; Search и URL hover/open остаются обязательными следующими интеграциями.
+- **Последствия:** Last-valid и last-owner-wins semantics детерминированы, global chord имеет приоритет над local scope, Carbon replacement откатывается к последней успешной registration, а неназначенные события сохраняют normal terminal/IME path. Stateful terminal modes отложены до видимого состояния; Search остаётся следующей обязательной интеграцией.
+
+## Ghostty владеет URL detection, highlight и click semantics
+
+- **Дата:** 2026-07-23
+- **Статус:** принято
+- **Контекст:** URL regex, OSC 8 metadata, modifier gating, terminal-relative path resolution и решение о поглощении click уже реализованы в закреплённом Ghostty. Дублирование hit testing в QuickTTY нарушило бы terminal selection и TUI mouse reporting.
+- **Решение:** QuickTTY обрабатывает только surface-targeted `mouse_shape` и app-lifetime `open_url`. Cursor хранится локально в `GhosttySurfaceView` и применяется через cursor rects; stable URL payload открывается узким injectable MainActor client по upstream macOS policy. `mouse_over_link`, preview UI и keyboard action `open-url` не добавляются; существующий `copy-url` не меняется.
+- **Отклонено:** First-party URL parser/hit testing; preview popup/state; `NSCursor.push/pop/set`; allowlist URL schemes; новый shortcut для открытия ссылки.
+- **Последствия:** `Cmd+hover`/`Cmd+click` полностью следуют detection Ghostty, custom schemes разрешены, accepted action не запускает Ghostty fallback второй раз, а cursor state и teardown изолированы по surface.

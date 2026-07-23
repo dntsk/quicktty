@@ -75,6 +75,79 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func mouseShapesMatchPinnedABIAndPointerMapsToPointingHand() {
+        #expect(GhosttyMouseShape.pinnedABIMatchesHeader)
+        #expect(GhosttyMouseShape.pointer.cursor === NSCursor.pointingHand)
+        #expect(GhosttyMouseShape.text.cursor === NSCursor.iBeam)
+        #expect(GhosttyMouseShape.notAllowed.cursor === NSCursor.operationNotAllowed)
+        #expect(GhosttyMouseShape.allPinned.allSatisfy { $0.cursor != nil })
+        #expect(GhosttyMouseShape(rawValue: .max).cursor == nil)
+    }
+
+    @Test
+    func mouseShapeCallbacksCoalesceAndRemainSplitLocal() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeMouseTestWindow()
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embedMouseSurfaces(first, second, in: window)
+
+        #expect(first.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.pointer.rawValue))
+        #expect(first.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.grab.rawValue))
+        #expect(first.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.grabbing.rawValue))
+        #expect(second.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.crosshair.rawValue))
+        await Task.yield()
+
+        #expect(first.currentMouseShapeForTesting == .grabbing)
+        #expect(first.currentMouseCursorForTesting === NSCursor.closedHand)
+        #expect(first.mouseShapeUpdateCountForTesting == 1)
+        #expect(second.currentMouseShapeForTesting == .crosshair)
+        #expect(second.currentMouseCursorForTesting === NSCursor.crosshair)
+        #expect(second.mouseShapeUpdateCountForTesting == 1)
+        #expect(first.mouseButtonObservationsForTesting.isEmpty)
+        #expect(first.mousePositionObservationsForTesting.isEmpty)
+        #expect(first.inputObservationsForTesting.isEmpty)
+        #expect(second.mouseButtonObservationsForTesting.isEmpty)
+        #expect(second.mousePositionObservationsForTesting.isEmpty)
+        #expect(second.inputObservationsForTesting.isEmpty)
+    }
+
+    @Test
+    func unknownAndPostCloseMouseShapesDoNotReplaceCursor() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(first.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.pointer.rawValue))
+        await Task.yield()
+        #expect(first.currentMouseShapeForTesting == .pointer)
+        #expect(first.mouseShapeUpdateCountForTesting == 1)
+
+        #expect(first.scheduleMouseShapeForTesting(rawValue: .max))
+        await Task.yield()
+        #expect(first.currentMouseShapeForTesting == .pointer)
+        #expect(first.mouseShapeUpdateCountForTesting == 1)
+
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        #expect(second.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.crosshair.rawValue))
+        bridge.closeSurface(id: second.paneID)
+        await Task.yield()
+
+        #expect(second.currentMouseShapeForTesting == .text)
+        #expect(second.mouseShapeUpdateCountForTesting == 0)
+        #expect(!second.scheduleMouseShapeForTesting(rawValue: GhosttyMouseShape.pointer.rawValue))
+    }
+
+    @Test
     func scrollMomentumAndPackedModifiersMatchPinnedABI() {
         let phases: [(NSEvent.Phase, GhosttyScrollMomentum)] = [
             ([], .none),
