@@ -6,7 +6,15 @@ struct ConfigDiagnostic: Error, Equatable, Sendable {
         case unknownKey
         case emptyValue
         case invalidPresentationMode
-        case invalidHotKey(HotKeyDescriptor.ParseError)
+        case invalidHotKey(ShortcutChord.ParseError)
+        case emptyShortcutInstruction
+        case malformedShortcutInstruction
+        case emptyShortcutAction
+        case unknownShortcutAction(String)
+        case emptyShortcutChord(ShortcutAction)
+        case invalidShortcutChord(ShortcutAction, ShortcutChord.ParseError)
+        case shortcutConflict(ShortcutConflict)
+        case globalShortcutConflict(chord: ShortcutChord, local: ShortcutAction)
         case invalidNumber(expected: String)
         case invalidBoolean
         case invalidConfigEditor
@@ -31,6 +39,25 @@ extension ConfigDiagnostic: LocalizedError {
             return "\(prefix): expected 'normal' or 'quake'."
         case .invalidHotKey(let error):
             return "\(prefix): \(error.localizedDescription)"
+        case .emptyShortcutInstruction:
+            return "\(prefix): shortcut instruction is empty."
+        case .malformedShortcutInstruction:
+            return "\(prefix): expected 'action-id=chord' or 'action-id=disabled'."
+        case .emptyShortcutAction:
+            return "\(prefix): shortcut action ID is empty."
+        case .unknownShortcutAction(let actionID):
+            return "\(prefix): unknown shortcut action '\(actionID)'."
+        case .emptyShortcutChord(let action):
+            return "\(prefix): shortcut chord for '\(action.rawValue)' is empty."
+        case .invalidShortcutChord(let action, let error):
+            return
+                "\(prefix): invalid chord for '\(action.rawValue)': \(error.localizedDescription)"
+        case .shortcutConflict(let conflict):
+            return
+                "\(prefix): chord '\(conflict.chord.stringValue)' moved from '\(conflict.previous.rawValue)' to '\(conflict.winner.rawValue)'; '\(conflict.previous.rawValue)' was disabled."
+        case .globalShortcutConflict(let chord, let local):
+            return
+                "\(prefix): global action 'quicktty-global-toggle' owns '\(chord.stringValue)'; local action '\(local.rawValue)' was disabled."
         case .invalidNumber(let expected):
             return "\(prefix): expected \(expected)."
         case .invalidBoolean:
@@ -81,7 +108,11 @@ struct ConfigDocument: Equatable, Sendable {
 
     var filteredGhosttyData: Data {
         lines.reduce(into: Data()) { result, line in
-            guard Self.assignment(in: line.content).belongsToQuickTTY else {
+            let assignment = Self.assignment(in: line.content)
+            guard
+                assignment.belongsToQuickTTY
+                    || Self.isExactAssignment(in: line.content, key: "keybind")
+            else {
                 result.append(line.content)
                 result.append(line.terminator)
                 return
@@ -93,53 +124,144 @@ struct ConfigDocument: Equatable, Sendable {
     }
 
     var effectiveGhosttyData: Data {
-        let filteredData = filteredGhosttyData
-        guard !lines.contains(where: { Self.isTerminalCopyOnSelectAssignment(in: $0.content) })
-        else {
-            return filteredData
+        var effectiveData = filteredGhosttyData
+        if !lines.contains(where: { Self.isTerminalCopyOnSelectAssignment(in: $0.content) }) {
+            let defaultAssignment = Data("copy-on-select = clipboard\n".utf8)
+            let byteOrderMark = Data(Self.byteOrderMark)
+            if effectiveData.starts(with: byteOrderMark) {
+                effectiveData =
+                    byteOrderMark + defaultAssignment
+                    + effectiveData.dropFirst(byteOrderMark.count)
+            } else {
+                effectiveData = defaultAssignment + effectiveData
+            }
         }
-        let defaultAssignment = Data("copy-on-select = clipboard\n".utf8)
-        let byteOrderMark = Data(Self.byteOrderMark)
-        guard filteredData.starts(with: byteOrderMark) else {
-            return defaultAssignment + filteredData
+
+        let byteOrderMarkLength = Self.byteOrderMarkLength(in: [UInt8](effectiveData))
+        if effectiveData.count > byteOrderMarkLength,
+            effectiveData.last != 0x0A,
+            effectiveData.last != 0x0D
+        {
+            effectiveData.append(preferredTerminator)
         }
-        return byteOrderMark + defaultAssignment + filteredData.dropFirst(byteOrderMark.count)
+        effectiveData.append(contentsOf: "keybind = clear".utf8)
+        effectiveData.append(preferredTerminator)
+        return effectiveData
     }
 
-    func parse() -> ConfigParseResult {
+    func parse(previousConfig: QuickTTYConfig? = nil) -> ConfigParseResult {
+        typealias ValidShortcut = (
+            line: Int, action: ShortcutAction, assignment: ShortcutAssignment
+        )
+
         var config = QuickTTYConfig()
         var diagnostics: [ConfigDiagnostic] = []
+        var validShortcuts: [ValidShortcut] = []
+        var validShortcutActions = Set<ShortcutAction>()
+        var invalidShortcutLines: [ShortcutAction: Int] = [:]
+        var hasValidGlobalToggle = false
 
         for (index, line) in lines.enumerated() {
+            let lineNumber = index + 1
             let assignment = Self.assignment(in: line.content)
             guard assignment.belongsToQuickTTY else { continue }
             guard !assignment.malformed, let keyName = assignment.key else {
+                let reason: ConfigDiagnostic.Reason =
+                    assignment.key == QuickTTYConfig.Key.shortcut.rawValue
+                    ? .malformedShortcutInstruction : .malformedAssignment
                 diagnostics.append(
-                    ConfigDiagnostic(
-                        line: index + 1, key: assignment.key, reason: .malformedAssignment)
+                    ConfigDiagnostic(line: lineNumber, key: assignment.key, reason: reason)
                 )
                 continue
             }
             guard let key = QuickTTYConfig.Key(rawValue: keyName) else {
                 diagnostics.append(
-                    ConfigDiagnostic(line: index + 1, key: keyName, reason: .unknownKey)
+                    ConfigDiagnostic(line: lineNumber, key: keyName, reason: .unknownKey)
                 )
                 continue
             }
             guard let value = assignment.value, !value.isEmpty else {
+                let reason: ConfigDiagnostic.Reason =
+                    key == .shortcut ? .emptyShortcutInstruction : .emptyValue
                 diagnostics.append(
-                    ConfigDiagnostic(line: index + 1, key: keyName, reason: .emptyValue)
+                    ConfigDiagnostic(line: lineNumber, key: keyName, reason: reason)
                 )
                 continue
             }
+
+            if key == .shortcut {
+                Self.parseShortcut(
+                    value,
+                    line: lineNumber,
+                    validShortcuts: &validShortcuts,
+                    validActions: &validShortcutActions,
+                    invalidLines: &invalidShortcutLines,
+                    diagnostics: &diagnostics
+                )
+                continue
+            }
+
             Self.apply(
                 value,
                 for: key,
-                line: index + 1,
+                line: lineNumber,
+                previousConfig: previousConfig,
+                hasValidGlobalToggle: &hasValidGlobalToggle,
                 to: &config,
                 diagnostics: &diagnostics
             )
         }
+
+        var shortcuts = ShortcutConfiguration.defaults
+        var assignmentLines: [ShortcutAction: Int] = [:]
+        for (action, line) in invalidShortcutLines.sorted(by: { $0.value < $1.value })
+        where !validShortcutActions.contains(action) {
+            let effectiveFallback: ShortcutAssignment
+            if let previousConfig {
+                effectiveFallback =
+                    previousConfig.shortcuts.chord(for: action).map(ShortcutAssignment.chord)
+                    ?? .disabled
+            } else {
+                effectiveFallback = action.defaultChord.map(ShortcutAssignment.chord) ?? .disabled
+            }
+            if let conflict = shortcuts.apply(effectiveFallback, to: action) {
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: line,
+                        key: QuickTTYConfig.Key.shortcut.rawValue,
+                        reason: .shortcutConflict(conflict)
+                    )
+                )
+            }
+            assignmentLines[action] = line
+        }
+
+        for shortcut in validShortcuts {
+            if let conflict = shortcuts.apply(shortcut.assignment, to: shortcut.action) {
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: shortcut.line,
+                        key: QuickTTYConfig.Key.shortcut.rawValue,
+                        reason: .shortcutConflict(conflict)
+                    )
+                )
+            }
+            assignmentLines[shortcut.action] = shortcut.line
+        }
+
+        let globalChord = config.globalToggle
+        if let localOwner = shortcuts.owner(of: globalChord) {
+            shortcuts.disable(localOwner)
+            diagnostics.append(
+                ConfigDiagnostic(
+                    line: assignmentLines[localOwner] ?? 1,
+                    key: QuickTTYConfig.Key.shortcut.rawValue,
+                    reason: .globalShortcutConflict(chord: globalChord, local: localOwner)
+                )
+            )
+        }
+        config.shortcuts = shortcuts
+        diagnostics.sort { $0.line < $1.line }
 
         return ConfigParseResult(config: config, diagnostics: diagnostics)
     }
@@ -291,6 +413,10 @@ struct ConfigDocument: Equatable, Sendable {
     }
 
     private static func isTerminalCopyOnSelectAssignment(in data: Data) -> Bool {
+        isExactAssignment(in: data, key: "copy-on-select")
+    }
+
+    private static func isExactAssignment(in data: Data, key: String) -> Bool {
         let bytes = [UInt8](data)
         let first = firstContentByteIndex(in: bytes)
         guard first < bytes.count, bytes[first] != 0x23,
@@ -303,13 +429,98 @@ struct ConfigDocument: Equatable, Sendable {
         while keyEnd > first, isHorizontalWhitespace(bytes[keyEnd - 1]) {
             keyEnd -= 1
         }
-        return bytes[first..<keyEnd].elementsEqual("copy-on-select".utf8)
+        return bytes[first..<keyEnd].elementsEqual(key.utf8)
+    }
+
+    private static func parseShortcut(
+        _ value: String,
+        line: Int,
+        validShortcuts:
+            inout [(
+                line: Int, action: ShortcutAction, assignment: ShortcutAssignment
+            )],
+        validActions: inout Set<ShortcutAction>,
+        invalidLines: inout [ShortcutAction: Int],
+        diagnostics: inout [ConfigDiagnostic]
+    ) {
+        let key = QuickTTYConfig.Key.shortcut.rawValue
+        guard let separator = value.firstIndex(of: "=") else {
+            let actionID = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let action = ShortcutAction(rawValue: actionID) {
+                invalidLines[action] = line
+            }
+            diagnostics.append(
+                ConfigDiagnostic(line: line, key: key, reason: .malformedShortcutInstruction)
+            )
+            return
+        }
+
+        let actionID = value[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+        let chordValue = value[value.index(after: separator)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !actionID.isEmpty else {
+            diagnostics.append(
+                ConfigDiagnostic(line: line, key: key, reason: .emptyShortcutAction)
+            )
+            return
+        }
+        guard let action = ShortcutAction(rawValue: actionID) else {
+            diagnostics.append(
+                ConfigDiagnostic(
+                    line: line,
+                    key: key,
+                    reason: .unknownShortcutAction(actionID)
+                )
+            )
+            return
+        }
+        guard !chordValue.isEmpty else {
+            invalidLines[action] = line
+            diagnostics.append(
+                ConfigDiagnostic(line: line, key: key, reason: .emptyShortcutChord(action))
+            )
+            return
+        }
+
+        let shortcutAssignment: ShortcutAssignment
+        if chordValue == "disabled" {
+            shortcutAssignment = .disabled
+        } else {
+            do {
+                shortcutAssignment = .chord(try ShortcutChord(parsing: chordValue))
+            } catch let error as ShortcutChord.ParseError {
+                invalidLines[action] = line
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: line,
+                        key: key,
+                        reason: .invalidShortcutChord(action, error)
+                    )
+                )
+                return
+            } catch {
+                invalidLines[action] = line
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: line,
+                        key: key,
+                        reason: .invalidShortcutChord(action, .unsupportedKey(chordValue))
+                    )
+                )
+                return
+            }
+        }
+
+        validActions.insert(action)
+        validShortcuts.append((line: line, action: action, assignment: shortcutAssignment))
     }
 
     private static func apply(
         _ value: String,
         for key: QuickTTYConfig.Key,
         line: Int,
+        previousConfig: QuickTTYConfig?,
+        hasValidGlobalToggle: inout Bool,
         to config: inout QuickTTYConfig,
         diagnostics: inout [ConfigDiagnostic]
     ) {
@@ -325,8 +536,12 @@ struct ConfigDocument: Equatable, Sendable {
             config.presentationMode = mode
         case .globalToggle:
             do {
-                config.globalToggle = try HotKeyDescriptor(parsing: value)
-            } catch let error as HotKeyDescriptor.ParseError {
+                config.globalToggle = try ShortcutChord(parsing: value)
+                hasValidGlobalToggle = true
+            } catch let error as ShortcutChord.ParseError {
+                if !hasValidGlobalToggle, let previousConfig {
+                    config.globalToggle = previousConfig.globalToggle
+                }
                 diagnostics.append(
                     ConfigDiagnostic(
                         line: line,
@@ -335,6 +550,9 @@ struct ConfigDocument: Equatable, Sendable {
                     )
                 )
             } catch {
+                if !hasValidGlobalToggle, let previousConfig {
+                    config.globalToggle = previousConfig.globalToggle
+                }
                 diagnostics.append(
                     ConfigDiagnostic(
                         line: line,
@@ -343,6 +561,8 @@ struct ConfigDocument: Equatable, Sendable {
                     )
                 )
             }
+        case .shortcut:
+            preconditionFailure("Shortcut assignments are parsed sequentially")
         case .quakeHeight:
             guard let height = parseHeight(value) else {
                 diagnostics.append(
@@ -432,5 +652,26 @@ struct ConfigDocument: Equatable, Sendable {
 
     private static func isHorizontalWhitespace(_ byte: UInt8) -> Bool {
         byte == 0x20 || byte == 0x09
+    }
+}
+
+extension ShortcutChord.ParseError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .empty:
+            "Shortcut chord is empty."
+        case .emptyComponent(let position):
+            "Shortcut chord component \(position) is empty."
+        case .missingKey:
+            "Shortcut chord does not contain a key."
+        case .duplicateModifier(let modifier):
+            "Shortcut chord repeats modifier '\(modifier.rawValue)'."
+        case .unsupportedModifier(let modifier):
+            "Unsupported shortcut modifier '\(modifier)'."
+        case .unsupportedKey(let key):
+            "Unsupported shortcut key '\(key)'."
+        case .multipleKeys(let first, let second):
+            "Shortcut chord contains multiple keys: '\(first)' and '\(second)'."
+        }
     }
 }

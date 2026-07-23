@@ -68,6 +68,27 @@ struct GhosttyBridgeTests {
     }
 
     @Test
+    func shortcutConfigurationUpdatesWithoutRecreatingExistingSurface() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let identity = ObjectIdentifier(surface)
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(
+            ShortcutChord(key: .x, modifiers: [.command]),
+            to: .clearScreen
+        )
+
+        bridge.applyShortcutConfiguration(configuration)
+
+        #expect(bridge.shortcutConfigurationForTesting == configuration)
+        #expect(ObjectIdentifier(surface) == identity)
+        #expect(bridge.activeSurfaceIDs == [surface.paneID])
+    }
+
+    @Test
     func shutdownIsIdempotent() throws {
         let fixture = try TemporaryConfig()
         defer { fixture.remove() }

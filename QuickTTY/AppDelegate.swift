@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ghosttyBridge: GhosttyBridge?
     private var windowCoordinator: WindowCoordinator?
     private var configController: ConfigController?
+    private let shortcutController = ShortcutController()
     private var configurationDiagnosticsPresentation: ConfigDiagnosticPresentation?
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
@@ -64,16 +65,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             self.windowCoordinator = windowCoordinator
             windowCoordinator.applyConfiguration(config)
+            Self.applyRuntimeShortcutConfiguration(
+                config.shortcuts,
+                registeredGlobalChord: windowCoordinator.registeredGlobalChord,
+                shortcutController: shortcutController,
+                ghosttyBridge: ghosttyBridge
+            )
             try windowCoordinator.start()
             applyPendingConfigurationDiagnostics()
+            installApplicationMenuItems()
             installNewTabMenuItem()
-            installOpenConfigurationMenuItem()
             installSplitPaneMenuItems()
+            installCloseMenuItems()
             installPresentationMenuItem()
             installTabSelectionMenuItems()
             installWorkspaceMenuItems()
             installPaneNavigationMenuItems()
             installToggleBroadcastMenuItem()
+            installTerminalMenuItems()
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
@@ -230,8 +239,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shutdownRuntime()
     }
 
+    @discardableResult
+    static func applyRuntimeShortcutConfiguration(
+        _ configuration: ShortcutConfiguration,
+        registeredGlobalChord: ShortcutChord?,
+        shortcutController: ShortcutController,
+        ghosttyBridge: GhosttyBridge
+    ) -> ShortcutConfiguration {
+        let resolved = configuration.resolvingGlobalPrecedence(registeredGlobalChord)
+        shortcutController.apply(resolved)
+        ghosttyBridge.applyShortcutConfiguration(resolved)
+        return resolved
+    }
+
+    static let quitMenuItemAction = #selector(NSApplication.terminate(_:))
     static let newTabMenuItemAction = #selector(AppDelegate.createNewTab)
+    static let closePaneMenuItemAction = #selector(AppDelegate.closeActivePane)
+    static let closeTabMenuItemAction = #selector(AppDelegate.closeActiveTab)
     static let openConfigurationMenuItemAction = #selector(AppDelegate.openConfiguration)
+    static let togglePresentationMenuItemAction = #selector(AppDelegate.togglePresentationMode)
     static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
     static let tabSelectionMenuItemAction = #selector(AppDelegate.activateTab(_:))
@@ -246,6 +272,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let focusUpPaneMenuItemAction = #selector(AppDelegate.focusUpPane)
     static let focusDownPaneMenuItemAction = #selector(AppDelegate.focusDownPane)
     static let toggleBroadcastMenuItemAction = #selector(AppDelegate.toggleBroadcast)
+    static let copyMenuItemAction = #selector(NSText.copy(_:))
+    static let pasteMenuItemAction = #selector(NSText.paste(_:))
+    static let selectAllMenuItemAction = #selector(NSText.selectAll(_:))
+
+    static func makeQuitMenuItem(
+        target: AnyObject,
+        action: Selector = quitMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Quit QuickTTY", action: action, keyEquivalent: "q")
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installQuitMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = quitMenuItemAction,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = applicationMenu(in: mainMenu)
+        let canonicalItems = menu.items.filter { $0.title == "Quit QuickTTY" }
+        let item = canonicalItems.first ?? makeQuitMenuItem(target: target, action: action)
+        item.title = "Quit QuickTTY"
+        item.action = action
+        item.keyEquivalent = "q"
+        item.keyEquivalentModifierMask = [.command]
+        item.target = target
+        if canonicalItems.isEmpty {
+            menu.addItem(item)
+        } else {
+            for duplicate in canonicalItems.dropFirst() {
+                menu.removeItem(duplicate)
+            }
+        }
+        shortcutController?.register(item, for: .quit)
+        return mainMenu
+    }
 
     static func makeNewTabMenuItem(
         target: AnyObject,
@@ -261,24 +327,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func installNewTabMenuItem(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
-        action: Selector = newTabMenuItemAction
+        action: Selector = newTabMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let fileMenu = fileMenu(in: mainMenu)
-
         let canonicalItems = fileMenu.items.filter(isCanonicalNewTabMenuItem)
-        guard let canonicalItem = canonicalItems.first else {
-            fileMenu.addItem(makeNewTabMenuItem(target: target, action: action))
-            return mainMenu
+        let canonicalItem: NSMenuItem
+
+        if let existingItem = canonicalItems.first {
+            canonicalItem = existingItem
+            canonicalItem.title = "New Tab"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = "t"
+            canonicalItem.keyEquivalentModifierMask = [.command]
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                fileMenu.removeItem(duplicate)
+            }
+        } else {
+            canonicalItem = makeNewTabMenuItem(target: target, action: action)
+            fileMenu.addItem(canonicalItem)
         }
 
-        canonicalItem.title = "New Tab"
-        canonicalItem.action = action
-        canonicalItem.keyEquivalent = "t"
-        canonicalItem.keyEquivalentModifierMask = [.command]
-        canonicalItem.target = target
-        for duplicate in canonicalItems.dropFirst() {
-            fileMenu.removeItem(duplicate)
+        shortcutController?.register(canonicalItem, for: .newTab)
+        return mainMenu
+    }
+
+    @discardableResult
+    static func installCloseMenuItems(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        closePaneAction: Selector = closePaneMenuItemAction,
+        closeTabAction: Selector = closeTabMenuItemAction,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = fileMenu(in: mainMenu)
+        let registrations: [(ShortcutAction, String, Selector, String, NSEvent.ModifierFlags)] = [
+            (.closePane, "Close Pane", closePaneAction, "w", [.command]),
+            (.closeTab, "Close Tab", closeTabAction, "w", [.command, .option]),
+        ]
+        var items: [NSMenuItem] = []
+
+        for (shortcutAction, title, action, keyEquivalent, modifierMask) in registrations {
+            let canonicalItems = menu.items.filter { $0.title == title }
+            let item =
+                canonicalItems.first
+                ?? NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+            item.title = title
+            item.action = action
+            item.keyEquivalent = keyEquivalent
+            item.keyEquivalentModifierMask = modifierMask
+            item.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                menu.removeItem(duplicate)
+            }
+            shortcutController?.register(item, for: shortcutAction)
+            items.append(item)
+        }
+
+        for item in items where menu.items.contains(where: { $0 === item }) {
+            menu.removeItem(item)
+        }
+        let newTabIndex = menu.indexOfItem(withTitle: "New Tab")
+        if newTabIndex >= 0 {
+            for (offset, item) in items.enumerated() {
+                menu.insertItem(item, at: newTabIndex + offset + 1)
+            }
+        } else {
+            for item in items {
+                menu.addItem(item)
+            }
         }
         return mainMenu
     }
@@ -304,24 +424,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func installOpenConfigurationMenuItem(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
-        action: Selector = openConfigurationMenuItemAction
+        action: Selector = openConfigurationMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let applicationMenu = applicationMenu(in: mainMenu)
         let canonicalItems = applicationMenu.items.filter(isCanonicalOpenConfigurationMenuItem)
-        guard let canonicalItem = canonicalItems.first else {
-            applicationMenu.addItem(makeOpenConfigurationMenuItem(target: target, action: action))
-            return mainMenu
+        let canonicalItem: NSMenuItem
+
+        if let existingItem = canonicalItems.first {
+            canonicalItem = existingItem
+            canonicalItem.title = "Open Configuration…"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = ","
+            canonicalItem.keyEquivalentModifierMask = [.command]
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                applicationMenu.removeItem(duplicate)
+            }
+        } else {
+            canonicalItem = makeOpenConfigurationMenuItem(target: target, action: action)
+            applicationMenu.addItem(canonicalItem)
         }
 
-        canonicalItem.title = "Open Configuration…"
-        canonicalItem.action = action
-        canonicalItem.keyEquivalent = ","
-        canonicalItem.keyEquivalentModifierMask = [.command]
-        canonicalItem.target = target
-        for duplicate in canonicalItems.dropFirst() {
-            applicationMenu.removeItem(duplicate)
-        }
+        shortcutController?.register(canonicalItem, for: .openConfig)
         return mainMenu
     }
 
@@ -354,7 +480,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         in existingMainMenu: NSMenu?,
         target: AnyObject,
         splitRightAction: Selector = splitRightMenuItemAction,
-        splitDownAction: Selector = splitDownMenuItemAction
+        splitDownAction: Selector = splitDownMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let fileMenu = fileMenu(in: mainMenu)
@@ -372,6 +499,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             target: target,
             action: splitDownAction
         )
+        shortcutController?.register(splitRight, for: .splitRight)
+        shortcutController?.register(splitDown, for: .splitDown)
 
         if fileMenu.items.contains(where: { $0 === splitRight }) {
             fileMenu.removeItem(splitRight)
@@ -444,7 +573,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         leftAction: Selector = focusLeftPaneMenuItemAction,
         rightAction: Selector = focusRightPaneMenuItemAction,
         upAction: Selector = focusUpPaneMenuItemAction,
-        downAction: Selector = focusDownPaneMenuItemAction
+        downAction: Selector = focusDownPaneMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let viewMenu = viewMenu(in: mainMenu)
@@ -498,8 +628,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: downAction
             ),
         ]
-        for item in items where !viewMenu.items.contains(where: { $0 === item }) {
-            viewMenu.addItem(item)
+        let shortcutActions: [ShortcutAction] = [
+            .previousPane, .nextPane, .focusLeft, .focusRight, .focusUp, .focusDown,
+        ]
+        for (shortcutAction, item) in zip(shortcutActions, items) {
+            shortcutController?.register(item, for: shortcutAction)
+            if !viewMenu.items.contains(where: { $0 === item }) {
+                viewMenu.addItem(item)
+            }
         }
         return mainMenu
     }
@@ -555,24 +691,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func installToggleBroadcastMenuItem(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
-        action: Selector = toggleBroadcastMenuItemAction
+        action: Selector = toggleBroadcastMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let viewMenu = viewMenu(in: mainMenu)
         let canonicalItems = viewMenu.items.filter(isCanonicalToggleBroadcastMenuItem)
-        guard let canonicalItem = canonicalItems.first else {
-            viewMenu.addItem(makeToggleBroadcastMenuItem(target: target, action: action))
-            return mainMenu
+        let canonicalItem: NSMenuItem
+
+        if let existingItem = canonicalItems.first {
+            canonicalItem = existingItem
+            canonicalItem.title = "Toggle Broadcast Input"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = "b"
+            canonicalItem.keyEquivalentModifierMask = [.command]
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                viewMenu.removeItem(duplicate)
+            }
+        } else {
+            canonicalItem = makeToggleBroadcastMenuItem(target: target, action: action)
+            viewMenu.addItem(canonicalItem)
         }
 
-        canonicalItem.title = "Toggle Broadcast Input"
-        canonicalItem.action = action
-        canonicalItem.keyEquivalent = "b"
-        canonicalItem.keyEquivalentModifierMask = [.command]
-        canonicalItem.target = target
-        for duplicate in canonicalItems.dropFirst() {
-            viewMenu.removeItem(duplicate)
-        }
+        shortcutController?.register(canonicalItem, for: .toggleBroadcast)
         return mainMenu
     }
 
@@ -694,6 +836,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private static func editMenu(in mainMenu: NSMenu) -> NSMenu {
+        if let editItem = mainMenu.item(withTitle: "Edit") {
+            if let existingEditMenu = editItem.submenu {
+                return existingEditMenu
+            }
+            let newEditMenu = NSMenu(title: "Edit")
+            editItem.submenu = newEditMenu
+            return newEditMenu
+        }
+
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let newEditMenu = NSMenu(title: "Edit")
+        editItem.submenu = newEditMenu
+        mainMenu.addItem(editItem)
+        return newEditMenu
+    }
+
     private static func viewMenu(in mainMenu: NSMenu) -> NSMenu {
         if let viewItem = mainMenu.item(withTitle: "View") {
             if let existingViewMenu = viewItem.submenu {
@@ -709,6 +868,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewItem.submenu = newViewMenu
         mainMenu.addItem(viewItem)
         return newViewMenu
+    }
+
+    @discardableResult
+    static func installPresentationMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = togglePresentationMenuItemAction,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = viewMenu(in: mainMenu)
+        let canonicalItems = menu.items.filter { $0.title == "Toggle Presentation Mode" }
+        let item =
+            canonicalItems.first
+            ?? NSMenuItem(title: "Toggle Presentation Mode", action: action, keyEquivalent: "p")
+        item.title = "Toggle Presentation Mode"
+        item.action = action
+        item.keyEquivalent = "p"
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.target = target
+        if canonicalItems.isEmpty {
+            menu.addItem(item)
+        } else {
+            for duplicate in canonicalItems.dropFirst() {
+                menu.removeItem(duplicate)
+            }
+        }
+        shortcutController?.register(item, for: .togglePresentation)
+        return mainMenu
+    }
+
+    @discardableResult
+    static func installTerminalMenuItems(
+        in existingMainMenu: NSMenu?,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = editMenu(in: mainMenu)
+        let registrations: [(ShortcutAction, String, Selector, String, NSEvent.ModifierFlags)] = [
+            (.copy, "Copy", copyMenuItemAction, "", []),
+            (.paste, "Paste", pasteMenuItemAction, "v", [.command]),
+            (.selectAll, "Select All", selectAllMenuItemAction, "a", [.command]),
+        ]
+
+        for (shortcutAction, title, action, keyEquivalent, modifierMask) in registrations {
+            let canonicalItems = menu.items.filter { $0.title == title }
+            let item =
+                canonicalItems.first
+                ?? NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+            item.title = title
+            item.action = action
+            item.keyEquivalent = keyEquivalent
+            item.keyEquivalentModifierMask = modifierMask
+            item.target = nil
+            if canonicalItems.isEmpty {
+                menu.addItem(item)
+            } else {
+                for duplicate in canonicalItems.dropFirst() {
+                    menu.removeItem(duplicate)
+                }
+            }
+            shortcutController?.register(item, for: shortcutAction)
+        }
+        return mainMenu
     }
 
     static func makeTabSelectionMenuItem(
@@ -731,33 +954,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func installTabSelectionMenuItems(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
-        action: Selector = tabSelectionMenuItemAction
+        action: Selector = tabSelectionMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let viewMenu = viewMenu(in: mainMenu)
+        let shortcutActions: [ShortcutAction] = [
+            .selectTab1, .selectTab2, .selectTab3, .selectTab4, .selectTab5,
+            .selectTab6, .selectTab7, .selectTab8, .selectTab9,
+        ]
 
-        for index in 1...9 {
+        for (index, shortcutAction) in zip(1...9, shortcutActions) {
             let canonicalItems = viewMenu.items.filter {
                 $0.title == "Select Tab \(index)"
                     || ($0.keyEquivalent == "\(index)"
                         && $0.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
                             == [.command])
             }
-            guard let canonicalItem = canonicalItems.first else {
-                viewMenu.addItem(
-                    makeTabSelectionMenuItem(index: index, target: target, action: action))
-                continue
+            let canonicalItem: NSMenuItem
+            if let existingItem = canonicalItems.first {
+                canonicalItem = existingItem
+                canonicalItem.title = "Select Tab \(index)"
+                canonicalItem.action = action
+                canonicalItem.keyEquivalent = "\(index)"
+                canonicalItem.keyEquivalentModifierMask = [.command]
+                canonicalItem.representedObject = NSNumber(value: index)
+                canonicalItem.target = target
+                for duplicate in canonicalItems.dropFirst() {
+                    viewMenu.removeItem(duplicate)
+                }
+            } else {
+                canonicalItem = makeTabSelectionMenuItem(
+                    index: index,
+                    target: target,
+                    action: action
+                )
+                viewMenu.addItem(canonicalItem)
             }
-
-            canonicalItem.title = "Select Tab \(index)"
-            canonicalItem.action = action
-            canonicalItem.keyEquivalent = "\(index)"
-            canonicalItem.keyEquivalentModifierMask = [.command]
-            canonicalItem.representedObject = NSNumber(value: index)
-            canonicalItem.target = target
-            for duplicate in canonicalItems.dropFirst() {
-                viewMenu.removeItem(duplicate)
-            }
+            shortcutController?.register(canonicalItem, for: shortcutAction)
         }
         return mainMenu
     }
@@ -785,7 +1019,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         createAction: Selector = newWorkspaceMenuItemAction,
         renameAction: Selector = renameWorkspaceMenuItemAction,
         deleteAction: Selector = deleteWorkspaceMenuItemAction,
-        selectionAction: Selector = workspaceSelectionMenuItemAction
+        selectionAction: Selector = workspaceSelectionMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let menu = workspaceMenu(in: mainMenu)
@@ -809,10 +1044,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: deleteAction
             ),
         ]
+        for (shortcutAction, item) in zip(
+            [ShortcutAction.newWorkspace, .renameWorkspace, .deleteWorkspace],
+            managementItems
+        ) {
+            shortcutController?.register(item, for: shortcutAction)
+        }
         _ = installWorkspaceSelectionMenuItems(
             in: mainMenu,
             target: target,
-            action: selectionAction
+            action: selectionAction,
+            shortcutController: shortcutController
         )
         let selectionItems = (1...9).compactMap { index in
             menu.item(withTitle: "Select Workspace \(index)")
@@ -832,35 +1074,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func installWorkspaceSelectionMenuItems(
         in existingMainMenu: NSMenu?,
         target: AnyObject,
-        action: Selector = workspaceSelectionMenuItemAction
+        action: Selector = workspaceSelectionMenuItemAction,
+        shortcutController: ShortcutController? = nil
     ) -> NSMenu {
         let mainMenu = existingMainMenu ?? NSMenu()
         let menu = workspaceMenu(in: mainMenu)
         removeLegacyWorkspaceSelectionItems(from: mainMenu, excluding: menu)
+        let shortcutActions: [ShortcutAction] = [
+            .selectWorkspace1, .selectWorkspace2, .selectWorkspace3, .selectWorkspace4,
+            .selectWorkspace5, .selectWorkspace6, .selectWorkspace7, .selectWorkspace8,
+            .selectWorkspace9,
+        ]
 
-        for index in 1...9 {
+        for (index, shortcutAction) in zip(1...9, shortcutActions) {
             let canonicalItems = menu.items.filter {
                 $0.title == "Select Workspace \(index)"
                     || ($0.keyEquivalent == "\(index)"
                         && normalizedShortcutModifiers(for: $0) == [.command, .option])
             }
-            guard let canonicalItem = canonicalItems.first else {
-                menu.addItem(
-                    makeWorkspaceSelectionMenuItem(index: index, target: target, action: action))
-                continue
+            let canonicalItem: NSMenuItem
+            if let existingItem = canonicalItems.first {
+                canonicalItem = existingItem
+                canonicalItem.title = "Select Workspace \(index)"
+                canonicalItem.action = action
+                canonicalItem.keyEquivalent = "\(index)"
+                canonicalItem.keyEquivalentModifierMask = [.command, .option]
+                canonicalItem.representedObject = NSNumber(value: index)
+                canonicalItem.target = target
+                for duplicate in canonicalItems.dropFirst() {
+                    menu.removeItem(duplicate)
+                }
+            } else {
+                canonicalItem = makeWorkspaceSelectionMenuItem(
+                    index: index,
+                    target: target,
+                    action: action
+                )
+                menu.addItem(canonicalItem)
             }
-
-            canonicalItem.title = "Select Workspace \(index)"
-            canonicalItem.action = action
-            canonicalItem.keyEquivalent = "\(index)"
-            canonicalItem.keyEquivalentModifierMask = [.command, .option]
-            canonicalItem.representedObject = NSNumber(value: index)
-            canonicalItem.target = target
-            for duplicate in canonicalItems.dropFirst() {
-                menu.removeItem(duplicate)
-            }
+            shortcutController?.register(canonicalItem, for: shortcutAction)
         }
         return mainMenu
+    }
+
+    static func validateStructuralMenuItem(
+        _ menuItem: NSMenuItem,
+        coordinatorAvailable: Bool,
+        canOpenConfig: Bool,
+        canCreateTab: Bool,
+        canClosePane: Bool,
+        canCloseTab: Bool,
+        canSplitPane: Bool,
+        canNavigatePanes: Bool,
+        activeTabCount: Int,
+        workspaceCount: Int
+    ) -> Bool {
+        switch menuItem.action {
+        case quitMenuItemAction:
+            return true
+        case openConfigurationMenuItemAction:
+            return canOpenConfig
+        case togglePresentationMenuItemAction:
+            return coordinatorAvailable
+        case newTabMenuItemAction:
+            return canCreateTab
+        case closePaneMenuItemAction:
+            return canClosePane
+        case closeTabMenuItemAction:
+            return canCloseTab
+        case splitRightMenuItemAction, splitDownMenuItemAction:
+            return canSplitPane
+        case previousPaneMenuItemAction, nextPaneMenuItemAction,
+            focusLeftPaneMenuItemAction, focusRightPaneMenuItemAction,
+            focusUpPaneMenuItemAction, focusDownPaneMenuItemAction:
+            return canNavigatePanes
+        case tabSelectionMenuItemAction:
+            guard let index = (menuItem.representedObject as? NSNumber)?.intValue else {
+                return false
+            }
+            return index >= 1 && index <= activeTabCount
+        case workspaceSelectionMenuItemAction:
+            guard let index = (menuItem.representedObject as? NSNumber)?.intValue else {
+                return false
+            }
+            return index >= 1 && index <= workspaceCount
+        default:
+            return true
+        }
     }
 
     static func validateWorkspaceMenuItem(
@@ -889,16 +1189,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isBroadcastingActiveTab: windowCoordinator?.isBroadcastingActiveTab ?? false
             )
         }
-        return Self.validateWorkspaceMenuItem(
+        let workspaceItemIsValid = Self.validateWorkspaceMenuItem(
             menuItem,
             coordinatorAvailable: windowCoordinator != nil,
             hasActiveWorkspace: windowCoordinator?.hasActiveWorkspace ?? false,
             canDeleteActiveWorkspace: windowCoordinator?.canDeleteActiveWorkspace ?? false
         )
+        guard workspaceItemIsValid else { return false }
+        return Self.validateStructuralMenuItem(
+            menuItem,
+            coordinatorAvailable: windowCoordinator != nil,
+            canOpenConfig: configController != nil && windowCoordinator != nil,
+            canCreateTab: windowCoordinator?.hasActiveWorkspace ?? false,
+            canClosePane: windowCoordinator?.canCloseActivePane ?? false,
+            canCloseTab: windowCoordinator?.canCloseActiveTab ?? false,
+            canSplitPane: windowCoordinator?.canSplitActivePane ?? false,
+            canNavigatePanes: windowCoordinator?.canNavigateActivePanes ?? false,
+            activeTabCount: windowCoordinator?.activeTabCount ?? 0,
+            workspaceCount: windowCoordinator?.workspaceCount ?? 0
+        )
     }
 
     @objc private func createNewTab() {
         windowCoordinator?.createNewTab()
+    }
+
+    @objc private func closeActivePane() {
+        windowCoordinator?.requestCloseActivePane()
+    }
+
+    @objc private func closeActiveTab() {
+        windowCoordinator?.requestCloseActiveTab()
     }
 
     @objc private func createWorkspace() {
@@ -1006,8 +1327,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let configController = try ConfigController.production(
                 reloadGhostty: { try ghosttyBridge.reloadConfig(at: $0) },
-                onUpdate: { [weak self] config in
-                    self?.windowCoordinator?.applyConfiguration(config)
+                onUpdate: { [weak self, weak ghosttyBridge] config in
+                    guard let self, let ghosttyBridge,
+                        let windowCoordinator = self.windowCoordinator
+                    else { return }
+                    windowCoordinator.applyConfiguration(config)
+                    Self.applyRuntimeShortcutConfiguration(
+                        config.shortcuts,
+                        registeredGlobalChord: windowCoordinator.registeredGlobalChord,
+                        shortcutController: shortcutController,
+                        ghosttyBridge: ghosttyBridge
+                    )
                 },
                 onDiagnostics: { [weak self] diagnostics in
                     self?.handleConfigControllerDiagnostics(diagnostics)
@@ -1104,69 +1434,114 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installNewTabMenuItem() {
-        let mainMenu = Self.installNewTabMenuItem(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installNewTabMenuItem(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
-    private func installOpenConfigurationMenuItem() {
-        let mainMenu = Self.installOpenConfigurationMenuItem(in: NSApp.mainMenu, target: self)
+    private func installApplicationMenuItems() {
+        var mainMenu = Self.installOpenConfigurationMenuItem(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
+        mainMenu = Self.installQuitMenuItem(
+            in: mainMenu,
+            target: NSApp,
+            shortcutController: shortcutController
+        )
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installCloseMenuItems() {
+        let mainMenu = Self.installCloseMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
     private func installSplitPaneMenuItems() {
-        let mainMenu = Self.installSplitPaneMenuItems(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installSplitPaneMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
     private func installPaneNavigationMenuItems() {
-        let mainMenu = Self.installPaneNavigationMenuItems(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installPaneNavigationMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
     private func installToggleBroadcastMenuItem() {
-        let mainMenu = Self.installToggleBroadcastMenuItem(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installToggleBroadcastMenuItem(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
     private func installPresentationMenuItem() {
-        let menu =
-            NSApp.mainMenu?.item(withTitle: "View")?.submenu
-            ?? {
-                let item = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
-                let menu = NSMenu(title: "View")
-                item.submenu = menu
-                NSApp.mainMenu?.addItem(item)
-                return menu
-            }()
-        let item = NSMenuItem(
-            title: "Toggle Presentation Mode",
-            action: #selector(togglePresentationMode),
-            keyEquivalent: "p"
+        let mainMenu = Self.installPresentationMenuItem(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
         )
-        item.keyEquivalentModifierMask = [.command, .option]
-        item.target = self
-        menu.addItem(item)
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
     }
 
     private func installTabSelectionMenuItems() {
-        let mainMenu = Self.installTabSelectionMenuItems(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installTabSelectionMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
     }
 
     private func installWorkspaceMenuItems() {
-        let mainMenu = Self.installWorkspaceMenuItems(in: NSApp.mainMenu, target: self)
+        let mainMenu = Self.installWorkspaceMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installTerminalMenuItems() {
+        let mainMenu = Self.installTerminalMenuItems(
+            in: NSApp.mainMenu,
+            shortcutController: shortcutController
+        )
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }

@@ -14,21 +14,48 @@ Future behavior:
 - preserve pane IDs, split layout, active state, and persisted descriptors;
 - never execute a saved command before explicit approval.
 
-## Fully configurable keyboard shortcuts
+## Stateful terminal modes
 
-**Status:** Backlog.
+**Status:** Deferred until visible state is available.
 
-Every QuickTTY action must support a user-defined key chord instead of relying on hard-coded shortcuts. This includes tabs, workspaces, splits, pane navigation, broadcast, configuration, presentation mode, and the global Quake toggle.
+Do not export shortcuts for read-only mode, secure input, or mouse-reporting mode until QuickTTY can present their live state and clean it up with the owning surface.
 
 Required behavior:
 
-- assign any supported macOS key plus any combination of `cmd`, `opt`, `ctrl`, and `shift`;
-- disable an action shortcut explicitly;
-- apply shortcut changes through config hot reload without restarting surfaces or shells;
-- update displayed `NSMenuItem` key equivalents immediately;
-- detect duplicate QuickTTY assignments and report both conflicting actions;
-- define deterministic precedence between QuickTTY-reserved shortcuts and Ghostty `keybind` entries;
-- keep local application shortcuts and the global Quake shortcut as separate scopes;
-- reject unsupported global shortcuts transactionally while preserving the last valid registration;
-- provide stable action identifiers so future commands can be added without changing config syntax;
-- add parser, conflict, menu synchronization, hot-reload, and global-registration rollback tests.
+- expose only typed actions backed by the pinned Ghostty API;
+- show persistent visible state and synchronized checked menu state;
+- scope state to the correct live surface and clear it on pane close, workspace change, and teardown;
+- preserve normal terminal input and mouse behavior when a mode is inactive;
+- add callback/state synchronization, hidden-pane, hot-reload shortcut, and lifecycle cleanup tests.
+
+## Interactive terminal search
+
+**Status:** Required after configurable shortcuts.
+
+Implement the search UI supported by pinned libghostty instead of exposing only headless search actions.
+
+Required behavior:
+
+- show a QuickTTY-owned search overlay inside the active terminal viewport;
+- route start, search-selection, next, previous, and end actions to the active pane;
+- consume search shortcuts without writing them into the PTY;
+- preserve live surfaces, split layout, focus, and running processes while search opens or closes;
+- synchronize query, selected match, and total match state through real embedded Ghostty callbacks;
+- keep search state scoped to its pane and clear stale state when that pane closes;
+- add callback lifetime, active/inactive pane, hot-reload shortcut, and no-PTY-write tests.
+
+## URL hover and opening
+
+**Status:** Required after configurable shortcuts.
+
+Integrate pinned libghostty link detection with QuickTTY-owned AppKit presentation and opening policy.
+
+Required behavior:
+
+- receive mouse-over-link state from the active terminal surface;
+- update cursor and hover presentation without injecting terminal input;
+- open a detected URL only after an explicit user action;
+- support a configurable QuickTTY action for opening the URL under the pointer;
+- preserve normal terminal mouse reporting and selection behavior when no link action is performed;
+- clear stale hover state on pointer exit, pane switch, surface close, workspace switch, and teardown;
+- add callback lifetime, hit-testing, mouse-reporting coexistence, unsupported URL, and stale-state tests.

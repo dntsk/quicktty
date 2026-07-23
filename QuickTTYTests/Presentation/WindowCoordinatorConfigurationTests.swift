@@ -20,7 +20,7 @@ struct WindowCoordinatorConfigurationTests {
 
         coordinator.applyConfiguration(config)
 
-        #expect(hotKeyController.registeredDescriptors == [HotKeyDescriptor(key: .f12)])
+        #expect(hotKeyController.replacementAttempts == [ShortcutChord(key: .f12)])
     }
 
     @Test
@@ -208,12 +208,12 @@ struct WindowCoordinatorConfigurationTests {
         )
         var config = QuickTTYConfig()
         config.presentationMode = .quake
-        config.globalToggle = HotKeyDescriptor(option: true, key: .f10)
+        config.globalToggle = ShortcutChord(key: .f10, modifiers: [.option])
 
         coordinator.applyConfiguration(config)
 
         #expect(coordinator.presentationMode == .quake)
-        #expect(hotKeyController.registeredDescriptors == [config.globalToggle])
+        #expect(hotKeyController.replacementAttempts == [config.globalToggle])
 
         config.presentationMode = .normal
         coordinator.applyConfiguration(config)
@@ -221,18 +221,283 @@ struct WindowCoordinatorConfigurationTests {
         #expect(coordinator.presentationMode == .normal)
         #expect(hotKeyController.unregisterCount == 1)
     }
+
+    @Test
+    func runtimeShortcutHotReloadKeepsSurfaceAndProcessContextAndSharesResolvedMap() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: RecordingHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceIdentity = ObjectIdentifier(surface)
+        let processContext = try #require(
+            bridge.surfaceConfigurationForTesting(id: surface.paneID)
+        )
+        let controller = ShortcutController()
+        var config = QuickTTYConfig()
+
+        coordinator.applyConfiguration(config)
+        AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: controller,
+            ghosttyBridge: bridge
+        )
+        let oldEvent = try shortcutEvent(key: "k", modifiers: [.command])
+        #expect(controller.action(matching: oldEvent) == .clearScreen)
+
+        config.shortcuts.assign(
+            ShortcutChord(key: .x, modifiers: [.control]),
+            to: .clearScreen
+        )
+        coordinator.applyConfiguration(config)
+        let resolved = AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: controller,
+            ghosttyBridge: bridge
+        )
+        let newEvent = try shortcutEvent(key: "x", modifiers: [.control])
+
+        #expect(controller.action(matching: oldEvent) == nil)
+        #expect(controller.action(matching: newEvent) == .clearScreen)
+        #expect(controller.activeConfiguration == resolved)
+        #expect(bridge.shortcutConfigurationForTesting == resolved)
+        #expect(coordinator.activeSurfaceForTesting.map(ObjectIdentifier.init) == surfaceIdentity)
+        #expect(bridge.surfaceConfigurationForTesting(id: surface.paneID) == processContext)
+
+        config.shortcuts.disable(.clearScreen)
+        coordinator.applyConfiguration(config)
+        AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: controller,
+            ghosttyBridge: bridge
+        )
+
+        #expect(controller.action(matching: newEvent) == nil)
+        #expect(controller.activeConfiguration == bridge.shortcutConfigurationForTesting)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(bridge.surfaceConfigurationForTesting(id: surface.paneID) == processContext)
+    }
+
+    @Test
+    func normalModeConfiguredGlobalChordStillReservesLocalOwner() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            hotKeyController: RecordingHotKeyController()
+        )
+        let controller = ShortcutController()
+        var config = QuickTTYConfig()
+        config.globalToggle = ShortcutChord(key: .t, modifiers: [.command])
+        config.shortcuts = config.shortcuts.resolvingGlobalPrecedence(config.globalToggle)
+
+        coordinator.applyConfiguration(config)
+        let resolved = AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: controller,
+            ghosttyBridge: bridge
+        )
+
+        #expect(coordinator.registeredGlobalChord == nil)
+        #expect(resolved.chord(for: .newTab) == nil)
+        #expect(controller.activeConfiguration == bridge.shortcutConfigurationForTesting)
+    }
+
+    @Test
+    func failedGlobalReplacementKeepsActualOldChordAndConfiguredNewChord() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let hotKeyController = RecordingHotKeyController()
+        var errors: [GlobalHotKeyError] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            onError: { error in
+                if let error = error as? GlobalHotKeyError {
+                    errors.append(error)
+                }
+            },
+            hotKeyController: hotKeyController
+        )
+        var config = QuickTTYConfig()
+        config.presentationMode = .quake
+        coordinator.applyConfiguration(config)
+        hotKeyController.nextReplacementError = .registrationFailed(-1)
+        config.globalToggle = ShortcutChord(key: .space, modifiers: [.command])
+        config.configEditor = "vim"
+        config.shortcuts.assign(ShortcutChord(key: .f12), to: .newTab)
+        config.shortcuts.assign(config.globalToggle, to: .paste)
+        config.shortcuts = config.shortcuts.resolvingGlobalPrecedence(config.globalToggle)
+
+        coordinator.applyConfiguration(config)
+        let shortcutController = ShortcutController()
+        let resolved = AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: shortcutController,
+            ghosttyBridge: bridge
+        )
+
+        #expect(coordinator.registeredGlobalChord == ShortcutChord(key: .f12))
+        #expect(resolved.chord(for: .newTab) == nil)
+        #expect(resolved.chord(for: .paste) == nil)
+        #expect(shortcutController.activeConfiguration == bridge.shortcutConfigurationForTesting)
+        #expect(errors == [.registrationFailed(-1)])
+        #expect(coordinator.configEditorForTesting == "vim")
+
+        coordinator.togglePresentationMode()
+        coordinator.togglePresentationMode()
+
+        #expect(hotKeyController.replacementAttempts.last == config.globalToggle)
+    }
+
+    @Test
+    func failedUnregisterKeepsActualOldChordWhileConfiguredCandidateRemainsReserved() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let hotKeyController = RecordingHotKeyController()
+        var errors: [GlobalHotKeyError] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            onError: { error in
+                if let error = error as? GlobalHotKeyError {
+                    errors.append(error)
+                }
+            },
+            hotKeyController: hotKeyController
+        )
+        var config = QuickTTYConfig()
+        config.presentationMode = .quake
+        coordinator.applyConfiguration(config)
+
+        config.presentationMode = .normal
+        config.globalToggle = ShortcutChord(key: .t, modifiers: [.command])
+        config.shortcuts.assign(ShortcutChord(key: .f12), to: .paste)
+        config.shortcuts = config.shortcuts.resolvingGlobalPrecedence(config.globalToggle)
+        hotKeyController.nextUnregistrationError = .unregistrationFailed(-2)
+
+        coordinator.applyConfiguration(config)
+        let shortcutController = ShortcutController()
+        let resolved = AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: shortcutController,
+            ghosttyBridge: bridge
+        )
+
+        #expect(coordinator.presentationMode == .normal)
+        #expect(coordinator.registeredGlobalChord == ShortcutChord(key: .f12))
+        #expect(resolved.chord(for: .newTab) == nil)
+        #expect(resolved.chord(for: .paste) == nil)
+        #expect(shortcutController.activeConfiguration == resolved)
+        #expect(bridge.shortcutConfigurationForTesting == resolved)
+        #expect(errors == [.unregistrationFailed(-2)])
+    }
+
+    @Test
+    func replacementAndRollbackFailureExposesNoActualRegistrationOrImaginaryOldConflict() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let hotKeyController = RecordingHotKeyController()
+        var errors: [GlobalHotKeyError] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            onError: { error in
+                if let error = error as? GlobalHotKeyError {
+                    errors.append(error)
+                }
+            },
+            hotKeyController: hotKeyController
+        )
+        var config = QuickTTYConfig()
+        config.presentationMode = .quake
+        coordinator.applyConfiguration(config)
+
+        let replacementError = GlobalHotKeyError.replacementAndRollbackFailed(
+            registrationStatus: -3,
+            rollbackStatus: -4
+        )
+        config.globalToggle = ShortcutChord(key: .f11)
+        config.shortcuts.assign(ShortcutChord(key: .f12), to: .newTab)
+        config.shortcuts.assign(config.globalToggle, to: .paste)
+        config.shortcuts = config.shortcuts.resolvingGlobalPrecedence(config.globalToggle)
+        hotKeyController.nextReplacementError = replacementError
+
+        coordinator.applyConfiguration(config)
+        let shortcutController = ShortcutController()
+        let resolved = AppDelegate.applyRuntimeShortcutConfiguration(
+            config.shortcuts,
+            registeredGlobalChord: coordinator.registeredGlobalChord,
+            shortcutController: shortcutController,
+            ghosttyBridge: bridge
+        )
+
+        #expect(coordinator.registeredGlobalChord == nil)
+        #expect(resolved.chord(for: .newTab) == ShortcutChord(key: .f12))
+        #expect(resolved.chord(for: .paste) == nil)
+        #expect(shortcutController.activeConfiguration == resolved)
+        #expect(bridge.shortcutConfigurationForTesting == resolved)
+        #expect(
+            hotKeyController.replacementAttempts == [ShortcutChord(key: .f12), config.globalToggle])
+        #expect(errors == [replacementError])
+    }
 }
 
 @MainActor
 private final class RecordingHotKeyController: HotKeyControlling {
-    private(set) var registeredDescriptors: [HotKeyDescriptor] = []
+    private(set) var replacementAttempts: [ShortcutChord] = []
+    private(set) var registeredChord: ShortcutChord?
     private(set) var unregisterCount = 0
+    var nextReplacementError: GlobalHotKeyError?
+    var nextUnregistrationError: GlobalHotKeyError?
 
-    func register(_ descriptor: HotKeyDescriptor) throws {
-        registeredDescriptors.append(descriptor)
+    func replace(with chord: ShortcutChord) throws {
+        replacementAttempts.append(chord)
+        if let error = nextReplacementError {
+            nextReplacementError = nil
+            if case .replacementAndRollbackFailed = error {
+                registeredChord = nil
+            }
+            throw error
+        }
+        registeredChord = chord
     }
 
     func unregister() throws {
         unregisterCount += 1
+        if let error = nextUnregistrationError {
+            nextUnregistrationError = nil
+            throw error
+        }
+        registeredChord = nil
     }
+}
+
+@MainActor
+private func shortcutEvent(
+    key: String,
+    modifiers: NSEvent.ModifierFlags
+) throws -> NSEvent {
+    try #require(
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 1,
+            windowNumber: 0,
+            context: nil,
+            characters: key,
+            charactersIgnoringModifiers: key,
+            isARepeat: false,
+            keyCode: key == "k" ? 40 : 7
+        )
+    )
 }

@@ -69,8 +69,12 @@ import Synchronization
         let packedModifiers: Int32
     }
 
+    struct GhosttySurfaceTerminalActionObservation: Equatable, Sendable {
+        let action: TerminalShortcutAction
+        let result: Bool
+    }
+
     enum GhosttySurfaceClipboardObservation: Equatable, Sendable {
-        case binding(action: String, result: Bool)
         case completion(data: String, confirmed: Bool)
         case write(location: GhosttyClipboardLocation, contents: [GhosttyClipboardContent])
     }
@@ -132,24 +136,19 @@ func conservativeMinimumSurfaceSize(
 typealias GhosttySurfaceCloseHandler = @MainActor @Sendable (PaneID, Bool) -> Void
 typealias GhosttySurfaceInputRoute = @MainActor (PaneID, NSEvent) -> Void
 typealias GhosttySurfaceFocusRoute = @MainActor (PaneID) -> Void
-typealias GhosttySurfaceClipboardBindingActionRoute =
-    @MainActor (PaneID, GhosttySurfaceBindingAction) -> Void
+typealias GhosttySurfaceShortcutRoute =
+    @MainActor (PaneID, NSEvent) -> GhosttyShortcutDispatchResult
+typealias GhosttySurfaceTerminalActionRoute =
+    @MainActor (PaneID, TerminalShortcutAction) -> Bool
 typealias GhosttySurfaceCallbackRoute =
     @MainActor @Sendable (PaneID, GhosttySurfaceCallbackEvent) -> Void
 typealias GhosttyClipboardInvalidationRoute = @MainActor (PaneID) -> Void
 
-enum GhosttySurfaceBindingAction: Sendable {
-    case paste
-    case pasteSelection
-
-    var name: String {
-        switch self {
-        case .paste:
-            "paste_from_clipboard"
-        case .pasteSelection:
-            "paste_from_selection"
-        }
-    }
+enum GhosttyShortcutDispatchResult: Equatable, Sendable {
+    case appKit
+    case handled
+    case passThrough
+    case unmatched
 }
 
 @MainActor
@@ -202,8 +201,9 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     private let inputRoute: GhosttySurfaceInputRoute
     private let focusRoute: GhosttySurfaceFocusRoute
+    private let shortcutRoute: GhosttySurfaceShortcutRoute
+    private let terminalActionRoute: GhosttySurfaceTerminalActionRoute
     private let applicationIsActive: @MainActor () -> Bool
-    private let clipboardBindingActionRoute: GhosttySurfaceClipboardBindingActionRoute
     private let clipboardClient: GhosttyClipboardClient
     private let clipboardInvalidationRoute: GhosttyClipboardInvalidationRoute
     private var surface: ghostty_surface_t?
@@ -231,6 +231,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         private var mouseButtonObservations: [GhosttySurfaceMouseButtonObservation] = []
         private var mousePositionObservations: [GhosttySurfaceMousePositionObservation] = []
         private var mouseScrollObservations: [GhosttySurfaceMouseScrollObservation] = []
+        private var terminalActionObservations: [GhosttySurfaceTerminalActionObservation] = []
         private var clipboardObservations: [GhosttySurfaceClipboardObservation] = []
         var clipboardObservationHandlerForTesting:
             (@MainActor @Sendable (GhosttySurfaceClipboardObservation) -> Void)?
@@ -238,6 +239,12 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     var isReady: Bool {
         surface != nil
+    }
+
+    var isShortcutDispatchSource: Bool {
+        surface != nil
+            && window?.firstResponder === self
+            && !isHiddenOrHasHiddenAncestor
     }
 
     func needsConfirmQuit() -> Bool {
@@ -269,7 +276,8 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         applicationIsActive: @escaping @MainActor () -> Bool,
         inputRoute: @escaping GhosttySurfaceInputRoute,
         focusRoute: @escaping GhosttySurfaceFocusRoute,
-        clipboardBindingActionRoute: @escaping GhosttySurfaceClipboardBindingActionRoute,
+        shortcutRoute: @escaping GhosttySurfaceShortcutRoute,
+        terminalActionRoute: @escaping GhosttySurfaceTerminalActionRoute,
         clipboardClient: GhosttyClipboardClient,
         callbackRoute: @escaping GhosttySurfaceCallbackRoute,
         clipboardInvalidationRoute: @escaping GhosttyClipboardInvalidationRoute
@@ -277,8 +285,9 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         self.paneID = paneID
         self.inputRoute = inputRoute
         self.focusRoute = focusRoute
+        self.shortcutRoute = shortcutRoute
+        self.terminalActionRoute = terminalActionRoute
         self.applicationIsActive = applicationIsActive
-        self.clipboardBindingActionRoute = clipboardBindingActionRoute
         self.clipboardClient = clipboardClient
         self.clipboardInvalidationRoute = clipboardInvalidationRoute
         currentWorkingDirectory = configuration.workingDirectory
@@ -490,6 +499,10 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             mouseScrollObservations
         }
 
+        var terminalActionObservationsForTesting: [GhosttySurfaceTerminalActionObservation] {
+            terminalActionObservations
+        }
+
         var clipboardObservationsForTesting: [GhosttySurfaceClipboardObservation] {
             clipboardObservations
         }
@@ -528,29 +541,6 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
                 .scheduleWorkingDirectoryChange(workingDirectory) ?? false
         }
 
-        func isPlainCommandDigitForTesting(_ event: NSEvent) -> Bool {
-            isPlainCommandDigit(event)
-        }
-
-        func isCommandOptionDigitForTesting(_ event: NSEvent) -> Bool {
-            isCommandOptionDigit(event)
-        }
-
-        func isOpenConfigurationShortcutForTesting(_ event: NSEvent) -> Bool {
-            isOpenConfigurationShortcut(event)
-        }
-
-        func isSplitPaneShortcutForTesting(_ event: NSEvent) -> Bool {
-            isSplitPaneShortcut(event)
-        }
-
-        func isBroadcastShortcutForTesting(_ event: NSEvent) -> Bool {
-            isBroadcastShortcut(event)
-        }
-
-        func isPaneNavigationShortcutForTesting(_ event: NSEvent) -> Bool {
-            isPaneNavigationShortcut(event)
-        }
     #endif
 
     private func startObservingWindow(_ window: NSWindow?) {
@@ -1038,30 +1028,18 @@ extension GhosttySurfaceView {
         guard event.type == .keyDown,
             window?.isKeyWindow == true,
             window?.firstResponder === self,
-            let surface
+            surface != nil
         else { return false }
 
-        guard
-            !isPlainCommandT(event),
-            !isOpenConfigurationShortcut(event),
-            !isBroadcastShortcut(event),
-            !isPlainCommandDigit(event),
-            !isCommandOptionDigit(event),
-            !isSplitPaneShortcut(event),
-            !isPaneNavigationShortcut(event)
-        else {
+        switch shortcutRoute(paneID, event) {
+        case .appKit, .passThrough:
             lastPerformKeyEvent = nil
             return false
-        }
-
-        let bindingEvent = event.ghosttyKeyEvent(.press, text: event.characters ?? "")
-        var bindingFlags = GHOSTTY_BINDING_FLAGS_CONSUMED
-        let isBinding = bindingEvent.withCValue { value in
-            ghostty_surface_key_is_binding(surface, value, &bindingFlags)
-        }
-        if isBinding {
-            inputRoute(paneID, event)
+        case .handled:
+            lastPerformKeyEvent = nil
             return true
+        case .unmatched:
+            break
         }
 
         switch event.charactersIgnoringModifiers {
@@ -1098,68 +1076,6 @@ extension GhosttySurfaceView {
             lastPerformKeyEvent = event.timestamp
             return false
         }
-    }
-
-    private func isPlainCommandT(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers?.lowercased() == "t"
-            && isPlainCommandShortcut(event)
-    }
-
-    private func isOpenConfigurationShortcut(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers == ","
-            && event.modifierFlags
-                .intersection(.deviceIndependentFlagsMask)
-                .subtracting(.capsLock) == [.command]
-    }
-
-    private func isBroadcastShortcut(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers?.lowercased() == "b"
-            && isPlainCommandShortcut(event)
-    }
-
-    private func isPlainCommandDigit(_ event: NSEvent) -> Bool {
-        guard let character = event.charactersIgnoringModifiers?.first else { return false }
-        return "123456789".contains(character) && isPlainCommandShortcut(event)
-    }
-
-    private func isCommandOptionDigit(_ event: NSEvent) -> Bool {
-        guard let character = event.charactersIgnoringModifiers?.first,
-            "123456789".contains(character)
-        else {
-            return false
-        }
-        return event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting(.capsLock) == [.command, .option]
-    }
-
-    private func isSplitPaneShortcut(_ event: NSEvent) -> Bool {
-        event.charactersIgnoringModifiers?.lowercased() == "d"
-            && event.modifierFlags.contains(.command)
-            && event.modifierFlags.isDisjoint(with: [.control, .option])
-    }
-
-    private func isPaneNavigationShortcut(_ event: NSEvent) -> Bool {
-        guard let key = event.charactersIgnoringModifiers else { return false }
-        if key == "[" || key == "]" {
-            return isPlainCommandShortcut(event)
-        }
-
-        switch key {
-        case String(UnicodeScalar(NSLeftArrowFunctionKey)!),
-            String(UnicodeScalar(NSRightArrowFunctionKey)!),
-            String(UnicodeScalar(NSUpArrowFunctionKey)!),
-            String(UnicodeScalar(NSDownArrowFunctionKey)!):
-            return event.modifierFlags.contains([.command, .option])
-                && event.modifierFlags.isDisjoint(with: [.shift, .control])
-        default:
-            return false
-        }
-    }
-
-    private func isPlainCommandShortcut(_ event: NSEvent) -> Bool {
-        event.modifierFlags.contains(.command)
-            && event.modifierFlags.isDisjoint(with: [.shift, .control, .option])
     }
 
     override func doCommand(by _: Selector) {
@@ -1565,23 +1481,39 @@ extension GhosttySurfaceView {
 // 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
 extension GhosttySurfaceView {
     @IBAction func copy(_ sender: Any?) {
-        performClipboardBindingAction("copy_to_clipboard")
+        _ = terminalActionRoute(paneID, .copy)
     }
 
     @IBAction func paste(_ sender: Any?) {
-        clipboardBindingActionRoute(paneID, .paste)
+        _ = terminalActionRoute(paneID, .paste)
     }
 
     @IBAction func pasteSelection(_ sender: Any?) {
-        clipboardBindingActionRoute(paneID, .pasteSelection)
+        _ = terminalActionRoute(paneID, .pasteSelection)
     }
 
     @IBAction override func selectAll(_ sender: Any?) {
-        performClipboardBindingAction("select_all")
+        _ = terminalActionRoute(paneID, .selectAll)
     }
 
-    func performDirectClipboardBindingAction(_ action: GhosttySurfaceBindingAction) {
-        performClipboardBindingAction(action.name)
+    @discardableResult
+    func performTerminalShortcutAction(_ action: TerminalShortcutAction) -> Bool {
+        guard let surface else { return false }
+        let coreAction = action.coreAction
+        let result = coreAction.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(coreAction.utf8.count))
+        }
+
+        #if DEBUG
+            if terminalActionObservations.count == ghosttyClipboardObservationLimit {
+                terminalActionObservations.removeFirst()
+            }
+            terminalActionObservations.append(
+                GhosttySurfaceTerminalActionObservation(action: action, result: result)
+            )
+        #endif
+
+        return result
     }
 
     func processCallbackEvent(
@@ -1600,17 +1532,6 @@ extension GhosttySurfaceView {
         case .pwdChanged(let workingDirectory):
             currentWorkingDirectory = workingDirectory
         }
-    }
-
-    private func performClipboardBindingAction(_ action: String) {
-        guard let surface else { return }
-        let result = action.withCString { pointer in
-            ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
-        }
-
-        #if DEBUG
-            appendClipboardObservation(.binding(action: action, result: result))
-        #endif
     }
 
     private func processClipboardRead(token: UInt, location: GhosttyClipboardLocation) {

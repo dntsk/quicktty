@@ -5,6 +5,7 @@ struct QuickTTYConfig: Equatable, Sendable {
     enum Key: String, CaseIterable, Sendable {
         case presentationMode = "quicktty-presentation-mode"
         case globalToggle = "quicktty-global-toggle"
+        case shortcut = "quicktty-shortcut"
         case quakeHeight = "quicktty-quake-height"
         case quakeAnimationDuration = "quicktty-quake-animation-duration"
         case quakePadding = "quicktty-quake-padding"
@@ -14,7 +15,8 @@ struct QuickTTYConfig: Equatable, Sendable {
     }
 
     var presentationMode: PresentationMode = .normal
-    var globalToggle = HotKeyDescriptor(key: .f12)
+    var globalToggle = ShortcutChord(key: .f12)
+    var shortcuts = ShortcutConfiguration.defaults
     var quakeHeight: Double = 0.75
     var quakeAnimationDuration: TimeInterval = 0.18
     var quakePadding: CGFloat = 0

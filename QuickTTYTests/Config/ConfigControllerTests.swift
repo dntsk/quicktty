@@ -24,7 +24,9 @@ struct ConfigControllerTests {
         #expect(updates == [QuickTTYConfig()])
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
-                == Data("font-family = Mono\ncopy-on-select = clipboard\n".utf8)
+                == Data(
+                    "font-family = Mono\ncopy-on-select = clipboard\nkeybind = clear\n".utf8
+                )
         )
         #expect(
             try FileManager.default.contentsOfDirectory(
@@ -67,9 +69,162 @@ struct ConfigControllerTests {
         #expect(controller.activeConfig.configEditor == "code --wait")
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
-                == Data("copy-on-select = clipboard\nfont-family = Changed\r\n".utf8)
+                == Data(
+                    "copy-on-select = clipboard\nfont-family = Changed\r\nkeybind = clear\r\n".utf8
+                )
         )
         #expect(reloadURLs == [fixture.effectiveURL, fixture.effectiveURL])
+    }
+
+    @Test
+    func invalidKnownShortcutReloadPreservesOnlyThatActionsPreviousAssignment() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            quicktty-shortcut = copy=ctrl+c
+            quicktty-shortcut = new-tab=ctrl+t
+            """.utf8
+        ).write(to: fixture.configURL)
+        var reportedDiagnostics: [[ConfigDiagnostic]] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onDiagnostics: { reportedDiagnostics.append($0) }
+        )
+        try controller.load()
+        try Data(
+            """
+            quicktty-shortcut = copy=cmd++c
+            quicktty-shortcut = new-tab=ctrl+shift+t
+            """.utf8
+        ).write(to: fixture.configURL)
+
+        try controller.reload()
+
+        #expect(
+            controller.activeConfig.shortcuts.chord(for: .copy)
+                == (try ShortcutChord(parsing: "ctrl+c"))
+        )
+        #expect(
+            controller.activeConfig.shortcuts.chord(for: .newTab)
+                == (try ShortcutChord(parsing: "ctrl+shift+t"))
+        )
+        #expect(
+            reportedDiagnostics.last
+                == [
+                    ConfigDiagnostic(
+                        line: 1,
+                        key: "quicktty-shortcut",
+                        reason: .invalidShortcutChord(
+                            .copy,
+                            .emptyComponent(position: 2)
+                        )
+                    )
+                ]
+        )
+    }
+
+    @Test
+    func malformedKnownShortcutReloadPreservesItsPreviousAssignment() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data("quicktty-shortcut = copy=ctrl+c\n".utf8).write(to: fixture.configURL)
+        var reportedDiagnostics: [[ConfigDiagnostic]] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onDiagnostics: { reportedDiagnostics.append($0) }
+        )
+        try controller.load()
+        try Data("quicktty-shortcut = copy\n".utf8).write(to: fixture.configURL)
+
+        try controller.reload()
+
+        #expect(
+            controller.activeConfig.shortcuts.chord(for: .copy)
+                == (try ShortcutChord(parsing: "ctrl+c"))
+        )
+        #expect(
+            reportedDiagnostics.last == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: "quicktty-shortcut",
+                    reason: .malformedShortcutInstruction
+                )
+            ]
+        )
+    }
+
+    @Test
+    func removingShortcutLineRestoresItsDefaultOnReload() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data("quicktty-shortcut = copy=ctrl+c\n".utf8).write(to: fixture.configURL)
+        let controller = fixture.makeController(reloadGhostty: { _ in })
+        try controller.load()
+        try Data("font-size = 14\n".utf8).write(to: fixture.configURL)
+
+        try controller.reload()
+
+        #expect(
+            controller.activeConfig.shortcuts.chord(for: .copy)
+                == ShortcutAction.copy.defaultChord
+        )
+    }
+
+    @Test
+    func reloadSilentlyRebuildsEffectiveConfigWithOneFinalKeybindClear() throws {
+        let fixture = try ConfigFixture()
+        defer { fixture.remove() }
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            include = local.conf
+            keybind = cmd+t=new_tab
+            font-size = 14
+            """.utf8
+        ).write(to: fixture.configURL)
+        var diagnostics: [[ConfigDiagnostic]] = []
+        let controller = fixture.makeController(
+            reloadGhostty: { _ in },
+            onDiagnostics: { diagnostics.append($0) }
+        )
+
+        try controller.load()
+        let firstEffective = try Data(contentsOf: fixture.effectiveURL)
+        try Data(
+            """
+            include = local.conf
+            keybind = clear
+            font-size = 14
+            quicktty-shortcut = copy=cmd+c
+            """.utf8
+        ).write(to: fixture.configURL)
+        try controller.reload()
+
+        let expected = Data(
+            ("copy-on-select = clipboard\n"
+                + "include = local.conf\n"
+                + "font-size = 14\n"
+                + "keybind = clear\n").utf8
+        )
+        #expect(firstEffective == expected)
+        #expect(try Data(contentsOf: fixture.effectiveURL) == expected)
+        #expect(diagnostics == [[], []])
     }
 
     @Test
@@ -100,7 +255,9 @@ struct ConfigControllerTests {
         #expect(reloadURLs == [fixture.effectiveURL])
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
-                == Data("copy-on-select = clipboard\nfont-family = Changed\n".utf8)
+                == Data(
+                    "copy-on-select = clipboard\nfont-family = Changed\nkeybind = clear\n".utf8
+                )
         )
         #expect(
             reportedDiagnostics
@@ -388,7 +545,9 @@ struct ConfigControllerTests {
         #expect(reloadCount == 2)
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
-                == Data("copy-on-select = clipboard\nfont-size = 14\r\n".utf8)
+                == Data(
+                    "copy-on-select = clipboard\nfont-size = 14\r\nkeybind = clear\r\n".utf8
+                )
         )
         #expect(
             try FileManager.default.contentsOfDirectory(

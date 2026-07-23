@@ -56,10 +56,11 @@ struct WorkspacePresentationTests {
         #expect(items[5].action == WorkspaceSelector.workspaceManagementMenuItemAction)
         #expect(items[0].state == .off)
         #expect(items[1].state == .on)
-        #expect(items[0].keyEquivalent == "1")
-        #expect(items[0].keyEquivalentModifierMask == [.command, .option])
-        #expect(items[1].keyEquivalent == "2")
-        #expect(items[1].keyEquivalentModifierMask == [.command, .option])
+        #expect(items.filter { !$0.isSeparatorItem }.allSatisfy { $0.keyEquivalent.isEmpty })
+        #expect(
+            items.filter { !$0.isSeparatorItem }
+                .allSatisfy { $0.keyEquivalentModifierMask.isEmpty }
+        )
         #expect(selector.allRealItemsHaveExplicitTargetAndActionForTesting)
 
         let defaultID = store.workspaces[0].id

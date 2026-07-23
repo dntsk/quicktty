@@ -10,6 +10,8 @@ copy-on-select = clipboard
 # QuickTTY window and Quake options.
 quicktty-presentation-mode = normal
 quicktty-global-toggle = f12
+# Shortcuts use action-id=chord; use disabled to remove an assignment.
+# quicktty-shortcut = new-tab=cmd+t
 quicktty-quake-height = 75%
 quicktty-quake-animation-duration = 0.18
 quicktty-quake-padding = 0

@@ -26,6 +26,12 @@ git submodule update --init --recursive
 - Пользовательский config: `~/.config/quicktty/config`.
 - Автоматически сохраняемое состояние: `~/Library/Application Support/QuickTTY/state.json`.
 
+## Конфигурация
+
+QuickTTY читает `~/.config/quicktty/config`. Локальные сочетания задаются повторяемыми строками `quicktty-shortcut = action-id=cmd+key`; значение `disabled` снимает назначение. Полная grammar, registry действий и defaults доступны в приложении через `Help → Configuration Reference` и в `QuickTTY/Resources/configuration-reference.md`.
+
+Ghostty `keybind` в пользовательском config не применяется: QuickTTY владеет управляющими сочетаниями, а неназначенные события передаются терминалу как обычный input.
+
 ## Команды
 
 ```sh

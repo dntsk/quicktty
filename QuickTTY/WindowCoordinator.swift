@@ -47,7 +47,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var surfaceFailures: [PaneID: SurfaceFailurePresentation] = [:]
     private var closingTabIDs: Set<TabID> = []
     private var closingPaneIDs: Set<PaneID> = []
-    private var activeHotKey = HotKeyDescriptor(key: .f12)
+    private var configuredGlobalChord = ShortcutChord(key: .f12)
     private var configEditor = "nano"
     private var workspaceMenuTransientInteraction: QuakeWindowController.TransientInteraction?
 
@@ -97,6 +97,36 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var canDeleteActiveWorkspace: Bool {
         hasActiveWorkspace && workspaceStore.workspaces.count > 1
+    }
+
+    var canCloseActivePane: Bool {
+        activePaneID != nil
+    }
+
+    var canCloseActiveTab: Bool {
+        guard let activeTab else { return false }
+        return !activeTab.root.leaves.isEmpty
+            && activeTab.root.leaves.allSatisfy { surfaces[$0] != nil }
+    }
+
+    var canSplitActivePane: Bool {
+        activePaneID.flatMap { surfaces[$0] } != nil
+    }
+
+    var canNavigateActivePanes: Bool {
+        (activeTab?.root.leaves.count ?? 0) > 1
+    }
+
+    var activeTabCount: Int {
+        workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?.tabs.count ?? 0
+    }
+
+    var workspaceCount: Int {
+        workspaceStore.workspaces.count
+    }
+
+    var registeredGlobalChord: ShortcutChord? {
+        hotKeyController.registeredChord
     }
 
     func createWorkspace() {
@@ -329,6 +359,23 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         } catch {
             onError(error)
         }
+    }
+
+    func requestCloseActivePane() {
+        guard let paneID = activePaneID else { return }
+        guard surfaces[paneID] != nil else {
+            closeUnavailablePane(paneID)
+            return
+        }
+        requestClosePane(
+            paneID,
+            requiresConfirmation: ghosttyBridge.surfaceNeedsConfirmQuit(id: paneID)
+        )
+    }
+
+    func requestCloseActiveTab() {
+        guard let tabID = activeTab?.id else { return }
+        requestCloseTab(tabID)
     }
 
     func splitActivePane(axis: SplitAxis) throws {
@@ -823,7 +870,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     func applyConfiguration(_ config: QuickTTYConfig) {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
-        activeHotKey = config.globalToggle
         configEditor = config.configEditor
         let geometry =
             QuakeWindowGeometry(
@@ -838,10 +884,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             )
         )
 
+        configuredGlobalChord = config.globalToggle
         do {
             try presentationController.transition(to: config.presentationMode, persist: false)
             if presentationMode == .quake {
-                try hotKeyController.register(config.globalToggle)
+                try hotKeyController.replace(with: configuredGlobalChord)
             } else {
                 try hotKeyController.unregister()
             }
@@ -855,7 +902,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         do {
             try presentationController.transition(to: target)
             if target == .quake {
-                try hotKeyController.register(activeHotKey)
+                try hotKeyController.replace(with: configuredGlobalChord)
             } else {
                 try hotKeyController.unregister()
             }
@@ -1401,6 +1448,22 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
+    private func requestClosePane(
+        _ paneID: PaneID,
+        requiresConfirmation: Bool
+    ) {
+        guard surfaces[paneID] != nil else { return }
+        guard requiresConfirmation else {
+            finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
+            return
+        }
+
+        confirmationQueue.enqueueClose(paneID: paneID) { [weak self] response in
+            guard response == .allow, let self else { return }
+            finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
+        }
+    }
+
     private func requestCloseTab(_ tabID: TabID) {
         guard let tab = workspaceStore.tab(id: tabID) else { return }
         let paneIDs = tab.root.leaves
@@ -1515,6 +1578,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var workspaceViewControllerForTesting: WorkspaceViewController {
             workspaceViewController
+        }
+
+        var configEditorForTesting: String {
+            configEditor
         }
 
         var defaultSurfaceForTesting: GhosttySurfaceView? {
@@ -1729,16 +1796,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {
-        guard !processAlive else {
-            guard surfaces[id] != nil else { return }
-            confirmationQueue.enqueueClose(paneID: id) { [weak self] response in
-                guard response == .allow, let self else { return }
-                finishSurfaceClosure(id: id, closeBridgeSurface: true)
-            }
-            return
-        }
-
-        finishSurfaceClosure(id: id, closeBridgeSurface: true)
+        requestClosePane(id, requiresConfirmation: processAlive)
     }
 
     private func presentConfirmation(

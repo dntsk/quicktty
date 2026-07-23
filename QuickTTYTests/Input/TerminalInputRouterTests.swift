@@ -5,6 +5,53 @@ import Testing
 
 struct TerminalInputRouterTests {
     @Test
+    func terminalShortcutTargetsBroadcastOnlyPasteActions() {
+        let source = PaneID()
+        let second = PaneID()
+        let third = PaneID()
+        let broadcastTargets = [second, source, second, third]
+
+        #expect(
+            TerminalInputRouter.targetPaneIDs(
+                for: .paste,
+                sourcePaneID: source,
+                broadcastPaneIDs: broadcastTargets
+            ) == [second, source, third]
+        )
+        #expect(
+            TerminalInputRouter.targetPaneIDs(
+                for: .pasteSelection,
+                sourcePaneID: source,
+                broadcastPaneIDs: broadcastTargets
+            ) == [second, source, third]
+        )
+        for action in TerminalShortcutAction.allCases
+        where action != .paste && action != .pasteSelection {
+            #expect(
+                TerminalInputRouter.targetPaneIDs(
+                    for: action,
+                    sourcePaneID: source,
+                    broadcastPaneIDs: broadcastTargets
+                ) == [source]
+            )
+        }
+    }
+
+    @Test
+    func terminalShortcutPasteInsertsMissingSourceBeforeBroadcastTargets() {
+        let source = PaneID()
+        let target = PaneID()
+
+        #expect(
+            TerminalInputRouter.targetPaneIDs(
+                for: .paste,
+                sourcePaneID: source,
+                broadcastPaneIDs: [target]
+            ) == [source, target]
+        )
+    }
+
+    @Test
     func broadcastingOffRoutesOnlySource() throws {
         let fixture = try Fixture()
 

@@ -62,10 +62,9 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
         self.activeWorkspaceID = activeWorkspaceID
         workspaceNames = workspaces.map(\.name)
         workspaceMenu.removeAllItems()
-        for (index, workspace) in workspaces.enumerated() {
+        for workspace in workspaces {
             addWorkspaceItem(
                 workspace,
-                index: index,
                 isActive: workspace.id == activeWorkspaceID
             )
         }
@@ -86,17 +85,14 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
 
     private func addWorkspaceItem(
         _ workspace: Workspace,
-        index: Int,
         isActive: Bool
     ) {
         let item = NSMenuItem(
             title: workspace.name,
             action: Self.workspaceMenuItemAction,
-            keyEquivalent: index < 9 ? "\(index + 1)" : ""
+            keyEquivalent: ""
         )
-        if index < 9 {
-            item.keyEquivalentModifierMask = [.command, .option]
-        }
+        item.keyEquivalentModifierMask = []
         item.target = self
         item.representedObject = workspace.id.rawValue as NSUUID
         item.state = isActive ? .on : .off
@@ -113,6 +109,7 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
             action: Self.workspaceManagementMenuItemAction,
             keyEquivalent: ""
         )
+        item.keyEquivalentModifierMask = []
         item.target = self
         item.tag = action.rawValue
         item.isEnabled = isEnabled

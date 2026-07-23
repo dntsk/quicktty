@@ -118,3 +118,12 @@
 - **Решение:** Выбрать QuickTTY. Канонический config — `~/.config/quicktty/config`; только параметры с собственным префиксом `quicktty-` обрабатывает `ConfigController`, остальные передаются в `libghostty`. Чистый старт выбран намеренно: bundle `QuickTTY.app` с identity `com.dntsk.QuickTTY`, state `~/Library/Application Support/QuickTTY/state.json` и release identity `0.1.0-alpha.2` не читают, не переносят и не удаляют данные GhostTerm.
 - **Отклонено:** GhostTerm и GhostTTY; миграция либо очистка существующих данных GhostTerm.
 - **Последствия:** Исторические документы и артефакты GhostTerm неизменяемы, включая подписанный alpha.1; новые документы и будущие поставки используют QuickTTY.
+
+## QuickTTY владеет всеми управляющими сочетаниями
+
+- **Дата:** 2026-07-23
+- **Статус:** принято
+- **Контекст:** Жёстко заданные AppKit shortcuts и отдельная таблица Ghostty bindings создавали нескольких владельцев одного keyboard event, не позволяли безопасно применять изменения через hot reload и усложняли performable fallback.
+- **Решение:** Локальные действия задаются стабильным typed registry `ShortcutAction` и конфигурируются повторяемой строкой `quicktty-shortcut`; global Quake toggle остаётся отдельным Carbon scope с той же grammar. Ghostty `keybind` не участвует в dispatch: top-level assignments молча фильтруются, а effective config завершается `keybind = clear`.
+- **Отклонено:** Произвольные Ghostty action strings в пользовательском shortcut config; одновременное владение сочетаниями AppKit и Ghostty; пересоздание terminal surfaces при reload.
+- **Последствия:** Last-valid и last-owner-wins semantics детерминированы, global chord имеет приоритет над local scope, Carbon replacement откатывается к последней успешной registration, а неназначенные события сохраняют normal terminal/IME path. Stateful terminal modes отложены до видимого состояния; Search и URL hover/open остаются обязательными следующими интеграциями.

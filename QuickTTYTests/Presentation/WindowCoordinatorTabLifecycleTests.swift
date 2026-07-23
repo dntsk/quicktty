@@ -847,6 +847,98 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func configurableClosePaneUsesLiveConfirmationAndFinalPaneReplacement() throws {
+        let config = try WindowCloseConfig(confirmCloseSurface: "always")
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        var confirmationCount = 0
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            confirmationPresenter: { _, completion in
+                confirmationCount += 1
+                completion(.allow)
+                return nil
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let closedSurface = try #require(coordinator.activeSurfaceForTesting)
+
+        coordinator.requestCloseActivePane()
+
+        let replacement = try #require(coordinator.activeSurfaceForTesting)
+        let activeWorkspace = try #require(
+            coordinator.workspaceStoreForTesting.workspace(
+                id: coordinator.workspaceStoreForTesting.activeWorkspaceID
+            )
+        )
+        #expect(confirmationCount == 1)
+        #expect(replacement.paneID != closedSurface.paneID)
+        #expect(bridge.activeSurfaceIDs == [replacement.paneID])
+        #expect(activeWorkspace.tabs.count == 1)
+        #expect(activeWorkspace.tabs[0].activePaneID == replacement.paneID)
+    }
+
+    @Test
+    func configurableClosePaneClosesUnavailablePaneInModelOnly() throws {
+        let unavailablePaneID = PaneID()
+        let tab = TerminalTab(
+            title: "Unavailable",
+            pane: TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Unavailable", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        try coordinator.start()
+
+        coordinator.requestCloseActivePane()
+
+        #expect(
+            coordinator.workspaceStoreForTesting.workspace(id: workspace.id)?.tabs.isEmpty == true)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(coordinator.surfaceFailureIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceIDs.isEmpty)
+    }
+
+    @Test
+    func configurableCloseTabUsesActiveTabPaneChecksAndReplacement() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            confirmationPresenter: { _, completion in
+                completion(.allow)
+                return nil
+            }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let closedPaneIDs = coordinator.surfaceIDsForTesting
+
+        #expect(coordinator.canCloseActiveTab)
+        coordinator.requestCloseActiveTab()
+
+        let replacement = try #require(coordinator.activeSurfaceForTesting)
+        #expect(closedPaneIDs.allSatisfy { !bridge.activeSurfaceIDs.contains($0) })
+        #expect(bridge.activeSurfaceIDs == [replacement.paneID])
+        #expect(coordinator.workspaceStoreForTesting.workspaces.flatMap(\.tabs).count == 1)
+    }
+
+    @Test
     func explicitConfirmedFinalTabCloseIsIdempotentAndCreatesOneReplacement() throws {
         let config = try WindowCloseConfig(confirmCloseSurface: "always")
         defer { config.remove() }

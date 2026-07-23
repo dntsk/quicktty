@@ -226,9 +226,8 @@ final class ConfigController {
     }
 
     private func apply(_ document: ConfigDocument) throws {
-        let result = document.parse()
+        let result = document.parse(previousConfig: activeConfig)
 
-        let previousConfig = activeConfig
         let previousDocument = activeDocument
         let previousEffectiveExists = fileClient.fileExists(effectiveGhosttyURL)
         let previousEffectiveData: Data?
@@ -242,18 +241,15 @@ final class ConfigController {
             previousEffectiveData = nil
         }
 
-        activeConfig = result.config
         do {
             try fileClient.writeAtomic(document.effectiveGhosttyData, effectiveGhosttyURL)
         } catch {
-            activeConfig = previousConfig
             throw ConfigControllerError.effectiveWriteFailed(String(describing: error))
         }
 
         do {
             try reloadGhostty(effectiveGhosttyURL)
         } catch {
-            activeConfig = previousConfig
             activeDocument = previousDocument
             do {
                 if let previousEffectiveData {
@@ -270,6 +266,7 @@ final class ConfigController {
             throw ConfigControllerError.ghosttyReloadFailed(String(describing: error))
         }
 
+        activeConfig = result.config
         activeDocument = document
         onUpdate(result.config)
         guard activeDocument == document else { return }

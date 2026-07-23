@@ -62,6 +62,20 @@ private final class WorkspaceMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class CloseMenuActionTarget: NSObject {
+    private(set) var closePaneInvocationCount = 0
+    private(set) var closeTabInvocationCount = 0
+
+    @objc func closePane() {
+        closePaneInvocationCount += 1
+    }
+
+    @objc func closeTab() {
+        closeTabInvocationCount += 1
+    }
+}
+
+@MainActor
 private final class SplitPaneMenuActionTarget: NSObject {
     private(set) var splitRightInvocationCount = 0
     private(set) var splitDownInvocationCount = 0
@@ -1137,4 +1151,475 @@ struct AppDelegateLifecycleTests {
         #expect(target.selectedIndices == [9])
         #expect(fileItem.submenu?.item(withTitle: "New Tab") == nil)
     }
+
+    @Test
+    func closeMenuRoutesHotReloadOldNewAndDisabledChordsExactlyOnce() throws {
+        let target = CloseMenuActionTarget()
+        let controller = ShortcutController()
+        let mainMenu = AppDelegate.installCloseMenuItems(
+            in: nil,
+            target: target,
+            closePaneAction: #selector(CloseMenuActionTarget.closePane),
+            closeTabAction: #selector(CloseMenuActionTarget.closeTab),
+            shortcutController: controller
+        )
+        let fileMenu = try #require(mainMenu.item(withTitle: "File")?.submenu)
+        let closePane = try #require(fileMenu.item(withTitle: "Close Pane"))
+        let closeTab = try #require(fileMenu.item(withTitle: "Close Tab"))
+        let oldEvent = try menuShortcutEvent(key: "w", modifiers: [.command])
+        let newEvent = try menuShortcutEvent(key: "x", modifiers: [.control])
+
+        #expect(mainMenu.performKeyEquivalent(with: oldEvent))
+        #expect(target.closePaneInvocationCount == 1)
+        #expect(target.closeTabInvocationCount == 0)
+
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(ShortcutChord(key: .x, modifiers: [.control]), to: .closePane)
+        controller.apply(configuration)
+
+        #expect(!mainMenu.performKeyEquivalent(with: oldEvent))
+        #expect(mainMenu.performKeyEquivalent(with: newEvent))
+        #expect(target.closePaneInvocationCount == 2)
+        #expect(closePane.keyEquivalent == "x")
+        #expect(closePane.keyEquivalentModifierMask == [.control])
+        #expect(closeTab.action == #selector(CloseMenuActionTarget.closeTab))
+
+        configuration.disable(.closePane)
+        controller.apply(configuration)
+
+        #expect(!mainMenu.performKeyEquivalent(with: newEvent))
+        #expect(target.closePaneInvocationCount == 2)
+        #expect(closePane.keyEquivalent.isEmpty)
+        #expect(closePane.keyEquivalentModifierMask.isEmpty)
+    }
+
+    @Test
+    func everyStructuralShortcutHasRegisteredMenuRoute() {
+        let delegate = AppDelegate()
+        let controller = ShortcutController()
+        var mainMenu = AppDelegate.installOpenConfigurationMenuItem(
+            in: nil,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installQuitMenuItem(
+            in: mainMenu,
+            target: NSApp,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installCloseMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installSplitPaneMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installPresentationMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installTabSelectionMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installWorkspaceMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installPaneNavigationMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        _ = AppDelegate.installToggleBroadcastMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+
+        let structuralActions = ShortcutAction.allCases.filter {
+            if case .terminal = $0.executionRoute { return false }
+            return true
+        }
+        #expect(structuralActions.allSatisfy { controller.menuItem(for: $0) != nil })
+    }
+
+    @Test
+    func structuralValidationDisablesUnavailableAndOutOfRangeRoutes() {
+        let closePane = NSMenuItem(
+            title: "Close Pane",
+            action: AppDelegate.closePaneMenuItemAction,
+            keyEquivalent: ""
+        )
+        let split = NSMenuItem(
+            title: "Split Right",
+            action: AppDelegate.splitRightMenuItemAction,
+            keyEquivalent: ""
+        )
+        let selectTab = AppDelegate.makeTabSelectionMenuItem(index: 3, target: AppDelegate())
+        let selectWorkspace = AppDelegate.makeWorkspaceSelectionMenuItem(
+            index: 2,
+            target: AppDelegate()
+        )
+
+        #expect(
+            !AppDelegate.validateStructuralMenuItem(
+                closePane,
+                coordinatorAvailable: true,
+                canOpenConfig: true,
+                canCreateTab: true,
+                canClosePane: false,
+                canCloseTab: false,
+                canSplitPane: false,
+                canNavigatePanes: false,
+                activeTabCount: 2,
+                workspaceCount: 1
+            )
+        )
+        #expect(
+            !AppDelegate.validateStructuralMenuItem(
+                split,
+                coordinatorAvailable: true,
+                canOpenConfig: true,
+                canCreateTab: true,
+                canClosePane: true,
+                canCloseTab: true,
+                canSplitPane: false,
+                canNavigatePanes: true,
+                activeTabCount: 2,
+                workspaceCount: 1
+            )
+        )
+        #expect(
+            !AppDelegate.validateStructuralMenuItem(
+                selectTab,
+                coordinatorAvailable: true,
+                canOpenConfig: true,
+                canCreateTab: true,
+                canClosePane: true,
+                canCloseTab: true,
+                canSplitPane: true,
+                canNavigatePanes: true,
+                activeTabCount: 2,
+                workspaceCount: 1
+            )
+        )
+        #expect(
+            !AppDelegate.validateStructuralMenuItem(
+                selectWorkspace,
+                coordinatorAvailable: true,
+                canOpenConfig: true,
+                canCreateTab: true,
+                canClosePane: true,
+                canCloseTab: true,
+                canSplitPane: true,
+                canNavigatePanes: true,
+                activeTabCount: 3,
+                workspaceCount: 1
+            )
+        )
+    }
+
+    @Test
+    func shortcutControllerAppliesActiveConfigurationToLateRegistration() throws {
+        var configuration = ShortcutConfiguration.defaults
+        let customChord = try ShortcutChord(parsing: "ctrl+shift+f20")
+        configuration.assign(customChord, to: .newTab)
+        let controller = ShortcutController(configuration: configuration)
+        let item = NSMenuItem(title: "New Tab", action: nil, keyEquivalent: "x")
+        item.keyEquivalentModifierMask = [.command, .numericPad]
+
+        controller.register(item, for: .newTab)
+
+        #expect(controller.menuItem(for: .newTab) === item)
+        #expect(item.keyEquivalent == String(UnicodeScalar(NSF20FunctionKey)!))
+        #expect(item.keyEquivalentModifierMask == [.control, .shift])
+    }
+
+    @Test
+    func shortcutHotReloadUpdatesSameItemWithoutChangingRouteMetadata() throws {
+        let controller = ShortcutController()
+        let target = NewTabMenuActionTarget()
+        let representedObject = NSNumber(value: 7)
+        let item = NSMenuItem(
+            title: "New Tab",
+            action: #selector(NewTabMenuActionTarget.createNewTab),
+            keyEquivalent: ""
+        )
+        item.target = target
+        item.representedObject = representedObject
+        item.tag = 42
+        controller.register(item, for: .newTab)
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(try ShortcutChord(parsing: "opt+ctrl+n"), to: .newTab)
+
+        controller.apply(configuration)
+
+        #expect(controller.menuItem(for: .newTab) === item)
+        #expect(item.keyEquivalent == "n")
+        #expect(item.keyEquivalentModifierMask == [.option, .control])
+        #expect(item.action == #selector(NewTabMenuActionTarget.createNewTab))
+        #expect(item.target === target)
+        #expect((item.representedObject as AnyObject?) === representedObject)
+        #expect(item.tag == 42)
+    }
+
+    @Test
+    func shortcutDisableAndConflictDisabledOwnerClearMenuEquivalent() throws {
+        let controller = ShortcutController()
+        let newTabItem = NSMenuItem(title: "New Tab", action: nil, keyEquivalent: "")
+        let pasteItem = NSMenuItem(title: "Paste", action: nil, keyEquivalent: "")
+        controller.register(newTabItem, for: .newTab)
+        controller.register(pasteItem, for: .paste)
+        var configuration = ShortcutConfiguration.defaults
+
+        configuration.disable(.newTab)
+        controller.apply(configuration)
+        #expect(newTabItem.keyEquivalent.isEmpty)
+        #expect(newTabItem.keyEquivalentModifierMask.isEmpty)
+
+        let newTabChord = try #require(ShortcutAction.newTab.defaultChord)
+        configuration.assign(newTabChord, to: .newTab)
+        configuration.assign(newTabChord, to: .paste)
+        controller.apply(configuration)
+
+        #expect(newTabItem.keyEquivalent.isEmpty)
+        #expect(newTabItem.keyEquivalentModifierMask.isEmpty)
+        #expect(pasteItem.keyEquivalent == "t")
+        #expect(pasteItem.keyEquivalentModifierMask == [.command])
+    }
+
+    @Test
+    func shortcutApplicationReplacesDeviceDependentFlagsWithExactModifiers() throws {
+        let controller = ShortcutController()
+        let item = NSMenuItem(title: "New Tab", action: nil, keyEquivalent: "")
+        item.keyEquivalentModifierMask = [.capsLock, .numericPad, .command]
+        controller.register(item, for: .newTab)
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(
+            try ShortcutChord(parsing: "cmd+opt+ctrl+shift+home"),
+            to: .newTab
+        )
+
+        controller.apply(configuration)
+
+        #expect(item.keyEquivalent == String(UnicodeScalar(NSHomeFunctionKey)!))
+        #expect(item.keyEquivalentModifierMask == [.command, .option, .control, .shift])
+        #expect(
+            item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+                == [.command, .option, .control, .shift]
+        )
+    }
+
+    @Test
+    func shortcutKeyConversionCoversPrintableAndSpecialKeys() {
+        #expect(ShortcutController.keyEquivalent(for: .a) == "a")
+        #expect(ShortcutController.keyEquivalent(for: .grave) == "`")
+        #expect(ShortcutController.keyEquivalent(for: .leftBracket) == "[")
+        #expect(
+            ShortcutController.keyEquivalent(for: .left)
+                == String(UnicodeScalar(NSLeftArrowFunctionKey)!))
+        #expect(
+            ShortcutController.keyEquivalent(for: .f1) == String(UnicodeScalar(NSF1FunctionKey)!))
+        #expect(
+            ShortcutController.keyEquivalent(for: .f20) == String(UnicodeScalar(NSF20FunctionKey)!))
+        #expect(ShortcutController.keyEquivalent(for: .delete) == "\u{8}")
+        #expect(
+            ShortcutController.keyEquivalent(for: .forwardDelete)
+                == String(UnicodeScalar(NSDeleteFunctionKey)!)
+        )
+        #expect(
+            ShortcutKey.allCases.allSatisfy { !ShortcutController.keyEquivalent(for: $0).isEmpty })
+    }
+
+    @Test
+    func responderOnlyMenuItemNeverGetsConsumingEquivalent() throws {
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(try ShortcutChord(parsing: "cmd+shift+c"), to: .copy)
+        let controller = ShortcutController(configuration: configuration)
+        let copyItem = NSMenuItem(title: "Copy", action: nil, keyEquivalent: "x")
+        copyItem.keyEquivalentModifierMask = [.command]
+
+        controller.register(copyItem, for: .copy)
+
+        #expect(copyItem.keyEquivalent.isEmpty)
+        #expect(copyItem.keyEquivalentModifierMask.isEmpty)
+    }
+
+    @Test
+    func registeredInstallerReusesItemAndAppliesHotReloadWithoutDuplicates() throws {
+        let target = NewTabMenuActionTarget()
+        let controller = ShortcutController()
+        let mainMenu = AppDelegate.installNewTabMenuItem(
+            in: nil,
+            target: target,
+            action: #selector(NewTabMenuActionTarget.createNewTab),
+            shortcutController: controller
+        )
+        let fileMenu = try #require(mainMenu.item(withTitle: "File")?.submenu)
+        let initialItem = try #require(fileMenu.item(withTitle: "New Tab"))
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(try ShortcutChord(parsing: "ctrl+n"), to: .newTab)
+
+        controller.apply(configuration)
+        AppDelegate.installNewTabMenuItem(
+            in: mainMenu,
+            target: target,
+            action: #selector(NewTabMenuActionTarget.createNewTab),
+            shortcutController: controller
+        )
+
+        let reinstalledItem = try #require(fileMenu.item(withTitle: "New Tab"))
+        #expect(reinstalledItem === initialItem)
+        #expect(fileMenu.items.filter { $0.title == "New Tab" }.count == 1)
+        #expect(reinstalledItem.keyEquivalent == "n")
+        #expect(reinstalledItem.keyEquivalentModifierMask == [.control])
+    }
+
+    @Test
+    func applicationShortcutItemsKeepNativePlacementAndIdentityAcrossInstallation() throws {
+        let delegate = AppDelegate()
+        let controller = ShortcutController()
+        var mainMenu = AppDelegate.installOpenConfigurationMenuItem(
+            in: nil,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installQuitMenuItem(
+            in: mainMenu,
+            target: NSApp,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installPresentationMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        let applicationMenu = try #require(mainMenu.item(withTitle: "QuickTTY")?.submenu)
+        let viewMenu = try #require(mainMenu.item(withTitle: "View")?.submenu)
+        let openItem = try #require(applicationMenu.item(withTitle: "Open Configuration…"))
+        let quitItem = try #require(applicationMenu.item(withTitle: "Quit QuickTTY"))
+        let presentationItem = try #require(viewMenu.item(withTitle: "Toggle Presentation Mode"))
+
+        AppDelegate.installOpenConfigurationMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        AppDelegate.installQuitMenuItem(
+            in: mainMenu,
+            target: NSApp,
+            shortcutController: controller
+        )
+        AppDelegate.installPresentationMenuItem(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+
+        #expect(applicationMenu.items.filter { $0.title == "Open Configuration…" }.count == 1)
+        #expect(applicationMenu.items.filter { $0.title == "Quit QuickTTY" }.count == 1)
+        #expect(viewMenu.items.filter { $0.title == "Toggle Presentation Mode" }.count == 1)
+        #expect(applicationMenu.item(withTitle: "Open Configuration…") === openItem)
+        #expect(applicationMenu.item(withTitle: "Quit QuickTTY") === quitItem)
+        #expect(viewMenu.item(withTitle: "Toggle Presentation Mode") === presentationItem)
+        #expect(openItem.action == AppDelegate.openConfigurationMenuItemAction)
+        #expect(quitItem.action == AppDelegate.quitMenuItemAction)
+        #expect(presentationItem.action == AppDelegate.togglePresentationMenuItemAction)
+    }
+
+    @Test
+    func indexedShortcutReloadKeepsIndependentItemsAndRepresentedIndices() throws {
+        let target = TabSelectionMenuActionTarget()
+        let controller = ShortcutController()
+        let mainMenu = AppDelegate.installTabSelectionMenuItems(
+            in: nil,
+            target: target,
+            action: #selector(TabSelectionMenuActionTarget.activateTab(_:)),
+            shortcutController: controller
+        )
+        let viewMenu = try #require(mainMenu.item(withTitle: "View")?.submenu)
+        let firstItem = try #require(viewMenu.item(withTitle: "Select Tab 1"))
+        let secondItem = try #require(viewMenu.item(withTitle: "Select Tab 2"))
+        var configuration = ShortcutConfiguration.defaults
+        configuration.disable(.selectTab1)
+        configuration.assign(try ShortcutChord(parsing: "ctrl+f2"), to: .selectTab2)
+
+        controller.apply(configuration)
+
+        #expect(firstItem.keyEquivalent.isEmpty)
+        #expect(firstItem.keyEquivalentModifierMask.isEmpty)
+        #expect(secondItem.keyEquivalent == String(UnicodeScalar(NSF2FunctionKey)!))
+        #expect(secondItem.keyEquivalentModifierMask == [.control])
+        #expect((firstItem.representedObject as? NSNumber)?.intValue == 1)
+        #expect((secondItem.representedObject as? NSNumber)?.intValue == 2)
+        #expect(controller.menuItem(for: .selectTab1) === firstItem)
+        #expect(controller.menuItem(for: .selectTab2) === secondItem)
+    }
+
+    @Test
+    func terminalMenuUsesResponderChainAndLeavesConditionalCopyNonConsuming() throws {
+        var configuration = ShortcutConfiguration.defaults
+        configuration.assign(try ShortcutChord(parsing: "cmd+shift+c"), to: .copy)
+        configuration.assign(try ShortcutChord(parsing: "ctrl+v"), to: .paste)
+        let controller = ShortcutController(configuration: configuration)
+        let mainMenu = AppDelegate.installTerminalMenuItems(
+            in: nil,
+            shortcutController: controller
+        )
+        AppDelegate.installTerminalMenuItems(
+            in: mainMenu,
+            shortcutController: controller
+        )
+        let editMenu = try #require(mainMenu.item(withTitle: "Edit")?.submenu)
+        let copyItem = try #require(editMenu.item(withTitle: "Copy"))
+        let pasteItem = try #require(editMenu.item(withTitle: "Paste"))
+        let selectAllItem = try #require(editMenu.item(withTitle: "Select All"))
+
+        #expect(editMenu.items.filter { $0.title == "Copy" }.count == 1)
+        #expect(editMenu.items.filter { $0.title == "Paste" }.count == 1)
+        #expect(editMenu.items.filter { $0.title == "Select All" }.count == 1)
+        #expect(copyItem.action == AppDelegate.copyMenuItemAction)
+        #expect(copyItem.keyEquivalent.isEmpty)
+        #expect(copyItem.keyEquivalentModifierMask.isEmpty)
+        #expect(pasteItem.action == AppDelegate.pasteMenuItemAction)
+        #expect(pasteItem.keyEquivalent == "v")
+        #expect(pasteItem.keyEquivalentModifierMask == [.control])
+        #expect(selectAllItem.action == AppDelegate.selectAllMenuItemAction)
+        #expect(copyItem.target == nil)
+        #expect(pasteItem.target == nil)
+        #expect(selectAllItem.target == nil)
+    }
+}
+
+@MainActor
+private func menuShortcutEvent(
+    key: String,
+    modifiers: NSEvent.ModifierFlags
+) throws -> NSEvent {
+    try #require(
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 1,
+            windowNumber: 0,
+            context: nil,
+            characters: key,
+            charactersIgnoringModifiers: key,
+            isARepeat: false,
+            keyCode: 0
+        )
+    )
 }

@@ -242,19 +242,19 @@ extension GhosttyBridgeTests {
         )
         try await fixture.awaitReady(timeout: .seconds(10))
 
-        surface.copy(nil)
-        surface.paste(nil)
+        surface.performTerminalShortcutAction(.copy)
+        surface.performTerminalShortcutAction(.paste)
 
         _ = try await firstClipboardValue(from: processExits, timeout: .seconds(10))
         #expect(try Data(contentsOf: fixture.resultURL) == Data(payload.utf8))
         #expect(
-            surface.clipboardObservationsForTesting.contains(
-                .binding(action: "copy_to_clipboard", result: false)
+            surface.terminalActionObservationsForTesting.contains(
+                GhosttySurfaceTerminalActionObservation(action: .copy, result: false)
             )
         )
         #expect(
-            surface.clipboardObservationsForTesting.contains(
-                .binding(action: "paste_from_clipboard", result: true)
+            surface.terminalActionObservationsForTesting.contains(
+                GhosttySurfaceTerminalActionObservation(action: .paste, result: true)
             )
         )
         #expect(surface.pendingClipboardReadCountForTesting == 0)
@@ -295,13 +295,13 @@ extension GhosttyBridgeTests {
         )
         try await fixture.awaitReady(timeout: .seconds(10))
 
-        surface.pasteSelection(nil)
+        surface.performTerminalShortcutAction(.pasteSelection)
 
         _ = try await firstClipboardValue(from: processExits, timeout: .seconds(10))
         #expect(try Data(contentsOf: fixture.resultURL) == Data(payload.utf8))
         #expect(
-            surface.clipboardObservationsForTesting.contains(
-                .binding(action: "paste_from_selection", result: true)
+            surface.terminalActionObservationsForTesting.contains(
+                GhosttySurfaceTerminalActionObservation(action: .pasteSelection, result: true)
             )
         )
     }
@@ -333,8 +333,13 @@ extension GhosttyBridgeTests {
         bridge.clipboardConfirmationHandler = { event in
             confirmationContinuation.yield(event)
         }
+        let window = makeClipboardShortcutWindow(
+            source: source,
+            additionalSurfaces: [second, third]
+        )
 
         source.paste(nil)
+        _ = window
 
         let firstRequest = try await firstClipboardRequest(
             from: confirmations,
@@ -364,10 +369,9 @@ extension GhosttyBridgeTests {
         source.selectAll(nil)
         for surface in [second, third] {
             #expect(
-                surface.clipboardObservationsForTesting.filter {
-                    if case .binding = $0 { return true }
-                    return false
-                } == [.binding(action: "paste_from_clipboard", result: true)]
+                surface.terminalActionObservationsForTesting == [
+                    GhosttySurfaceTerminalActionObservation(action: .paste, result: true)
+                ]
             )
         }
     }
@@ -411,21 +415,21 @@ extension GhosttyBridgeTests {
         )
         try await fixture.awaitReady(timeout: .seconds(10))
 
-        surface.selectAll(nil)
-        surface.copy(nil)
+        surface.performTerminalShortcutAction(.selectAll)
+        surface.performTerminalShortcutAction(.copy)
 
         let write = try await firstClipboardValue(from: writes, timeout: .seconds(10))
         #expect(write.location == .standard)
         #expect(write.contents.map(\.mime) == ["text/plain", "text/html"])
         #expect(write.contents.first { $0.mime == "text/plain" }?.data == "copy-me")
         #expect(
-            surface.clipboardObservationsForTesting.contains(
-                .binding(action: "select_all", result: true)
+            surface.terminalActionObservationsForTesting.contains(
+                GhosttySurfaceTerminalActionObservation(action: .selectAll, result: true)
             )
         )
         #expect(
-            surface.clipboardObservationsForTesting.contains(
-                .binding(action: "copy_to_clipboard", result: true)
+            surface.terminalActionObservationsForTesting.contains(
+                GhosttySurfaceTerminalActionObservation(action: .copy, result: true)
             )
         )
 
@@ -483,7 +487,7 @@ extension GhosttyBridgeTests {
             )
         }
         try await fixture.awaitReady(timeout: .seconds(10))
-        surface.paste(nil)
+        surface.performTerminalShortcutAction(.paste)
 
         let confirmation = try await firstClipboardRequest(
             from: confirmations,
@@ -554,7 +558,7 @@ extension GhosttyBridgeTests {
             )
         }
         try await fixture.awaitReady(timeout: .seconds(10))
-        surface.paste(nil)
+        surface.performTerminalShortcutAction(.paste)
 
         let confirmation = try await firstClipboardRequest(
             from: confirmations,
@@ -606,7 +610,7 @@ extension GhosttyBridgeTests {
             emptyContinuation.yield(observation)
         }
 
-        emptySurface.paste(nil)
+        emptySurface.performTerminalShortcutAction(.paste)
         let emptyCompletion = try await firstClipboardCompletion(
             from: emptyObservations,
             confirmed: false,
@@ -633,7 +637,7 @@ extension GhosttyBridgeTests {
             deniedContinuation.yield(observation)
         }
 
-        deniedSurface.paste(nil)
+        deniedSurface.performTerminalShortcutAction(.paste)
         let deniedCompletion = try await firstClipboardCompletion(
             from: deniedObservations,
             confirmed: true,
@@ -665,7 +669,7 @@ extension GhosttyBridgeTests {
             configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
 
-        surface.paste(nil)
+        surface.performTerminalShortcutAction(.paste)
         let registeredReadCount = surface.pendingClipboardReadCountForTesting
         switch teardown {
         case .closeSurface:
@@ -716,7 +720,7 @@ extension GhosttyBridgeTests {
         let first = try bridge.makeSurface(
             configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
-        first.paste(nil)
+        first.performTerminalShortcutAction(.paste)
         let firstConfirmation = try await firstClipboardRequest(
             from: confirmations,
             timeout: .seconds(10)
@@ -741,8 +745,8 @@ extension GhosttyBridgeTests {
         let third = try bridge.makeSurface(
             configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
         )
-        second.paste(nil)
-        third.paste(nil)
+        second.performTerminalShortcutAction(.paste)
+        third.performTerminalShortcutAction(.paste)
         let secondConfirmation = try await firstClipboardRequest(
             from: confirmations,
             timeout: .seconds(10)
@@ -1525,6 +1529,25 @@ private final class ConfirmationQueueRecorder {
     var responses: [(UUID, GhosttyClipboardConfirmationResponse)] = []
     var closeResponses: [GhosttyClipboardConfirmationResponse] = []
     var dismissCount = 0
+}
+
+@MainActor
+private func makeClipboardShortcutWindow(
+    source: GhosttySurfaceView,
+    additionalSurfaces: [GhosttySurfaceView] = []
+) -> NSWindow {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    for surface in [source] + additionalSurfaces {
+        surface.frame = window.contentView?.bounds ?? .zero
+        window.contentView?.addSubview(surface)
+    }
+    window.makeFirstResponder(source)
+    return window
 }
 
 private func makeConfirmationRequest(

@@ -161,6 +161,7 @@ final class GhosttyBridge {
     private let applicationIsActive: @MainActor () -> Bool
     private let clipboardClient: GhosttyClipboardClient
     private var configuration: GhosttyConfiguration?
+    private var shortcutConfiguration: ShortcutConfiguration
     private var application: ghostty_app_t?
     private var callbackContextOwnership: Unmanaged<CallbackContext>?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
@@ -175,6 +176,7 @@ final class GhosttyBridge {
         private var inputObservations: [GhosttyBridgeInputObservation] = []
         private var successfulSurfaceCloseObservations: [PaneID] = []
         private var surfaceConfigurationsForTesting: [PaneID: GhosttySurfaceConfiguration] = [:]
+        private var terminalActionResultsForTesting: [TerminalShortcutAction: Bool] = [:]
         private var failsNextSurfaceCreationForTesting = false
         private var failingSurfaceCreationPaneIDForTesting: PaneID?
     #endif
@@ -204,6 +206,7 @@ final class GhosttyBridge {
 
     init(
         configURL: URL? = nil,
+        shortcutConfiguration: ShortcutConfiguration = .defaults,
         runtimeActionHandler: RuntimeActionHandler? = nil,
         clipboardClient: GhosttyClipboardClient = .system,
         applicationIsActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
@@ -215,6 +218,7 @@ final class GhosttyBridge {
         self.applicationIsActive = applicationIsActive
         self.clipboardClient = clipboardClient
         self.configuration = configuration
+        self.shortcutConfiguration = shortcutConfiguration
         application = nil
         callbackContextOwnership = retainedCallbackContext
         diagnostics = configuration.diagnostics
@@ -299,8 +303,11 @@ final class GhosttyBridge {
                 focusRoute: { [weak self] paneID in
                     self?.routeSurfaceFocus(from: paneID)
                 },
-                clipboardBindingActionRoute: { [weak self] paneID, action in
-                    self?.routeClipboardBindingAction(action, from: paneID)
+                shortcutRoute: { [weak self] paneID, event in
+                    self?.routeShortcut(event, from: paneID) ?? .unmatched
+                },
+                terminalActionRoute: { [weak self] paneID, action in
+                    self?.routeTerminalShortcutAction(action, from: paneID) ?? false
                 },
                 clipboardClient: clipboardClient,
                 callbackRoute: { [weak self] paneID, event in
@@ -322,6 +329,10 @@ final class GhosttyBridge {
         #endif
 
         return surface
+    }
+
+    func applyShortcutConfiguration(_ configuration: ShortcutConfiguration) {
+        shortcutConfiguration = configuration
     }
 
     func closeSurface(id: PaneID) {
@@ -413,12 +424,23 @@ final class GhosttyBridge {
             inputObservations
         }
 
+        var shortcutConfigurationForTesting: ShortcutConfiguration {
+            shortcutConfiguration
+        }
+
         var successfulSurfaceCloseObservationsForTesting: [PaneID] {
             successfulSurfaceCloseObservations
         }
 
         func surfaceConfigurationForTesting(id: PaneID) -> GhosttySurfaceConfiguration? {
             surfaceConfigurationsForTesting[id]
+        }
+
+        func setTerminalActionResultForTesting(
+            _ result: Bool,
+            for action: TerminalShortcutAction
+        ) {
+            terminalActionResultsForTesting[action] = result
         }
 
         func failNextSurfaceCreationForTesting() {
@@ -604,14 +626,49 @@ final class GhosttyBridge {
         }
     }
 
-    private func routeClipboardBindingAction(
-        _ action: GhosttySurfaceBindingAction,
+    private func routeShortcut(
+        _ event: NSEvent,
         from paneID: PaneID
-    ) {
-        let targetPaneIDs = inputTargetPaneIDs(from: paneID)
-        for targetPaneID in targetPaneIDs {
-            surfaces[targetPaneID]?.performDirectClipboardBindingAction(action)
+    ) -> GhosttyShortcutDispatchResult {
+        guard let chord = ShortcutEventMatcher.chord(matching: event),
+            let action = shortcutConfiguration.owner(of: chord)
+        else { return .unmatched }
+
+        guard case .terminal(let terminalAction) = action.executionRoute else {
+            return .appKit
         }
+
+        let performed = routeTerminalShortcutAction(terminalAction, from: paneID)
+        return action.performPolicy.consumes(performed: performed) ? .handled : .passThrough
+    }
+
+    @discardableResult
+    private func routeTerminalShortcutAction(
+        _ action: TerminalShortcutAction,
+        from paneID: PaneID
+    ) -> Bool {
+        guard let source = surfaces[paneID], source.isShortcutDispatchSource else {
+            return false
+        }
+
+        let targetPaneIDs = TerminalInputRouter.targetPaneIDs(
+            for: action,
+            sourcePaneID: paneID,
+            broadcastPaneIDs: inputTargetPaneIDs(from: paneID)
+        )
+        var sourceResult = false
+        for targetPaneID in targetPaneIDs {
+            let coreResult = surfaces[targetPaneID]?.performTerminalShortcutAction(action) ?? false
+            #if DEBUG
+                let result = terminalActionResultsForTesting[action] ?? coreResult
+            #else
+                let result = coreResult
+            #endif
+            if targetPaneID == paneID {
+                sourceResult = result
+            }
+        }
+        return sourceResult
     }
 
     private func inputTargetPaneIDs(from sourcePaneID: PaneID) -> [PaneID] {
