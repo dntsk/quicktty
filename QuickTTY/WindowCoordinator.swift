@@ -25,6 +25,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             @escaping @MainActor (Bool) -> Void
         ) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
+    typealias TerminalActivityEffectHandler = @MainActor (TerminalActivityEffect) -> Void
 
     private let ghosttyBridge: GhosttyBridge
     private let normalWindowController: NormalWindowController
@@ -32,6 +33,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let presentationController: PresentationController
     private let hotKeyController: any HotKeyControlling
     private let surfaceConfiguration: GhosttySurfaceConfiguration
+    private let terminalActivityController: TerminalActivityController
+    private var terminalNotificationController: TerminalNotificationController?
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
     private let workspaceDeletionConfirmationPresenter: WorkspaceDeletionConfirmationPresenter?
     private let persistNormalWindowFrame: NormalWindowFramePersistence
@@ -53,11 +56,21 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var tabRenameTransientInteraction: QuakeWindowController.TransientInteraction?
     private var isTabRenameEditing = false
     private var isPreparingForTermination = false
+    private var activityConfiguration: GhosttyActivityConfiguration
+    private var activityCallbackGeneration = 0
+
+    var terminalActivityEffectHandler: TerminalActivityEffectHandler?
+
+    var terminalActivityConfiguration: GhosttyActivityConfiguration {
+        activityConfiguration
+    }
 
     #if DEBUG
         private var failsNextStartupModelMutationForTesting = false
         private var failsNextSplitMutationForTesting = false
         private var refreshWorkspacePresentationInvocationCountForTestingStorage = 0
+        private var refreshWorkspaceStatusesInvocationCountForTestingStorage = 0
+        private var activeWindowIsKeyOverrideForTesting: Bool?
         private var closeUnavailablePaneDidBeginHookForTesting: ((PaneID) -> Void)?
         private var retryUnavailablePanePresentationCallbackForTesting: ((PaneID) -> Void)?
         private var closeUnavailablePanePresentationCallbackForTesting: ((PaneID) -> Void)?
@@ -150,6 +163,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         normalWindowFrame: NormalWindowFrame? = nil,
         quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
+        terminalActivityController: TerminalActivityController? = nil,
+        terminalNotificationController: TerminalNotificationController? = nil,
         initialWorkspaceStore: WorkspaceStore = WorkspaceStore(),
         persistWorkspaceStore: @escaping WorkspacePersistence = { _ in },
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
@@ -183,6 +198,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.quakeWindowController = quakeWindowController
         self.hotKeyController = resolvedHotKeyController
         self.surfaceConfiguration = surfaceConfiguration
+        self.terminalActivityController =
+            terminalActivityController ?? TerminalActivityController()
+        self.terminalNotificationController = terminalNotificationController
+        activityConfiguration = ghosttyBridge.activityConfiguration
         workspaceStore = initialWorkspaceStore
         self.confirmationPresenter = confirmationPresenter
         self.workspaceDeletionConfirmationPresenter = workspaceDeletionConfirmationPresenter
@@ -221,6 +240,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceWorkingDirectoryHandler = { [weak self] paneID, workingDirectory in
             self?.surfaceWorkingDirectoryDidChange(id: paneID, workingDirectory: workingDirectory)
         }
+        installSurfaceActivityHandlers()
+        self.terminalActivityController.scheduledEffectHandler = { [weak self] effect in
+            self?.handleScheduledActivityEffect(effect)
+        }
         ghosttyBridge.inputTargetProvider = { [weak self] sourcePaneID in
             guard let self else { return [sourcePaneID] }
             return TerminalInputRouter.targetPaneIDs(
@@ -251,6 +274,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceTabTitleHandler = nil
         ghosttyBridge.surfaceTabTitlePromptHandler = nil
         ghosttyBridge.surfaceWorkingDirectoryHandler = nil
+        ghosttyBridge.surfaceProgressHandler = nil
+        ghosttyBridge.surfaceCommandFinishedHandler = nil
+        terminalActivityController.scheduledEffectHandler = nil
         ghosttyBridge.inputTargetProvider = { [$0] }
         ghosttyBridge.clipboardConfirmationHandler = nil
         if normalWindowController.window?.delegate === self {
@@ -349,6 +375,123 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceStore = candidate
         persistWorkspaceStore(workspaceStore)
         return true
+    }
+
+    private func installSurfaceActivityHandlers() {
+        activityCallbackGeneration += 1
+        let generation = activityCallbackGeneration
+        ghosttyBridge.surfaceProgressHandler = { [weak self] paneID, report in
+            guard let self, generation == activityCallbackGeneration else { return }
+            handleSurfaceProgress(report, for: paneID)
+        }
+        ghosttyBridge.surfaceCommandFinishedHandler = { [weak self] paneID, command in
+            guard let self, generation == activityCallbackGeneration else { return }
+            handleSurfaceCommandFinished(command, for: paneID)
+        }
+    }
+
+    private func handleSurfaceProgress(_ report: GhosttyProgressReport, for paneID: PaneID) {
+        guard activityConfiguration.progressStyleEnabled,
+            liveOwningTab(for: paneID) != nil
+        else { return }
+        let previousStatuses = terminalActivityController.statuses
+        let effects = terminalActivityController.handleProgress(report, for: paneID)
+        applyActivityEffects(effects)
+        acknowledgeTerminalStatus(for: paneID)
+        refreshWorkspaceStatusesIfChanged(from: previousStatuses)
+    }
+
+    private func handleSurfaceCommandFinished(
+        _ command: GhosttyCommandFinished,
+        for paneID: PaneID
+    ) {
+        guard activityConfiguration.progressStyleEnabled,
+            liveOwningTab(for: paneID) != nil
+        else { return }
+        let previousStatuses = terminalActivityController.statuses
+        let effects = terminalActivityController.handleCommandFinished(command, for: paneID)
+        applyActivityEffects(effects)
+        acknowledgeTerminalStatus(for: paneID)
+        refreshWorkspaceStatusesIfChanged(from: previousStatuses)
+    }
+
+    private func applyActivityEffects(_ effects: [TerminalActivityEffect]) {
+        for effect in effects {
+            terminalActivityEffectHandler?(effect)
+            terminalNotificationController?.handle(effect)
+        }
+    }
+
+    private func handleScheduledActivityEffect(_ effect: TerminalActivityEffect) {
+        guard case .cleared(let paneID) = effect,
+            liveOwningTab(for: paneID) != nil
+        else { return }
+        cleanUpPaneLifecycle(paneID, statusChangedBeforeCleanup: true)
+    }
+
+    private func refreshWorkspaceStatusesIfChanged(
+        from previousStatuses: [PaneID: TerminalActivityState]
+    ) {
+        guard previousStatuses != terminalActivityController.statuses else { return }
+        refreshWorkspaceStatuses()
+    }
+
+    private func refreshWorkspaceStatuses() {
+        #if DEBUG
+            refreshWorkspaceStatusesInvocationCountForTestingStorage += 1
+        #endif
+        workspaceViewController.refreshStatuses(
+            in: workspaceStore,
+            paneStatuses: terminalActivityController.statuses
+        )
+    }
+
+    private func acknowledgeTerminalStatus(for paneID: PaneID) {
+        guard let ownership = liveOwnership(for: paneID) else { return }
+        let selectedAndVisible =
+            ownership.workspace.id == workspaceStore.activeWorkspaceID
+            && ownership.workspace.activeTabID == ownership.tab.id
+            && activeWindowIsKey
+        terminalActivityController.acknowledge(
+            paneID,
+            selectedAndVisible: selectedAndVisible
+        )
+        if selectedAndVisible {
+            terminalNotificationController?.invalidate(paneID: paneID)
+        }
+    }
+
+    private func synchronizeTerminalAcknowledgements() {
+        for paneID in terminalActivityController.statuses.keys {
+            acknowledgeTerminalStatus(for: paneID)
+        }
+    }
+
+    private var activeWindowIsKey: Bool {
+        #if DEBUG
+            if let activeWindowIsKeyOverrideForTesting {
+                return activeWindowIsKeyOverrideForTesting
+            }
+        #endif
+        return activeWindow?.isKeyWindow == true
+    }
+
+    private func clearTerminalActivity() {
+        for paneID in Array(terminalActivityController.statuses.keys) {
+            cleanUpPaneLifecycle(paneID)
+        }
+    }
+
+    private func cleanUpPaneLifecycle(
+        _ paneID: PaneID,
+        statusChangedBeforeCleanup: Bool = false
+    ) {
+        let hadActivity = terminalActivityController.statuses[paneID] != nil
+        terminalActivityController.removePane(paneID)
+        terminalNotificationController?.invalidate(paneID: paneID)
+        if hadActivity || statusChangedBeforeCleanup {
+            refreshWorkspaceStatuses()
+        }
     }
 
     private func surfaceTitleDidChange(id paneID: PaneID) {
@@ -473,6 +616,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         surfaces[paneID] = surface
+        installSurfaceActivityHandlers()
         _ = commitWorkspaceStore(candidate)
         refreshWorkspacePresentation(focusTerminal: true)
     }
@@ -493,6 +637,82 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             return
         }
         guard commitWorkspaceStore(candidate) else { return }
+        refreshWorkspacePresentation(focusTerminal: true)
+    }
+
+    func installTerminalNotificationController(
+        _ controller: TerminalNotificationController
+    ) {
+        guard !isPreparingForTermination else {
+            controller.shutdown()
+            return
+        }
+        guard terminalNotificationController !== controller else { return }
+        terminalNotificationController?.shutdown()
+        terminalNotificationController = controller
+    }
+
+    func terminalDestination(for paneID: PaneID) -> TerminalDestination? {
+        guard let ownership = liveOwnership(for: paneID) else { return nil }
+        return TerminalDestination(
+            workspaceID: ownership.workspace.id,
+            tabID: ownership.tab.id,
+            paneID: paneID
+        )
+    }
+
+    func isCurrentTerminalActivityEffect(_ effect: TerminalActivityEffect) -> Bool {
+        guard activityConfiguration.progressStyleEnabled,
+            liveOwningTab(for: effect.paneID) != nil,
+            let phase = terminalActivityController.statuses[effect.paneID]?.phase
+        else { return false }
+
+        switch (effect, phase) {
+        case (.waiting, .waiting), (.failed, .failed), (.completed, .completed):
+            return true
+        case (.waiting, _), (.failed, _), (.completed, _), (.cleared, _):
+            return false
+        }
+    }
+
+    func shouldSuppressNotification(for destination: TerminalDestination) -> Bool {
+        guard activeWindowIsKey,
+            workspaceStore.activeWorkspaceID == destination.workspaceID,
+            let workspace = workspaceStore.workspace(id: destination.workspaceID)
+        else {
+            return false
+        }
+        return workspace.activeTabID == destination.tabID
+    }
+
+    func activate(destination: TerminalDestination) {
+        guard !isPreparingForTermination,
+            let ownership = liveOwnership(for: destination.paneID),
+            ownership.workspace.id == destination.workspaceID,
+            ownership.tab.id == destination.tabID
+        else {
+            return
+        }
+
+        var candidate = workspaceStore
+        do {
+            try candidate.activateWorkspace(destination.workspaceID)
+            try candidate.activateTab(destination.tabID, in: destination.workspaceID)
+            _ = try splitCoordinator.apply(
+                .activatePane(
+                    workspaceID: destination.workspaceID,
+                    tabID: destination.tabID,
+                    paneID: destination.paneID
+                ),
+                to: &candidate
+            )
+            try presentationController.showCurrentPresentation()
+        } catch {
+            onError(error)
+            return
+        }
+
+        _ = commitWorkspaceStore(candidate)
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -535,7 +755,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 in: workspaceID
             )
             guard commitWorkspaceStore(candidate) else { return }
-            workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
+            workspaceViewController.apply(
+                workspaceStore,
+                liveTitles: liveSurfaceTitles,
+                paneStatuses: terminalActivityController.statuses
+            )
             if let surface = activePaneID.flatMap({ surfaces[$0] }), let paneID = activePaneID {
                 focus(surface, paneID: paneID)
             }
@@ -593,6 +817,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
             }
             surfaces[paneID] = surface
+            installSurfaceActivityHandlers()
             surfaceFailures.removeValue(forKey: paneID)
         } catch {
             surfaceFailures[paneID] = SurfaceFailurePresentation(
@@ -620,6 +845,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaceContext: surfaceContext
         )
         surfaces[prepared.paneID] = prepared.surface
+        installSurfaceActivityHandlers()
         _ = commitWorkspaceStore(candidate)
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
@@ -697,6 +923,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             candidate: &candidate
         )
         surfaces[paneID] = surface
+        installSurfaceActivityHandlers()
         _ = commitWorkspaceStore(candidate)
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
@@ -776,6 +1003,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         surfaces = restoredSurfaces
+        installSurfaceActivityHandlers()
         surfaceFailures = restoredFailures
         _ = commitWorkspaceStore(candidate)
     }
@@ -823,7 +1051,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             ) { [weak self] paneID, processAlive in
                 self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
             }
+            cleanUpPaneLifecycle(paneID)
             surfaces[paneID] = surface
+            installSurfaceActivityHandlers()
             surfaceFailures.removeValue(forKey: paneID)
             if ownerTabWasVisible {
                 refreshWorkspacePresentation(focusTerminal: shouldFocus)
@@ -880,10 +1110,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         guard commitWorkspaceStore(candidate) else { return }
+        cleanUpPaneLifecycle(paneID)
         surfaceFailures.removeValue(forKey: paneID)
         guard ownerWorkspaceWasActive else { return }
         guard ownerTabWasActive else {
-            workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
+            workspaceViewController.apply(
+                workspaceStore,
+                liveTitles: liveSurfaceTitles,
+                paneStatuses: terminalActivityController.statuses
+            )
+            synchronizeTerminalAcknowledgements()
             return
         }
 
@@ -906,6 +1142,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     func applyConfiguration(_ config: QuickTTYConfig) {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
+        activityConfiguration = ghosttyBridge.activityConfiguration
+        if !activityConfiguration.progressStyleEnabled {
+            clearTerminalActivity()
+        }
         configEditor = config.configEditor
         let geometry =
             QuakeWindowGeometry(
@@ -1000,6 +1240,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         workspaceViewController.onRenameEditingChanged = { [weak self] isEditing in
             self?.setTabRenameEditing(isEditing)
+        }
+        workspaceViewController.onWindowKeyStateChanged = { [weak self] _ in
+            self?.synchronizeTerminalAcknowledgements()
         }
     }
 
@@ -1127,10 +1370,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func liveOwningTab(for paneID: PaneID) -> TerminalTab? {
+        liveOwnership(for: paneID)?.tab
+    }
+
+    private func liveOwnership(for paneID: PaneID) -> (workspace: Workspace, tab: TerminalTab)? {
         guard surfaces[paneID] != nil else { return nil }
         for workspace in workspaceStore.workspaces {
             if let tab = workspace.tabs.first(where: { $0.root.contains(paneID) }) {
-                return tab
+                return (workspace, tab)
             }
         }
         return nil
@@ -1147,7 +1394,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         #if DEBUG
             refreshWorkspacePresentationInvocationCountForTestingStorage += 1
         #endif
-        workspaceViewController.apply(workspaceStore, liveTitles: liveSurfaceTitles)
+        workspaceViewController.apply(
+            workspaceStore,
+            liveTitles: liveSurfaceTitles,
+            paneStatuses: terminalActivityController.statuses
+        )
         let activePaneIDs = activeTab?.root.leaves ?? []
         let activeTabSurfaces = Dictionary(
             uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
@@ -1189,6 +1440,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         if focusTerminal, let surface, let paneID = activePaneID {
             focus(surface, paneID: paneID)
         }
+        synchronizeTerminalAcknowledgements()
     }
 
     private func focus(
@@ -1297,6 +1549,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                         surfaceContext: .newTab
                     )
                     surfaces[prepared.paneID] = prepared.surface
+                    installSurfaceActivityHandlers()
                     guard commitWorkspaceStore(candidate) else {
                         ghosttyBridge.closeSurface(id: prepared.paneID)
                         surfaces.removeValue(forKey: prepared.paneID)
@@ -1430,7 +1683,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         detachActiveWorkspacePresentation()
         for paneID in removedWorkspace.tabs.flatMap(\.root.leaves) {
             surfaceFailures.removeValue(forKey: paneID)
-            _ = removeSurface(id: paneID, closeBridgeSurface: true)
+            if !removeSurface(id: paneID, closeBridgeSurface: true) {
+                cleanUpPaneLifecycle(paneID)
+            }
         }
         guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
@@ -1650,6 +1905,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         if let replacement {
             surfaces[replacement.paneID] = replacement.surface
+            installSurfaceActivityHandlers()
         }
         _ = commitWorkspaceStore(candidate)
         refreshWorkspacePresentation(focusTerminal: owner.id == candidate.activeWorkspaceID)
@@ -1661,6 +1917,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     @discardableResult
     private func removeSurface(id: PaneID, closeBridgeSurface: Bool) -> Bool {
         guard surfaces.removeValue(forKey: id) != nil else { return false }
+        cleanUpPaneLifecycle(id)
+        if !isPreparingForTermination {
+            installSurfaceActivityHandlers()
+        }
         confirmationQueue.invalidatePane(id)
         if closeBridgeSurface {
             ghosttyBridge.closeSurface(id: id)
@@ -1669,7 +1929,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func prepareForApplicationTermination() {
+        terminalActivityController.scheduledEffectHandler = nil
+        terminalActivityEffectHandler = nil
+        clearTerminalActivity()
+        terminalNotificationController?.shutdown()
+        terminalNotificationController = nil
         tearDownSurfaces()
+        ghosttyBridge.surfaceProgressHandler = nil
+        ghosttyBridge.surfaceCommandFinishedHandler = nil
     }
 
     #if DEBUG
@@ -1679,6 +1946,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var activeWindowForTesting: NSWindow? {
             activeWindow
+        }
+
+        var quakeVisibilityForTesting: QuakeVisibility {
+            quakeWindowController.requestedVisibility
+        }
+
+        func requestQuakeVisibilityForTesting(_ visibility: QuakeVisibility) throws {
+            try presentationController.requestQuakeVisibility(visibility)
         }
 
         var workspaceViewControllerForTesting: WorkspaceViewController {
@@ -1749,6 +2024,23 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var refreshWorkspacePresentationInvocationCountForTesting: Int {
             refreshWorkspacePresentationInvocationCountForTestingStorage
+        }
+
+        var refreshWorkspaceStatusesInvocationCountForTesting: Int {
+            refreshWorkspaceStatusesInvocationCountForTestingStorage
+        }
+
+        var terminalActivityStatusesForTesting: [PaneID: TerminalActivityState] {
+            terminalActivityController.statuses
+        }
+
+        var terminalActivityConfigurationForTesting: GhosttyActivityConfiguration {
+            activityConfiguration
+        }
+
+        func setActiveWindowIsKeyForTesting(_ isKey: Bool) {
+            activeWindowIsKeyOverrideForTesting = isKey
+            synchronizeTerminalAcknowledgements()
         }
 
         func activateTabForTesting(_ tabID: TabID) {
@@ -2086,6 +2378,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     return
                 }
                 surfaces[replacement.paneID] = replacement.surface
+                installSurfaceActivityHandlers()
                 _ = commitWorkspaceStore(candidate)
                 refreshWorkspacePresentation(
                     focusTerminal: workspace.id == candidate.activeWorkspaceID)

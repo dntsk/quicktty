@@ -1,0 +1,85 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude failed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ]
+  }
+}

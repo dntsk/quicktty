@@ -47,6 +47,32 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_PROGRESS_REPORT {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface),
+            let report = copyGhosttyProgressReport(action.action.progress_report)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleProgressReport(report)
+    }
+
+    if action.tag == GHOSTTY_ACTION_COMMAND_FINISHED {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface),
+            let command = copyGhosttyCommandFinished(action.action.command_finished)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleCommandFinished(command)
+    }
+
     if action.tag == GHOSTTY_ACTION_SET_TITLE {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
             let surface = target.target.surface,
@@ -129,7 +155,107 @@ private func ghosttyRuntimeActionCallback(
     )
 }
 
+private func copyGhosttyProgressReport(
+    _ payload: ghostty_action_progress_report_s
+) -> GhosttyProgressReport? {
+    let state: GhosttyProgressReport.State
+    switch payload.state {
+    case GHOSTTY_PROGRESS_STATE_REMOVE: state = .remove
+    case GHOSTTY_PROGRESS_STATE_SET: state = .set
+    case GHOSTTY_PROGRESS_STATE_ERROR: state = .error
+    case GHOSTTY_PROGRESS_STATE_INDETERMINATE: state = .indeterminate
+    case GHOSTTY_PROGRESS_STATE_PAUSE: state = .pause
+    default: return nil
+    }
+    let progress: UInt8?
+    switch payload.progress {
+    case -1:
+        progress = nil
+    case 0...100:
+        progress = UInt8(payload.progress)
+    default:
+        return nil
+    }
+    return GhosttyProgressReport(state: state, progress: progress)
+}
+
+private func copyGhosttyCommandFinished(
+    _ payload: ghostty_action_command_finished_s
+) -> GhosttyCommandFinished? {
+    let exitCode: UInt8?
+    switch payload.exit_code {
+    case -1:
+        exitCode = nil
+    case 0...255:
+        exitCode = UInt8(payload.exit_code)
+    default:
+        return nil
+    }
+    return GhosttyCommandFinished(
+        exitCode: exitCode,
+        durationNanoseconds: payload.duration
+    )
+}
+
 #if DEBUG
+    enum GhosttyActivityCallbackTargetForTesting {
+        case surface
+        case app
+        case unknown
+    }
+
+    func ghosttyRuntimeProgressCallbackForTesting(
+        surface: ghostty_surface_t,
+        stateRawValue: UInt32,
+        progress: Int8,
+        target: GhosttyActivityCallbackTargetForTesting
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        var payload = ghostty_action_u()
+        payload.progress_report = ghostty_action_progress_report_s(
+            state: ghostty_action_progress_report_state_e(rawValue: stateRawValue),
+            progress: progress
+        )
+        return ghosttyRuntimeActionCallback(
+            nil,
+            ghostty_target_s(tag: targetTag, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_PROGRESS_REPORT, action: payload)
+        )
+    }
+
+    func ghosttyRuntimeCommandFinishedCallbackForTesting(
+        surface: ghostty_surface_t,
+        exitCode: Int16,
+        durationNanoseconds: UInt64,
+        target: GhosttyActivityCallbackTargetForTesting
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        var payload = ghostty_action_u()
+        payload.command_finished = ghostty_action_command_finished_s(
+            exit_code: exitCode,
+            duration: durationNanoseconds
+        )
+        return ghosttyRuntimeActionCallback(
+            nil,
+            ghostty_target_s(tag: targetTag, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_COMMAND_FINISHED, action: payload)
+        )
+    }
+
     enum GhosttyTitleCallbackKindForTesting {
         case surfaceTitle
         case tabTitle
@@ -322,6 +448,8 @@ final class GhosttyBridge {
     typealias SurfaceTabTitleHandler = @MainActor (PaneID, String) -> Void
     typealias SurfaceTabTitlePromptHandler = @MainActor (PaneID) -> Void
     typealias SurfaceWorkingDirectoryHandler = @MainActor (PaneID, String) -> Void
+    typealias SurfaceProgressHandler = @MainActor (PaneID, GhosttyProgressReport) -> Void
+    typealias SurfaceCommandFinishedHandler = @MainActor (PaneID, GhosttyCommandFinished) -> Void
     typealias InputTargetProvider = @MainActor (PaneID) -> [PaneID]
 
     private static let runtimeBootstrapResult =
@@ -342,6 +470,8 @@ final class GhosttyBridge {
     var surfaceTabTitleHandler: SurfaceTabTitleHandler?
     var surfaceTabTitlePromptHandler: SurfaceTabTitlePromptHandler?
     var surfaceWorkingDirectoryHandler: SurfaceWorkingDirectoryHandler?
+    var surfaceProgressHandler: SurfaceProgressHandler?
+    var surfaceCommandFinishedHandler: SurfaceCommandFinishedHandler?
     var inputTargetProvider: InputTargetProvider = { [$0] }
 
     #if DEBUG
@@ -356,6 +486,7 @@ final class GhosttyBridge {
     private(set) var diagnostics: [String]
     private(set) var chromePalette: GhosttyChromePalette
     private(set) var splitAppearance: GhosttySplitAppearance
+    private(set) var activityConfiguration: GhosttyActivityConfiguration
 
     var isReady: Bool {
         application != nil
@@ -401,6 +532,7 @@ final class GhosttyBridge {
         diagnostics = configuration.diagnostics
         chromePalette = configuration.chromePalette
         splitAppearance = configuration.splitAppearance
+        activityConfiguration = configuration.activityConfiguration
 
         #if DEBUG
             ghosttyCallbackContextOwnershipCount.withLock { count in
@@ -550,6 +682,7 @@ final class GhosttyBridge {
         diagnostics = []
         chromePalette = replacement.chromePalette
         splitAppearance = replacement.splitAppearance
+        activityConfiguration = replacement.activityConfiguration
         configuration?.release()
         configuration = replacement
     }
@@ -588,8 +721,10 @@ final class GhosttyBridge {
             UInt32(GHOSTTY_ACTION_CONFIG_CHANGE.rawValue),
             UInt32(GHOSTTY_ACTION_OPEN_URL.rawValue),
             UInt32(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue),
+            UInt32(GHOSTTY_ACTION_PROGRESS_REPORT.rawValue),
+            UInt32(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue),
         ]
-        return actual == [0, 1, 2, 5, 12, 36, 40, 47, 48, 54, 55]
+        return actual == [0, 1, 2, 5, 12, 36, 40, 47, 48, 54, 55, 56, 58]
     }
 
     #if DEBUG
@@ -808,6 +943,10 @@ final class GhosttyBridge {
                 confirmationHandler: clipboardConfirmationHandler
             )
             surfaceWorkingDirectoryHandler?(paneID, workingDirectory)
+        case .progressReport(let report):
+            surfaceProgressHandler?(paneID, report)
+        case .commandFinished(let command):
+            surfaceCommandFinishedHandler?(paneID, command)
         default:
             surface.processCallbackEvent(
                 event,

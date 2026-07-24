@@ -183,7 +183,21 @@ Terminal actions вызываются только через фиксирова
 
 Stateful actions read-only, secure input и mouse reporting не экспортируются до появления видимого состояния, checked menu state и корректного lifecycle cleanup. Interactive Search и URL hover/open остаются обязательными следующими интеграциями; их требования зафиксированы в `docs/backlog.md` исходного проекта.
 
+## Интеграции с coding agents
+
+QuickTTY отображает состояния coding agents из terminal progress sequences OSC `9;4`. Для Pi включите `/settings` → **Terminal progress**. Для Claude Code и Codex bundled helper и JSON-примеры находятся в `QuickTTY.app/Contents/Resources/AgentIntegrations`; их нужно вручную объединить с существующей конфигурацией. QuickTTY не устанавливает и не изменяет hooks автоматически. Полная инструкция: `docs/agent-integrations.md` в репозитории.
+
 ## Параметры Ghostty
+
+### `progress-style`
+
+Управляет badges terminal progress OSC `9;4`. Значение по умолчанию — `true`. При `false` QuickTTY сразу очищает текущие badges и игнорирует новые progress-события.
+
+### `desktop-notifications`
+
+Управляет системными уведомлениями о terminal progress. Значение по умолчанию — `true`. При `false` badges продолжают обновляться, но новые системные уведомления не создаются.
+
+Оба параметра применяются hot reload без перезапуска surfaces и shell-процессов. Только полностью валидная Ghostty-конфигурация становится активной; при ошибке сохраняются предыдущие значения параметров, badges и действующая конфигурация.
 
 ### `copy-on-select`
 

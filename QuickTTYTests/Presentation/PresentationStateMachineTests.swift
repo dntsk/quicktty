@@ -585,6 +585,47 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func showCurrentPresentationUsesExistingModeWithoutReparenting() throws {
+        let normalContent = NSViewController()
+        normalContent.view = NSView()
+        let normal = FakePresentationContainer()
+        let inactiveQuake = FakeQuakeContainer()
+        let normalController = try PresentationController(
+            contentViewController: normalContent,
+            normalWindowController: normal,
+            quakeWindowController: inactiveQuake,
+            persistSuccessfulMode: { _ in }
+        )
+
+        try normalController.showCurrentPresentation()
+
+        #expect(normalController.mode == .normal)
+        #expect(normal.showCount == 2)
+        #expect(normal.installedContentViewController === normalContent)
+        #expect(inactiveQuake.installedContentViewController == nil)
+
+        let quakeContent = NSViewController()
+        quakeContent.view = NSView()
+        let inactiveNormal = FakePresentationContainer()
+        let quake = FakeQuakeContainer()
+        let quakeController = try PresentationController(
+            contentViewController: quakeContent,
+            normalWindowController: inactiveNormal,
+            quakeWindowController: quake,
+            initialMode: .quake,
+            persistSuccessfulMode: { _ in }
+        )
+        try quake.requestVisibility(.hidden)
+
+        try quakeController.showCurrentPresentation()
+
+        #expect(quakeController.mode == .quake)
+        #expect(quake.requestedVisibility == .shown)
+        #expect(inactiveNormal.installedContentViewController == nil)
+        #expect(quake.installedContentViewController === quakeContent)
+    }
+
+    @Test
     func hotKeyIntegrationCallbackOnlyTogglesInQuakeMode() throws {
         let content = NSViewController()
         content.view = NSView()
@@ -659,6 +700,7 @@ private final class FakePresentationContainer: PresentationWindowContainer {
     private(set) var presentationFrame: NSRect
     private(set) var isPresentationVisible = false
     private(set) var installedContentViewController: NSViewController?
+    private(set) var showCount = 0
     private let events: PresentationTransitionEvents?
     var failNextInstall = false
     var failNextShow = false
@@ -686,6 +728,7 @@ private final class FakePresentationContainer: PresentationWindowContainer {
             throw FakePresentationError.showFailed
         }
         isPresentationVisible = true
+        showCount += 1
         events?.record("normal.show")
     }
 

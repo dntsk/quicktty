@@ -24,6 +24,12 @@ targets:
         excludes:
           - Resources
       - path: QuickTTY/Resources
+        excludes:
+          - AgentIntegrations
+        buildPhase: resources
+        group: Resources
+      - path: QuickTTY/Resources/AgentIntegrations
+        type: folder
         buildPhase: resources
         group: Resources
       - path: Vendor/ghostty/macos/Sources/Features/Splits/SplitView.swift

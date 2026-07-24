@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    printf '%s\n' 'usage: quicktty-progress claude|codex working|waiting|failed|completed' >&2
+    exit 2
+}
+
+[ "$#" -eq 2 ] || usage
+
+mode=$1
+state=$2
+
+case "$mode" in
+    claude | codex) ;;
+    *) usage ;;
+esac
+
+case "$state" in
+    working) progress=3 ;;
+    waiting) progress=4 ;;
+    failed) progress=2 ;;
+    completed) progress=0 ;;
+    *) usage ;;
+esac
+
+case "$mode" in
+    claude)
+        printf '{"terminalSequence":"\\u001b]9;4;%s\\u0007"}\n' "$progress"
+        ;;
+    codex)
+        { printf '\033]9;4;%s\007' "$progress" > /dev/tty; } 2>/dev/null || :
+        printf '{}\n'
+        ;;
+esac

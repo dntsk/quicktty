@@ -72,6 +72,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private let collectionViewLayout = NSCollectionViewFlowLayout()
     private var tabs: [TerminalTab] = []
     private var displayedTitles: [TabID: String] = [:]
+    private var statuses: [TabID: TerminalStatusPresentation] = [:]
     private var destinations: [WorkspaceDestination] = []
     private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
@@ -135,17 +136,20 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         tabs: [TerminalTab],
         activeTabID: TabID?,
         destinations: [WorkspaceDestination],
-        displayedTitles: [TabID: String] = [:]
+        displayedTitles: [TabID: String] = [:],
+        statuses: [TabID: TerminalStatusPresentation] = [:]
     ) {
         let resolvedTitles = Self.resolvedDisplayedTitles(
             for: tabs,
             displayedTitles: displayedTitles
         )
+        let resolvedStatuses = Self.resolvedStatuses(for: tabs, statuses: statuses)
         var synchronizedSelection = selection
         synchronizedSelection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
         let needsReload =
             !hasAppliedPresentation || self.tabs != tabs
             || self.displayedTitles != resolvedTitles
+            || self.statuses != resolvedStatuses
             || self.destinations != destinations
             || selection != synchronizedSelection
         guard needsReload else { return }
@@ -153,6 +157,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         cancelRename()
         self.tabs = tabs
         self.displayedTitles = resolvedTitles
+        self.statuses = resolvedStatuses
         self.destinations = destinations
         selection = synchronizedSelection
         lastAppliedActiveTabID = selection.activeTabID
@@ -178,6 +183,20 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         }
     }
 
+    func refreshStatuses(_ statuses: [TabID: TerminalStatusPresentation]) {
+        let resolvedStatuses = Self.resolvedStatuses(for: tabs, statuses: statuses)
+        guard resolvedStatuses != self.statuses else { return }
+        self.statuses = resolvedStatuses
+        guard isViewLoaded else { return }
+
+        for indexPath in collectionView.indexPathsForVisibleItems()
+        where tabs.indices.contains(indexPath.item) {
+            guard let item = collectionView.item(at: indexPath) as? TabItemView else { continue }
+            let tab = tabs[indexPath.item]
+            item.updateStatus(resolvedStatuses[tab.id])
+        }
+    }
+
     private static func resolvedDisplayedTitles(
         for tabs: [TerminalTab],
         displayedTitles: [TabID: String]
@@ -185,6 +204,17 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         Dictionary(
             uniqueKeysWithValues: tabs.map { tab in
                 (tab.id, displayedTitles[tab.id] ?? tab.titleOverride ?? tab.title)
+            }
+        )
+    }
+
+    private static func resolvedStatuses(
+        for tabs: [TerminalTab],
+        statuses: [TabID: TerminalStatusPresentation]
+    ) -> [TabID: TerminalStatusPresentation] {
+        Dictionary(
+            uniqueKeysWithValues: tabs.compactMap { tab in
+                statuses[tab.id].map { (tab.id, $0) }
             }
         )
     }
@@ -201,6 +231,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         var displayedTitlesForTesting: [TabID: String] {
             displayedTitles
+        }
+
+        var statusesForTesting: [TabID: TerminalStatusPresentation] {
+            statuses
         }
 
         var selectedTabIDsInOrderForTesting: [TabID] {
@@ -293,6 +327,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             && selection.selectedTabIDs.contains(tab.id)
         item.configure(
             title: displayedTitles[tab.id] ?? tab.title,
+            status: statuses[tab.id],
             tabIndex: indexPath.item,
             isActive: selection.activeTabID == tab.id,
             isSelected: selection.selectedTabIDs.contains(tab.id),

@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ]
+  }
+}

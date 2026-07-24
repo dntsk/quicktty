@@ -93,6 +93,15 @@ final class PresentationController {
         try quakeWindowController.requestVisibility(visibility)
     }
 
+    func showCurrentPresentation() throws {
+        switch mode {
+        case .normal:
+            try normalWindowController.showPresentationWindow()
+        case .quake:
+            try quakeWindowController.requestVisibility(.shown)
+        }
+    }
+
     private func installInitialPresentation() throws {
         try clearUnexpectedContent(in: normalWindowController)
         try clearUnexpectedContent(in: quakeWindowController)

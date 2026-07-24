@@ -329,6 +329,8 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     case tabTitleChanged(String)
     case tabTitlePrompt
     case pwdChanged(String)
+    case progressReport(GhosttyProgressReport)
+    case commandFinished(GhosttyCommandFinished)
 }
 
 func ghosttyRuntimeCloseSurfaceCallback(
@@ -718,6 +720,36 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         ) -> Bool {
             callbackContextOwnership?.takeUnretainedValue()
                 .scheduleWorkingDirectoryChange(workingDirectory) ?? false
+        }
+
+        @discardableResult
+        func scheduleProgressCallbackForTesting(
+            stateRawValue: UInt32,
+            progress: Int8,
+            target: GhosttyActivityCallbackTargetForTesting = .surface
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeProgressCallbackForTesting(
+                surface: surface,
+                stateRawValue: stateRawValue,
+                progress: progress,
+                target: target
+            )
+        }
+
+        @discardableResult
+        func scheduleCommandFinishedCallbackForTesting(
+            exitCode: Int16,
+            durationNanoseconds: UInt64,
+            target: GhosttyActivityCallbackTargetForTesting = .surface
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeCommandFinishedCallbackForTesting(
+                surface: surface,
+                exitCode: exitCode,
+                durationNanoseconds: durationNanoseconds,
+                target: target
+            )
         }
 
         @discardableResult
@@ -1751,6 +1783,8 @@ extension GhosttySurfaceView {
             break
         case .pwdChanged(let workingDirectory):
             currentWorkingDirectory = workingDirectory
+        case .progressReport, .commandFinished:
+            break
         }
     }
 
@@ -1901,6 +1935,7 @@ final class SurfaceCallbackContext: Sendable {
         var pendingTabTitles: [String] = []
         var pendingTabTitlePromptCount = 0
         var pendingWorkingDirectory: String?
+        var pendingActivityEvents: [GhosttySurfaceCallbackEvent] = []
         var reads: [UInt: PendingRead] = [:]
         var writes: [UUID: GhosttyClipboardConfirmationRequest] = [:]
     }
@@ -1926,6 +1961,7 @@ final class SurfaceCallbackContext: Sendable {
             state.pendingTabTitles.removeAll()
             state.pendingTabTitlePromptCount = 0
             state.pendingWorkingDirectory = nil
+            state.pendingActivityEvents.removeAll()
             let tokens = Array(state.reads.keys)
             state.reads.removeAll()
             state.writes.removeAll()
@@ -2177,6 +2213,33 @@ final class SurfaceCallbackContext: Sendable {
         return true
     }
 
+    @discardableResult
+    func scheduleProgressReport(_ report: GhosttyProgressReport) -> Bool {
+        scheduleActivityEvent(.progressReport(report))
+    }
+
+    @discardableResult
+    func scheduleCommandFinished(_ command: GhosttyCommandFinished) -> Bool {
+        scheduleActivityEvent(.commandFinished(command))
+    }
+
+    private func scheduleActivityEvent(_ event: GhosttySurfaceCallbackEvent) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            let shouldSchedule = state.pendingActivityEvents.isEmpty
+            state.pendingActivityEvents.append(event)
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverActivityEventsIfActive()
+            }
+        }
+        return true
+    }
+
     func scheduleClose(processAlive: Bool) {
         let shouldSchedule = state.withLock { state in
             guard state.isActive else { return false }
@@ -2295,6 +2358,21 @@ final class SurfaceCallbackContext: Sendable {
         }
         guard let workingDirectory else { return }
         eventHandler(paneID, .pwdChanged(workingDirectory))
+    }
+
+    @MainActor
+    private func deliverActivityEventsIfActive() {
+        let events = state.withLock { state -> [GhosttySurfaceCallbackEvent] in
+            guard state.isActive else { return [] }
+            let events = state.pendingActivityEvents
+            state.pendingActivityEvents.removeAll()
+            return events
+        }
+        for event in events {
+            let isActive = state.withLock { $0.isActive }
+            guard isActive else { return }
+            eventHandler(paneID, event)
+        }
     }
 
     @MainActor

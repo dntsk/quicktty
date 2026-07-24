@@ -156,6 +156,62 @@ struct GhosttyBridgeTests {
     }
 
     @Test
+    func configurationAndReloadPublishFinalizedActivitySettingsTransactionally() throws {
+        let initial = try TemporaryConfig(
+            contents: "progress-style = false\ndesktop-notifications = true\n"
+        )
+        let malformed = try TemporaryConfig(
+            contents:
+                "progress-style = true\ndesktop-notifications = false\nnot-a-ghostty-option = true\n"
+        )
+        let replacement = try TemporaryConfig(
+            contents: "progress-style = true\ndesktop-notifications = false\n"
+        )
+        defer {
+            initial.remove()
+            malformed.remove()
+            replacement.remove()
+        }
+        let configuration = try GhosttyConfiguration(configURL: initial.url)
+        let bridge = try GhosttyBridge(configURL: initial.url)
+        defer { bridge.shutdown() }
+        let initialActivityConfiguration = GhosttyActivityConfiguration(
+            progressStyleEnabled: false,
+            desktopNotificationsEnabled: true
+        )
+
+        #expect(configuration.activityConfiguration == initialActivityConfiguration)
+        #expect(bridge.activityConfiguration == initialActivityConfiguration)
+        #expect(throws: GhosttyBridgeError.self) {
+            try bridge.reloadConfig(at: malformed.url)
+        }
+        #expect(bridge.activityConfiguration == initialActivityConfiguration)
+
+        try bridge.reloadConfig(at: replacement.url)
+
+        #expect(
+            bridge.activityConfiguration
+                == GhosttyActivityConfiguration(
+                    progressStyleEnabled: true,
+                    desktopNotificationsEnabled: false
+                )
+        )
+    }
+
+    @Test
+    func builtInActivityConfigurationUsesPinnedEnabledDefaults() throws {
+        let configuration = try GhosttyConfiguration(configURL: nil)
+
+        #expect(
+            configuration.activityConfiguration
+                == GhosttyActivityConfiguration(
+                    progressStyleEnabled: true,
+                    desktopNotificationsEnabled: true
+                )
+        )
+    }
+
+    @Test
     func reloadReplacesChromePaletteTransactionally() throws {
         let initial = try TemporaryConfig(contents: "background = 112233\nforeground = ddeeff\n")
         let replacement = try TemporaryConfig(

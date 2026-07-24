@@ -8,6 +8,597 @@ import Testing
 @MainActor
 struct WindowCoordinatorTabLifecycleTests {
     @Test
+    func activePaneProgressRefreshesStatusInPlaceWithoutStructuralSideEffects() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let tab = activeTab(of: coordinator)
+        let firstResponder = coordinator.activeWindowForTesting?.firstResponder
+        let fullRefreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let statusRefreshCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        persistence.reset()
+
+        bridge.surfaceProgressHandler?(
+            surface.paneID,
+            GhosttyProgressReport(state: .set, progress: 42)
+        )
+
+        #expect(
+            coordinator.terminalActivityStatusesForTesting[surface.paneID]?.phase
+                == .working(progress: 42)
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[tab.id]
+                == TerminalStatusPresentation(phase: .working, percent: 42)
+        )
+        #expect(persistence.snapshots.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == coordinator.workspaceStoreForPersistence)
+        #expect(
+            coordinator.refreshWorkspacePresentationInvocationCountForTesting == fullRefreshCount)
+        #expect(
+            coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+                == statusRefreshCount + 1
+        )
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstResponder)
+    }
+
+    @Test
+    func inactiveSplitAndInactiveTabActivityUpdateTheirOwningAggregates() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let splitTab = activeTab(of: coordinator)
+        let inactiveSplitPaneID = try #require(
+            splitTab.root.leaves.first(where: { $0 != splitTab.activePaneID })
+        )
+
+        bridge.surfaceProgressHandler?(
+            inactiveSplitPaneID,
+            GhosttyProgressReport(state: .set, progress: 30)
+        )
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[splitTab.id]
+                == TerminalStatusPresentation(phase: .working, percent: 30)
+        )
+
+        coordinator.createNewTab()
+        let activeSecondTab = activeTab(of: coordinator)
+        bridge.surfaceProgressHandler?(
+            inactiveSplitPaneID,
+            GhosttyProgressReport(state: .pause, progress: 35)
+        )
+
+        let statuses = coordinator.workspaceViewControllerForTesting.tabBarViewController
+            .statusesForTesting
+        #expect(
+            statuses[splitTab.id]
+                == TerminalStatusPresentation(phase: .waiting, percent: 35)
+        )
+        #expect(statuses[activeSecondTab.id] == nil)
+    }
+
+    @Test
+    func inactiveWorkspaceActivityUpdatesMenuAndSurvivesWorkspaceSelection() throws {
+        let backgroundPaneID = PaneID()
+        let activePaneID = PaneID()
+        let backgroundTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: backgroundPaneID, cwd: "/tmp/background")
+        )
+        let activeTab = TerminalTab(
+            title: "Active",
+            pane: TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp/active")
+        )
+        let background = Workspace(
+            name: "Background",
+            tabs: [backgroundTab],
+            activeTabID: backgroundTab.id
+        )
+        let active = Workspace(name: "Active", tabs: [activeTab], activeTabID: activeTab.id)
+        let store = try WorkspaceStore(
+            workspaces: [background, active],
+            activeWorkspaceID: active.id
+        )
+        let scheduler = CoordinatorActivityScheduler()
+        let activityController = TerminalActivityController(
+            now: { 0 },
+            scheduleCleanup: scheduler.schedule
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalActivityController: activityController,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        let backgroundSurface = try #require(coordinator.surfaceForTesting(id: backgroundPaneID))
+
+        bridge.surfaceProgressHandler?(
+            backgroundPaneID,
+            GhosttyProgressReport(state: .indeterminate, progress: nil)
+        )
+
+        #expect(
+            coordinator.workspaceViewControllerForTesting.workspaceSelector
+                .statusesForTesting[background.id]
+                == TerminalStatusPresentation(phase: .working, percent: nil)
+        )
+        bridge.surfaceCommandFinishedHandler?(
+            backgroundPaneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 1)
+        )
+        #expect(scheduler.activeRequests.isEmpty)
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .performWorkspaceSelectionForTesting(background.id)
+        #expect(coordinator.activeSurfaceForTesting === backgroundSurface)
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[backgroundTab.id]
+                == TerminalStatusPresentation(phase: .completed, percent: nil)
+        )
+    }
+
+    @Test
+    func surfaceRemovalAndStaleGenerationCallbacksCannotRestoreActivity() throws {
+        let scheduler = CoordinatorActivityScheduler()
+        let activityController = TerminalActivityController(
+            now: { 0 },
+            scheduleCleanup: scheduler.schedule
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            terminalActivityController: activityController
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        let tab = activeTab(of: coordinator)
+        let removedPaneID = try #require(tab.root.leaves.first(where: { $0 != tab.activePaneID }))
+        let staleProgressHandler = try #require(bridge.surfaceProgressHandler)
+        staleProgressHandler(removedPaneID, GhosttyProgressReport(state: .set, progress: 15))
+        staleProgressHandler(removedPaneID, GhosttyProgressReport(state: .remove, progress: nil))
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+
+        coordinator.surfaceDidRequestCloseForTesting(id: removedPaneID, processAlive: false)
+        #expect(scheduler.activeRequests.isEmpty)
+        staleProgressHandler(removedPaneID, GhosttyProgressReport(state: .set, progress: 90))
+        scheduler.runActiveRequests()
+
+        #expect(coordinator.terminalActivityStatusesForTesting[removedPaneID] == nil)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[tab.id] == nil
+        )
+    }
+
+    @Test
+    func staleHandlerIsRejectedAfterSameIDRetryReplacement() throws {
+        let paneID = PaneID()
+        let tab = TerminalTab(
+            title: "Retry",
+            pane: TerminalPaneDescriptor(id: paneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Retry", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(workspaces: [workspace], activeWorkspaceID: workspace.id)
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        bridge.failSurfaceCreationForTesting(id: paneID)
+        let coordinator = WindowCoordinator(ghosttyBridge: bridge, initialWorkspaceStore: store)
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let staleProgressHandler = try #require(bridge.surfaceProgressHandler)
+
+        coordinator.retryUnavailablePaneForTesting(paneID)
+        staleProgressHandler(paneID, GhosttyProgressReport(state: .set, progress: 60))
+
+        #expect(coordinator.surfaceForTesting(id: paneID) != nil)
+        #expect(coordinator.terminalActivityStatusesForTesting[paneID] == nil)
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 70)
+        )
+        #expect(
+            coordinator.terminalActivityStatusesForTesting[paneID]?.phase
+                == .working(progress: 70)
+        )
+    }
+
+    @Test
+    func retryWithSamePaneIDClearsOldActivityAndNotificationLifecycle() throws {
+        let paneID = PaneID()
+        let tab = TerminalTab(
+            title: "Retry lifecycle",
+            pane: TerminalPaneDescriptor(id: paneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(name: "Retry lifecycle", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(workspaces: [workspace], activeWorkspaceID: workspace.id)
+        let activityController = TerminalActivityController(now: { 0 })
+        _ = activityController.handleProgress(
+            GhosttyProgressReport(state: .set, progress: 40),
+            for: paneID
+        )
+        let waiting = try #require(
+            activityController.handleProgress(
+                GhosttyProgressReport(state: .pause, progress: 40),
+                for: paneID
+            ).first
+        )
+        let destination = TerminalDestination(
+            workspaceID: workspace.id,
+            tabID: tab.id,
+            paneID: paneID
+        )
+        let notificationClient = CoordinatorNotificationClient(status: .authorized)
+        var activations: [TerminalDestination] = []
+        let notificationController = TerminalNotificationController(
+            client: notificationClient,
+            desktopNotificationsEnabled: { true },
+            destinationProvider: { $0 == paneID ? destination : nil },
+            isCurrentEffect: { effectMatchesStatus($0, in: activityController) },
+            isSuppressed: { _ in false },
+            activateDestination: { activations.append($0) }
+        )
+        notificationController.handle(waiting)
+        let oldRequest = try #require(notificationClient.addedRequests.first)
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        bridge.failSurfaceCreationForTesting(id: paneID)
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalActivityController: activityController,
+            terminalNotificationController: notificationController,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        #expect(notificationController.destinationMappingCountForTesting == 1)
+
+        coordinator.retryUnavailablePaneForTesting(paneID)
+        notificationController.handleDefaultResponse(
+            identifier: oldRequest.identifier,
+            userInfo: oldRequest.userInfo
+        )
+
+        #expect(coordinator.surfaceForTesting(id: paneID) != nil)
+        #expect(coordinator.terminalActivityStatusesForTesting[paneID] == nil)
+        #expect(notificationController.trackedNotificationCountForTesting == 0)
+        #expect(activations.isEmpty)
+    }
+
+    @Test
+    func modelOnlySplitCollapseClearsOldActivityAndNotificationLifecycle() throws {
+        let livePaneID = PaneID()
+        let unavailablePaneID = PaneID()
+        let tab = try TerminalTab(
+            title: "Collapse lifecycle",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .pane(livePaneID),
+                second: .pane(unavailablePaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: livePaneID, cwd: "/tmp"),
+                TerminalPaneDescriptor(id: unavailablePaneID, cwd: "/tmp"),
+            ],
+            activePaneID: unavailablePaneID
+        )
+        let workspace = Workspace(name: "Collapse lifecycle", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(workspaces: [workspace], activeWorkspaceID: workspace.id)
+        let activityController = TerminalActivityController(now: { 0 })
+        _ = activityController.handleProgress(
+            GhosttyProgressReport(state: .set, progress: 70),
+            for: unavailablePaneID
+        )
+        let waiting = try #require(
+            activityController.handleProgress(
+                GhosttyProgressReport(state: .pause, progress: 70),
+                for: unavailablePaneID
+            ).first
+        )
+        let destination = TerminalDestination(
+            workspaceID: workspace.id,
+            tabID: tab.id,
+            paneID: unavailablePaneID
+        )
+        let notificationClient = CoordinatorNotificationClient(status: .authorized)
+        let notificationController = TerminalNotificationController(
+            client: notificationClient,
+            desktopNotificationsEnabled: { true },
+            destinationProvider: { $0 == unavailablePaneID ? destination : nil },
+            isCurrentEffect: { effectMatchesStatus($0, in: activityController) },
+            isSuppressed: { _ in false },
+            activateDestination: { _ in }
+        )
+        notificationController.handle(waiting)
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        bridge.failSurfaceCreationForTesting(id: unavailablePaneID)
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalActivityController: activityController,
+            terminalNotificationController: notificationController,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let refreshCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+
+        coordinator.invokeCloseUnavailablePanePresentationCallbackForTesting(unavailablePaneID)
+
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.root == .pane(livePaneID))
+        #expect(coordinator.terminalActivityStatusesForTesting[unavailablePaneID] == nil)
+        #expect(notificationController.trackedNotificationCountForTesting == 0)
+        #expect(
+            coordinator.refreshWorkspaceStatusesInvocationCountForTesting > refreshCount
+        )
+    }
+
+    @Test
+    func activityConfigurationReloadIsTransactionalAndNotificationsDoNotHideBadges() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Activity-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let enabledURL = directory.appending(path: "enabled")
+        let disabledURL = directory.appending(path: "disabled")
+        let reenabledURL = directory.appending(path: "reenabled")
+        let invalidURL = directory.appending(path: "invalid")
+        try Data("progress-style = true\ndesktop-notifications = true\n".utf8).write(
+            to: enabledURL)
+        try Data("progress-style = false\ndesktop-notifications = true\n".utf8).write(
+            to: disabledURL)
+        try Data("progress-style = true\ndesktop-notifications = false\n".utf8).write(
+            to: reenabledURL)
+        try Data("progress-style = false\nnot-a-ghostty-option = true\n".utf8).write(
+            to: invalidURL)
+        let bridge = try GhosttyBridge(configURL: enabledURL)
+        defer { bridge.shutdown() }
+        let notificationClient = CoordinatorNotificationClient(status: nil)
+        weak var coordinatorReference: WindowCoordinator?
+        let notificationController = TerminalNotificationController(
+            client: notificationClient,
+            desktopNotificationsEnabled: {
+                coordinatorReference?.terminalActivityConfiguration
+                    .desktopNotificationsEnabled == true
+            },
+            destinationProvider: { coordinatorReference?.terminalDestination(for: $0) },
+            isCurrentEffect: {
+                coordinatorReference?.isCurrentTerminalActivityEffect($0) == true
+            },
+            isSuppressed: { _ in false },
+            activateDestination: { _ in }
+        )
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalNotificationController: notificationController
+        )
+        coordinatorReference = coordinator
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        var effects: [TerminalActivityEffect] = []
+        coordinator.terminalActivityEffectHandler = { effects.append($0) }
+        try coordinator.start()
+        let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
+        let tab = activeTab(of: coordinator)
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 20)
+        )
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .pause, progress: 20)
+        )
+        #expect(notificationController.trackedNotificationCountForTesting == 1)
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        #expect(notificationController.trackedNotificationCountForTesting == 0)
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 20)
+        )
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .pause, progress: 20)
+        )
+        #expect(notificationController.trackedNotificationCountForTesting == 1)
+
+        try bridge.reloadConfig(at: disabledURL)
+        coordinator.applyConfiguration(QuickTTYConfig())
+        #expect(coordinator.terminalActivityStatusesForTesting.isEmpty)
+        #expect(notificationController.trackedNotificationCountForTesting == 0)
+        notificationClient.resolveAuthorizationStatus(.authorized)
+        #expect(notificationClient.addedRequests.isEmpty)
+        effects.removeAll()
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 40)
+        )
+        #expect(coordinator.terminalActivityStatusesForTesting.isEmpty)
+
+        try bridge.reloadConfig(at: reenabledURL)
+        coordinator.applyConfiguration(QuickTTYConfig())
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 55)
+        )
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .pause, progress: 55)
+        )
+        #expect(
+            coordinator.terminalActivityConfigurationForTesting
+                == GhosttyActivityConfiguration(
+                    progressStyleEnabled: true,
+                    desktopNotificationsEnabled: false
+                )
+        )
+        #expect(effects == [.waiting(paneID: paneID)])
+        #expect(notificationClient.addedRequests.isEmpty)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[tab.id]
+                == TerminalStatusPresentation(phase: .waiting, percent: 55)
+        )
+
+        #expect(throws: GhosttyBridgeError.self) {
+            try bridge.reloadConfig(at: invalidURL)
+        }
+        #expect(
+            coordinator.terminalActivityStatusesForTesting[paneID]?.phase == .waiting(progress: 55))
+        #expect(coordinator.terminalActivityConfigurationForTesting == bridge.activityConfiguration)
+    }
+
+    @Test
+    func terminalAcknowledgementUsesSelectedTabAndModeAwareKeyWindow() throws {
+        let scheduler = CoordinatorActivityScheduler()
+        let activityController = TerminalActivityController(
+            now: { 0 },
+            scheduleCleanup: scheduler.schedule
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            terminalActivityController: activityController
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let tab = activeTab(of: coordinator)
+        let inactivePaneID = try #require(tab.root.leaves.first(where: { $0 != tab.activePaneID }))
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        bridge.surfaceProgressHandler?(
+            inactivePaneID,
+            GhosttyProgressReport(state: .set, progress: 100)
+        )
+        bridge.surfaceProgressHandler?(
+            inactivePaneID,
+            GhosttyProgressReport(state: .remove, progress: nil)
+        )
+        #expect(scheduler.activeRequests.isEmpty)
+
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+        let statusRefreshCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+        scheduler.runActiveRequests()
+
+        #expect(coordinator.terminalActivityStatusesForTesting[inactivePaneID] == nil)
+        #expect(
+            coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+                == statusRefreshCount + 1
+        )
+        #expect(
+            coordinator.workspaceViewControllerForTesting.tabBarViewController
+                .statusesForTesting[tab.id] == nil
+        )
+
+        bridge.surfaceProgressHandler?(
+            tab.activePaneID,
+            GhosttyProgressReport(state: .set, progress: 100)
+        )
+        bridge.surfaceProgressHandler?(
+            tab.activePaneID,
+            GhosttyProgressReport(state: .remove, progress: nil)
+        )
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+    }
+
+    @Test
+    func activityShutdownClearsStateAndDisconnectsBridgeCallbacks() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(ghosttyBridge: bridge)
+        try coordinator.start()
+        let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 25)
+        )
+        #expect(!coordinator.terminalActivityStatusesForTesting.isEmpty)
+
+        coordinator.prepareForBridgeShutdownForTesting()
+
+        #expect(coordinator.terminalActivityStatusesForTesting.isEmpty)
+        #expect(bridge.surfaceProgressHandler == nil)
+        #expect(bridge.surfaceCommandFinishedHandler == nil)
+    }
+
+    @Test
+    func selectingBackgroundTabAcknowledgesItsTerminalStatus() throws {
+        let scheduler = CoordinatorActivityScheduler()
+        let activityController = TerminalActivityController(
+            now: { 0 },
+            scheduleCleanup: scheduler.schedule
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            terminalActivityController: activityController
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let backgroundTab = activeTab(of: coordinator)
+        let backgroundPaneID = backgroundTab.activePaneID
+        coordinator.createNewTab()
+        let foregroundTab = activeTab(of: coordinator)
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        bridge.surfaceProgressHandler?(
+            backgroundPaneID,
+            GhosttyProgressReport(state: .set, progress: 100)
+        )
+        bridge.surfaceCommandFinishedHandler?(
+            backgroundPaneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 1)
+        )
+        #expect(scheduler.activeRequests.isEmpty)
+
+        coordinator.activateTabForTesting(backgroundTab.id)
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+
+        coordinator.activateTabForTesting(foregroundTab.id)
+        #expect(scheduler.activeRequests.isEmpty)
+        scheduler.runActiveRequests()
+        #expect(coordinator.terminalActivityStatusesForTesting[backgroundPaneID] != nil)
+
+        coordinator.activateTabForTesting(backgroundTab.id)
+        #expect(scheduler.activeRequests.map(\.delay) == [3])
+    }
+
+    @Test
     func openConfigurationCreatesFocusedEditorTabWithQuotedPathAndLatestEditor() throws {
         let directory = FileManager.default.temporaryDirectory.appending(
             path: "QuickTTY Config's \(UUID().uuidString)",
@@ -476,6 +1067,248 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.activeSurfaceForTesting === testSurface)
         #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
         #expect(Set(bridge.activeSurfaceIDs) == Set(surfaceIDs))
+    }
+
+    @Test
+    func notificationActivationSelectsExactInactiveWorkspaceTabAndPaneWithoutRecreatingSurfaces()
+        throws
+    {
+        let visiblePaneID = PaneID()
+        let inactiveTabPaneID = PaneID()
+        let targetFirstPaneID = PaneID()
+        let targetPaneID = PaneID()
+        let targetTab = try TerminalTab(
+            title: "Target",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .pane(targetFirstPaneID),
+                second: .pane(targetPaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: targetFirstPaneID, cwd: "/tmp/target-first"),
+                TerminalPaneDescriptor(id: targetPaneID, cwd: "/tmp/target"),
+            ],
+            activePaneID: targetFirstPaneID
+        )
+        let inactiveTab = TerminalTab(
+            title: "Inactive selected",
+            pane: TerminalPaneDescriptor(id: inactiveTabPaneID, cwd: "/tmp/inactive-tab")
+        )
+        let targetWorkspace = Workspace(
+            name: "Target workspace",
+            tabs: [targetTab, inactiveTab],
+            activeTabID: inactiveTab.id
+        )
+        let visibleTab = TerminalTab(
+            title: "Visible",
+            pane: TerminalPaneDescriptor(id: visiblePaneID, cwd: "/tmp/visible")
+        )
+        let visibleWorkspace = Workspace(
+            name: "Visible workspace",
+            tabs: [visibleTab],
+            activeTabID: visibleTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [targetWorkspace, visibleWorkspace],
+            activeWorkspaceID: visibleWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surfaces = Dictionary(
+            uniqueKeysWithValues: coordinator.surfaceIDsForTesting.compactMap { paneID in
+                coordinator.surfaceForTesting(id: paneID).map { (paneID, $0) }
+            }
+        )
+        let surfaceIdentities = surfaces.mapValues(ObjectIdentifier.init)
+        let processStates = surfaces.mapValues(\.processExitedForTesting)
+        let activeSurfaceCount = bridge.activeSurfaceCount
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        let callbackContextCount = GhosttyBridge.surfaceCallbackContextCountForTesting
+        persistence.reset()
+
+        coordinator.activate(
+            destination: TerminalDestination(
+                workspaceID: targetWorkspace.id,
+                tabID: targetTab.id,
+                paneID: targetPaneID
+            )
+        )
+
+        let resultingStore = coordinator.workspaceStoreForTesting
+        #expect(resultingStore.activeWorkspaceID == targetWorkspace.id)
+        #expect(resultingStore.workspace(id: targetWorkspace.id)?.activeTabID == targetTab.id)
+        #expect(resultingStore.tab(id: targetTab.id)?.activePaneID == targetPaneID)
+        #expect(coordinator.activeSurfaceForTesting === surfaces[targetPaneID])
+        #expect(coordinator.activeWindowForTesting?.firstResponder === surfaces[targetPaneID])
+        #expect(persistence.snapshots == [resultingStore])
+        #expect(
+            coordinator.surfaceIDsForTesting
+                == surfaces.keys.sorted {
+                    $0.rawValue.uuidString < $1.rawValue.uuidString
+                })
+        #expect(
+            Dictionary(
+                uniqueKeysWithValues: coordinator.surfaceIDsForTesting.compactMap { paneID in
+                    coordinator.surfaceForTesting(id: paneID).map {
+                        (paneID, ObjectIdentifier($0))
+                    }
+                }
+            ) == surfaceIdentities
+        )
+        #expect(surfaces.mapValues(\.processExitedForTesting) == processStates)
+        #expect(bridge.activeSurfaceCount == activeSurfaceCount)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == callbackContextCount)
+
+        persistence.reset()
+        let storeAfterActivation = coordinator.workspaceStoreForTesting
+        coordinator.activate(
+            destination: TerminalDestination(
+                workspaceID: targetWorkspace.id,
+                tabID: targetTab.id,
+                paneID: PaneID()
+            )
+        )
+        #expect(coordinator.workspaceStoreForTesting == storeAfterActivation)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test
+    func hiddenQuakeNotificationActivationShowsCurrentModeAndFocusesExactPane() throws {
+        let visiblePaneID = PaneID()
+        let targetPaneID = PaneID()
+        let targetTab = TerminalTab(
+            title: "Target",
+            pane: TerminalPaneDescriptor(id: targetPaneID, cwd: "/tmp/target")
+        )
+        let visibleTab = TerminalTab(
+            title: "Visible",
+            pane: TerminalPaneDescriptor(id: visiblePaneID, cwd: "/tmp/visible")
+        )
+        let targetWorkspace = Workspace(
+            name: "Target",
+            tabs: [targetTab],
+            activeTabID: targetTab.id
+        )
+        let visibleWorkspace = Workspace(
+            name: "Visible",
+            tabs: [visibleTab],
+            activeTabID: visibleTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [targetWorkspace, visibleWorkspace],
+            activeWorkspaceID: visibleWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            presentationMode: .quake,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let targetSurface = try #require(coordinator.surfaceForTesting(id: targetPaneID))
+        let identities = coordinator.surfaceIDsForTesting.compactMap {
+            coordinator.surfaceForTesting(id: $0).map(ObjectIdentifier.init)
+        }
+        try coordinator.requestQuakeVisibilityForTesting(.hidden)
+        #expect(coordinator.quakeVisibilityForTesting == .hidden)
+
+        coordinator.activate(
+            destination: TerminalDestination(
+                workspaceID: targetWorkspace.id,
+                tabID: targetTab.id,
+                paneID: targetPaneID
+            )
+        )
+
+        #expect(coordinator.presentationMode == .quake)
+        #expect(coordinator.quakeVisibilityForTesting == .shown)
+        #expect(coordinator.activeSurfaceForTesting === targetSurface)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === targetSurface)
+        #expect(
+            coordinator.surfaceIDsForTesting.compactMap {
+                coordinator.surfaceForTesting(id: $0).map(ObjectIdentifier.init)
+            } == identities
+        )
+    }
+
+    @Test
+    func notificationSuppressionUsesModeAwareKeyWindowAndExactSelectedWorkspaceAndTab() throws {
+        let firstPaneID = PaneID()
+        let secondPaneID = PaneID()
+        let inactiveTabPaneID = PaneID()
+        let inactiveWorkspacePaneID = PaneID()
+        let selectedTab = try TerminalTab(
+            title: "Selected",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .pane(firstPaneID),
+                second: .pane(secondPaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: firstPaneID, cwd: "/tmp/first"),
+                TerminalPaneDescriptor(id: secondPaneID, cwd: "/tmp/second"),
+            ],
+            activePaneID: firstPaneID
+        )
+        let inactiveTab = TerminalTab(
+            title: "Inactive",
+            pane: TerminalPaneDescriptor(id: inactiveTabPaneID, cwd: "/tmp/inactive")
+        )
+        let activeWorkspace = Workspace(
+            name: "Active",
+            tabs: [selectedTab, inactiveTab],
+            activeTabID: selectedTab.id
+        )
+        let inactiveWorkspaceTab = TerminalTab(
+            title: "Background",
+            pane: TerminalPaneDescriptor(id: inactiveWorkspacePaneID, cwd: "/tmp/background")
+        )
+        let inactiveWorkspace = Workspace(
+            name: "Background",
+            tabs: [inactiveWorkspaceTab],
+            activeTabID: inactiveWorkspaceTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [activeWorkspace, inactiveWorkspace],
+            activeWorkspaceID: activeWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(ghosttyBridge: bridge, initialWorkspaceStore: store)
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        let first = try #require(coordinator.terminalDestination(for: firstPaneID))
+        let second = try #require(coordinator.terminalDestination(for: secondPaneID))
+        let inactiveTabDestination = try #require(
+            coordinator.terminalDestination(for: inactiveTabPaneID)
+        )
+        let inactiveWorkspaceDestination = try #require(
+            coordinator.terminalDestination(for: inactiveWorkspacePaneID)
+        )
+
+        #expect(coordinator.shouldSuppressNotification(for: first))
+        #expect(coordinator.shouldSuppressNotification(for: second))
+        #expect(!coordinator.shouldSuppressNotification(for: inactiveTabDestination))
+        #expect(!coordinator.shouldSuppressNotification(for: inactiveWorkspaceDestination))
+
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        #expect(!coordinator.shouldSuppressNotification(for: first))
     }
 
     @Test
@@ -4037,6 +4870,110 @@ struct WindowCoordinatorTabLifecycleTests {
             }
             return ratio(in: first, splitID: splitID) ?? ratio(in: second, splitID: splitID)
         }
+    }
+}
+
+@MainActor
+private final class CoordinatorActivityScheduler {
+    @MainActor
+    final class Cancellation {
+        var isCancelled = false
+    }
+
+    struct Request {
+        let delay: TimeInterval
+        let action: @MainActor @Sendable () -> Void
+        let cancellation: Cancellation
+    }
+
+    private(set) var requests: [Request] = []
+
+    var activeRequests: [Request] {
+        requests.filter { !$0.cancellation.isCancelled }
+    }
+
+    func schedule(
+        after delay: TimeInterval,
+        action: @escaping @MainActor @Sendable () -> Void
+    ) -> @MainActor () -> Void {
+        let cancellation = Cancellation()
+        requests.append(Request(delay: delay, action: action, cancellation: cancellation))
+        return { cancellation.isCancelled = true }
+    }
+
+    func runActiveRequests() {
+        let pending = requests
+        requests.removeAll()
+        for request in pending where !request.cancellation.isCancelled {
+            request.action()
+        }
+    }
+}
+
+@MainActor
+private final class CoordinatorNotificationClient: TerminalNotificationClient {
+    private let immediateStatus: TerminalNotificationAuthorizationStatus?
+    private var statusCompletions:
+        [@MainActor @Sendable (TerminalNotificationAuthorizationStatus) -> Void] = []
+    private(set) var addedRequests: [TerminalNotificationRequest] = []
+
+    init(status: TerminalNotificationAuthorizationStatus?) {
+        immediateStatus = status
+    }
+
+    func authorizationStatus(
+        completion:
+            @escaping @MainActor @Sendable (
+                TerminalNotificationAuthorizationStatus
+            ) -> Void
+    ) {
+        if let immediateStatus {
+            completion(immediateStatus)
+        } else {
+            statusCompletions.append(completion)
+        }
+    }
+
+    func requestAuthorization(
+        completion:
+            @escaping @MainActor @Sendable (
+                Result<Bool, TerminalNotificationClientError>
+            ) -> Void
+    ) {
+        completion(.success(true))
+    }
+
+    func add(
+        _ request: TerminalNotificationRequest,
+        completion:
+            @escaping @MainActor @Sendable (
+                Result<Void, TerminalNotificationClientError>
+            ) -> Void
+    ) {
+        addedRequests.append(request)
+        completion(.success(()))
+    }
+
+    func resolveAuthorizationStatus(_ status: TerminalNotificationAuthorizationStatus) {
+        let completions = statusCompletions
+        statusCompletions.removeAll()
+        for completion in completions {
+            completion(status)
+        }
+    }
+}
+
+@MainActor
+private func effectMatchesStatus(
+    _ effect: TerminalActivityEffect,
+    in controller: TerminalActivityController
+) -> Bool {
+    guard let phase = controller.statuses[effect.paneID]?.phase else { return false }
+    switch (effect, phase) {
+    case (.waiting, .waiting), (.failed, .failed), (.completed, .completed):
+        return true
+    case (.waiting, _), (.failed, _), (.completed, _), (.cleared, _):
+        return false
     }
 }
 

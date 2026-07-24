@@ -74,6 +74,28 @@ do
     fi
 done
 
+for activity_contract in \
+    'action.tag == GHOSTTY_ACTION_PROGRESS_REPORT' \
+    'action.action.progress_report' \
+    'context.scheduleProgressReport' \
+    'action.tag == GHOSTTY_ACTION_COMMAND_FINISHED' \
+    'action.action.command_finished' \
+    'context.scheduleCommandFinished' \
+    'target.tag == GHOSTTY_TARGET_SURFACE' \
+    'ghostty_surface_userdata(surface)' \
+    'var pendingActivityEvents: [GhosttySurfaceCallbackEvent] = []' \
+    'state.pendingActivityEvents.append(event)' \
+    'deliverActivityEventsIfActive' \
+    'state.pendingActivityEvents.removeAll()' \
+    'surfaceProgressHandler?(paneID, report)' \
+    'surfaceCommandFinishedHandler?(paneID, command)'
+do
+    if ! grep -Fq "$activity_contract" "$bridge" "$surface"; then
+        printf 'surface activity callback contract is missing: %s\n' "$activity_contract" >&2
+        exit 1
+    fi
+done
+
 title_route='case .titleChanged(let title):
             surface.processCallbackEvent(
                 event,

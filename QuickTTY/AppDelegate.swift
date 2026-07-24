@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ghosttyBridge: GhosttyBridge?
     private var windowCoordinator: WindowCoordinator?
     private var configController: ConfigController?
+    private var terminalNotificationClient: SystemTerminalNotificationClient?
+    private var terminalNotificationController: TerminalNotificationController?
     private let shortcutController = ShortcutController()
     private var configurationDiagnosticsPresentation: ConfigDiagnosticPresentation?
     private var stateStore: StateStore?
@@ -64,6 +66,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
             self.windowCoordinator = windowCoordinator
+            let terminalNotificationClient = SystemTerminalNotificationClient()
+            let terminalNotificationController = TerminalNotificationController(
+                client: terminalNotificationClient,
+                desktopNotificationsEnabled: { [weak windowCoordinator] in
+                    windowCoordinator?.terminalActivityConfiguration
+                        .desktopNotificationsEnabled == true
+                },
+                destinationProvider: { [weak windowCoordinator] paneID in
+                    windowCoordinator?.terminalDestination(for: paneID)
+                },
+                isCurrentEffect: { [weak windowCoordinator] effect in
+                    windowCoordinator?.isCurrentTerminalActivityEffect(effect) == true
+                },
+                isSuppressed: { [weak windowCoordinator] destination in
+                    windowCoordinator?.shouldSuppressNotification(for: destination) == true
+                },
+                activateDestination: { [weak windowCoordinator] destination in
+                    windowCoordinator?.activate(destination: destination)
+                },
+                logger: { [weak self] error in
+                    self?.logger.error(
+                        "Terminal notification failed: domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public)"
+                    )
+                }
+            )
+            terminalNotificationClient.setDelegate(terminalNotificationController)
+            self.terminalNotificationClient = terminalNotificationClient
+            self.terminalNotificationController = terminalNotificationController
+            windowCoordinator.installTerminalNotificationController(
+                terminalNotificationController
+            )
             windowCoordinator.applyConfiguration(config)
             Self.applyRuntimeShortcutConfiguration(
                 config.shortcuts,
@@ -130,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             },
             prepareForTermination: {
+                self.terminalNotificationController?.shutdown()
+                self.terminalNotificationClient?.setDelegate(nil)
                 self.windowCoordinator?.prepareForApplicationTermination()
             },
             shutdownRuntime: { self.ghosttyBridge?.shutdown() }

@@ -56,8 +56,8 @@ Required behavior:
 
 QuickTTY отображает opaque live title активной pane, поддерживает отдельный persisted manual override и inline rename через double-click или `Rename Tab…`. Automatic titles остаются ephemeral. Контракт зафиксирован в `docs/plans/2026-07-23-dynamic-tab-titles-design.md`.
 
-## Agent-aware title/status integration
+## Terminal progress and agent integrations
 
-**Status:** Отложено; протокол не выбран.
+**Status:** Завершено 2026-07-24.
 
-Дизайн dynamic tab titles намеренно не включает AI parsing, badges, icon registry или отдельную status model. Raw Unicode/emoji OSC titles уже совместимы с будущим текстом статуса агента; отдельный протокол должен быть спроектирован до расширения UI или persistence.
+QuickTTY принимает стандартный surface-scoped OSC 9;4 от любых terminal applications, показывает transient status в tab bar и Workspace selector и отправляет generic background notifications с exact pane navigation. Agent identity не определяется: Pi использует native Terminal progress, Claude Code и Codex — ручные lifecycle hook examples. Title и terminal output не анализируются, status не сохраняется. Контракт зафиксирован в `docs/plans/2026-07-24-terminal-progress-notifications-design.md`.

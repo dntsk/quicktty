@@ -154,3 +154,12 @@
 - **Решение:** `TerminalTab.activePaneID`, `NSWindow.isKeyWindow` и фактический first responder остаются независимыми источниками состояния. Неактивные panes затемняются через finalized `unfocused-split-opacity`/`unfocused-split-fill`; active pane остаётся без overlay и без border. Custom chrome приглушается отдельно. Terminal cursor полностью остаётся у Ghostty и получает только существующий `ghostty_surface_set_focus`.
 - **Отклонено:** Собственный cursor renderer; изменение Metal surface opacity; очистка active pane при resign-key; новые QuickTTY config keys; пересоздание surfaces при focus/theme update; accent или neutral pane frame. Первая 2px accent/1px neutral frame полностью удалена после visual smoke как слишком резкая и раздражающая независимо от толщины и цвета.
 - **Последствия:** Normal/Quake переносит один observable presentation state между окнами без перезапуска shell и transient PTY resize. Theme hot reload транзакционно обновляет dimming, divider и failure placeholder. Активность pane определяется только контрастом с затемнёнными соседями, активность окна — chrome и Ghostty cursor.
+
+## Terminal progress универсален и не определяет agent identity
+
+- **Дата:** 2026-07-24
+- **Статус:** принято
+- **Контекст:** Pi, Claude Code, Codex и обычные CLI-задачи могут сообщать activity стандартным OSC 9;4. Разбор title, terminal output или process tree сделал бы интеграцию хрупкой и смешал бы agent identity с пользовательским status UI.
+- **Решение:** QuickTTY принимает surface-scoped OSC 9;4 от любого приложения и показывает единый transient badge в tab/workspace chrome. Тип агента не определяется и не отображается. Background waiting/failure уведомляются сразу, completion — после пяти секунд; notification подавляется только для выбранной tab key window и ведёт к exact pane. Pi использует native Terminal progress, Claude/Codex подключаются ручными hooks.
+- **Отклонено:** Parsing `π - project`/других titles; private OSC marker; Unix socket/helper IPC; agent icons; persisted activity; автоматическая запись сторонних конфигов.
+- **Последствия:** Протокол совместим с другими progress-aware CLI без first-party adapters; state не попадает в persistence и очищается вместе с surface lifecycle. `progress-style` и `desktop-notifications` сохраняют upstream Ghostty semantics. UserNotifications не содержат title, cwd, command, prompt или terminal text.

@@ -10,6 +10,7 @@ final class GhosttyConfiguration {
 
     let chromePalette: GhosttyChromePalette
     let splitAppearance: GhosttySplitAppearance
+    let activityConfiguration: GhosttyActivityConfiguration
     let diagnostics: [String]
     let source: Source
 
@@ -37,6 +38,7 @@ final class GhosttyConfiguration {
             from: handle,
             background: chromePalette.background
         )
+        activityConfiguration = Self.activityConfiguration(from: handle)
         diagnostics = Self.loadDiagnostics(from: handle)
     }
 
@@ -98,6 +100,42 @@ final class GhosttyConfiguration {
             ) ?? background,
             unfocusedOverlayOpacity: min(max(1 - surfaceOpacity, 0), 1)
         )
+    }
+
+    private static func activityConfiguration(
+        from handle: ghostty_config_t
+    ) -> GhosttyActivityConfiguration {
+        GhosttyActivityConfiguration(
+            progressStyleEnabled: configuredBoolean(
+                named: "progress-style",
+                from: handle,
+                fallback: true
+            ),
+            desktopNotificationsEnabled: configuredBoolean(
+                named: "desktop-notifications",
+                from: handle,
+                fallback: true
+            )
+        )
+    }
+
+    private static func configuredBoolean(
+        named name: String,
+        from handle: ghostty_config_t,
+        fallback: Bool
+    ) -> Bool {
+        var value = fallback
+        _ = withUnsafeMutablePointer(to: &value) { pointer in
+            name.withCString { key in
+                ghostty_config_get(
+                    handle,
+                    UnsafeMutableRawPointer(pointer),
+                    key,
+                    UInt(name.lengthOfBytes(using: .utf8))
+                )
+            }
+        }
+        return value
     }
 
     private static func configuredColor(

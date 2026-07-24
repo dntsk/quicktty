@@ -24,9 +24,13 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
     }
 
     private let button = NSButton(frame: .zero)
+    private let statusBadge = TerminalStatusBadgeView(frame: .zero)
+    private let contentStack = NSStackView()
     private let workspaceMenu = NSMenu()
     private var menuPresenter: ((NSMenu, NSButton) -> Void)?
     private var workspaceNames: [String] = []
+    private var workspaceIDs: [WorkspaceID] = []
+    private var statuses: [WorkspaceID: TerminalStatusPresentation] = [:]
     private var activeWorkspaceID: WorkspaceID?
     private var isMenuTracking = false
 
@@ -45,12 +49,20 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
         button.target = self
         button.action = #selector(presentWorkspaceMenu(_:))
         button.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(button)
+
+        contentStack.orientation = .horizontal
+        contentStack.alignment = .centerY
+        contentStack.distribution = .fill
+        contentStack.spacing = 4
+        contentStack.addArrangedSubview(button)
+        contentStack.addArrangedSubview(statusBadge)
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentStack)
         NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: trailingAnchor),
-            button.topAnchor.constraint(equalTo: topAnchor),
-            button.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentStack.topAnchor.constraint(equalTo: topAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
             button.heightAnchor.constraint(equalToConstant: 22),
         ])
 
@@ -58,9 +70,15 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
         workspaceMenu.delegate = self
     }
 
-    func apply(workspaces: [Workspace], activeWorkspaceID: WorkspaceID) {
+    func apply(
+        workspaces: [Workspace],
+        activeWorkspaceID: WorkspaceID,
+        statuses: [WorkspaceID: TerminalStatusPresentation] = [:]
+    ) {
         self.activeWorkspaceID = activeWorkspaceID
         workspaceNames = workspaces.map(\.name)
+        workspaceIDs = workspaces.map(\.id)
+        self.statuses = Self.resolvedStatuses(workspaceIDs: workspaceIDs, statuses: statuses)
         workspaceMenu.removeAllItems()
         for workspace in workspaces {
             addWorkspaceItem(
@@ -73,6 +91,25 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
         addActionItem(.rename, title: "Rename Workspace…")
         addActionItem(.delete, title: "Delete Workspace…", isEnabled: workspaces.count > 1)
         button.title = workspaces.first(where: { $0.id == activeWorkspaceID })?.name ?? ""
+        statusBadge.apply(self.statuses[activeWorkspaceID])
+    }
+
+    func refreshStatuses(_ statuses: [WorkspaceID: TerminalStatusPresentation]) {
+        let resolvedStatuses = Self.resolvedStatuses(
+            workspaceIDs: workspaceIDs,
+            statuses: statuses
+        )
+        guard resolvedStatuses != self.statuses else { return }
+        self.statuses = resolvedStatuses
+        statusBadge.apply(activeWorkspaceID.flatMap { resolvedStatuses[$0] })
+
+        for item in workspaceMenu.items {
+            guard let rawID = item.representedObject as? NSUUID else { continue }
+            let workspaceID = WorkspaceID(rawValue: rawID as UUID)
+            item.badge = resolvedStatuses[workspaceID].map {
+                NSMenuItemBadge(string: $0.compactString)
+            }
+        }
     }
 
     var displayedWorkspaceNames: [String] {
@@ -96,7 +133,21 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
         item.target = self
         item.representedObject = workspace.id.rawValue as NSUUID
         item.state = isActive ? .on : .off
+        item.badge = statuses[workspace.id].map {
+            NSMenuItemBadge(string: $0.compactString)
+        }
         workspaceMenu.addItem(item)
+    }
+
+    private static func resolvedStatuses(
+        workspaceIDs: [WorkspaceID],
+        statuses: [WorkspaceID: TerminalStatusPresentation]
+    ) -> [WorkspaceID: TerminalStatusPresentation] {
+        Dictionary(
+            uniqueKeysWithValues: workspaceIDs.compactMap { workspaceID in
+                statuses[workspaceID].map { (workspaceID, $0) }
+            }
+        )
     }
 
     private func addActionItem(
@@ -214,6 +265,18 @@ final class WorkspaceSelector: NSView, NSMenuDelegate {
 
         var buttonTitleForTesting: String {
             button.title
+        }
+
+        var buttonBadgeRepresentationForTesting: String? {
+            statusBadge.representationForTesting
+        }
+
+        var statusesForTesting: [WorkspaceID: TerminalStatusPresentation] {
+            statuses
+        }
+
+        var menuIsTrackingForTesting: Bool {
+            isMenuTracking
         }
 
         var menuPresenterForTesting: ((NSMenu, NSButton) -> Void)? {

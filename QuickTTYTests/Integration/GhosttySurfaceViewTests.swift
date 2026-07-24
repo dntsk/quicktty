@@ -341,6 +341,219 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func progressAndCommandCallbacksConvertExactPinnedPayloads() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var progressReports: [GhosttyProgressReport] = []
+        var commandFinishedEvents: [GhosttyCommandFinished] = []
+        bridge.surfaceProgressHandler = { _, report in
+            progressReports.append(report)
+        }
+        bridge.surfaceCommandFinishedHandler = { _, command in
+            commandFinishedEvents.append(command)
+        }
+
+        let progressCases: [(UInt32, Int8, GhosttyProgressReport)] = [
+            (0, -1, GhosttyProgressReport(state: .remove, progress: nil)),
+            (1, 42, GhosttyProgressReport(state: .set, progress: 42)),
+            (2, 100, GhosttyProgressReport(state: .error, progress: 100)),
+            (3, -1, GhosttyProgressReport(state: .indeterminate, progress: nil)),
+            (4, 0, GhosttyProgressReport(state: .pause, progress: 0)),
+        ]
+        for (stateRawValue, progress, _) in progressCases {
+            #expect(
+                surface.scheduleProgressCallbackForTesting(
+                    stateRawValue: stateRawValue,
+                    progress: progress
+                )
+            )
+        }
+        #expect(
+            surface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: -1,
+                durationNanoseconds: 123
+            )
+        )
+        #expect(
+            surface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 255,
+                durationNanoseconds: UInt64.max
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(progressReports == progressCases.map(\.2))
+        #expect(
+            commandFinishedEvents == [
+                GhosttyCommandFinished(exitCode: nil, durationNanoseconds: 123),
+                GhosttyCommandFinished(exitCode: 255, durationNanoseconds: UInt64.max),
+            ]
+        )
+    }
+
+    @Test
+    func progressAndCommandCallbacksRejectInvalidPayloadsAndTargets() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(!surface.scheduleProgressCallbackForTesting(stateRawValue: 99, progress: 50))
+        #expect(!surface.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: -2))
+        #expect(!surface.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 101))
+        #expect(
+            !surface.scheduleProgressCallbackForTesting(
+                stateRawValue: 1,
+                progress: 50,
+                target: .app
+            )
+        )
+        #expect(
+            !surface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: -2,
+                durationNanoseconds: 1
+            )
+        )
+        #expect(
+            !surface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 256,
+                durationNanoseconds: 1
+            )
+        )
+        #expect(
+            !surface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 0,
+                durationNanoseconds: 1,
+                target: .unknown
+            )
+        )
+    }
+
+    @Test
+    func activityCallbacksRouteByPaneAndPreserveArrivalOrder() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var events: [ActivityCallbackObservation] = []
+        bridge.surfaceProgressHandler = { paneID, report in
+            events.append(.progress(paneID, report))
+        }
+        bridge.surfaceCommandFinishedHandler = { paneID, command in
+            events.append(.commandFinished(paneID, command))
+        }
+
+        #expect(first.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 10))
+        #expect(first.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 20))
+        #expect(first.scheduleProgressCallbackForTesting(stateRawValue: 0, progress: -1))
+        #expect(
+            first.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 0,
+                durationNanoseconds: 10
+            )
+        )
+        #expect(
+            first.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 1,
+                durationNanoseconds: 20
+            )
+        )
+        #expect(second.scheduleProgressCallbackForTesting(stateRawValue: 4, progress: 30))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(
+            events == [
+                .progress(first.paneID, GhosttyProgressReport(state: .set, progress: 10)),
+                .progress(first.paneID, GhosttyProgressReport(state: .set, progress: 20)),
+                .progress(first.paneID, GhosttyProgressReport(state: .remove, progress: nil)),
+                .commandFinished(
+                    first.paneID,
+                    GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 10)
+                ),
+                .commandFinished(
+                    first.paneID,
+                    GhosttyCommandFinished(exitCode: 1, durationNanoseconds: 20)
+                ),
+                .progress(second.paneID, GhosttyProgressReport(state: .pause, progress: 30)),
+            ]
+        )
+    }
+
+    @Test
+    func queuedActivityCallbacksAreDroppedAfterCloseAndSamePaneReplacement() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let oldSurface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        var events: [ActivityCallbackObservation] = []
+        bridge.surfaceProgressHandler = { events.append(.progress($0, $1)) }
+        bridge.surfaceCommandFinishedHandler = { events.append(.commandFinished($0, $1)) }
+
+        #expect(oldSurface.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 1))
+        #expect(
+            oldSurface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 0,
+                durationNanoseconds: 1
+            )
+        )
+        bridge.closeSurface(id: paneID)
+        let replacement = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        await Task.yield()
+        await Task.yield()
+
+        #expect(events.isEmpty)
+        #expect(!oldSurface.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 2))
+        #expect(
+            !oldSurface.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 0,
+                durationNanoseconds: 2
+            )
+        )
+        #expect(replacement.scheduleProgressCallbackForTesting(stateRawValue: 1, progress: 3))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(
+            events == [
+                .progress(paneID, GhosttyProgressReport(state: .set, progress: 3))
+            ]
+        )
+    }
+
+    @Test
+    func inactiveSurfaceCallbackContextRejectsActivityEvents() {
+        let context = SurfaceCallbackContext(paneID: PaneID()) { _, _ in }
+        context.deactivateAndDrain()
+
+        #expect(
+            !context.scheduleProgressReport(
+                GhosttyProgressReport(state: .set, progress: 50)
+            )
+        )
+        #expect(
+            !context.scheduleCommandFinished(
+                GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 1)
+            )
+        )
+    }
+
+    @Test
     func resizeUpdatesRealCoreSurfaceMetricsInBackingPixels() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -513,6 +726,42 @@ extension GhosttyBridgeTests {
             observations.allSatisfy {
                 $0.resultingSize.columns >= 5 && $0.resultingSize.rows >= 2
             })
+    }
+
+    @Test
+    func realPTYDeliversOrderedIndeterminateAndRemoveProgressActions() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let window = makeHiddenWindow()
+        defer { window.orderOut(nil) }
+        let (reports, continuation) = AsyncStream.makeStream(of: GhosttyProgressReport.self)
+        defer { continuation.finish() }
+        bridge.surfaceProgressHandler = { reportedPaneID, report in
+            guard reportedPaneID == paneID else { return }
+            continuation.yield(report)
+        }
+
+        let surface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(
+                initialInput: "printf '\\033]9;4;3\\007\\033]9;4;0\\007'; exit\n"
+            )
+        )
+        embed(surface, in: window)
+
+        let delivered = try await firstValues(
+            from: reports,
+            count: 2,
+            timeout: .seconds(10)
+        )
+
+        #expect(
+            delivered == [
+                GhosttyProgressReport(state: .indeterminate, progress: nil),
+                GhosttyProgressReport(state: .remove, progress: nil),
+            ]
+        )
     }
 
     @Test
@@ -725,6 +974,11 @@ private func syntheticSurfaceSize(
     )
 }
 
+private enum ActivityCallbackObservation: Equatable {
+    case progress(PaneID, GhosttyProgressReport)
+    case commandFinished(PaneID, GhosttyCommandFinished)
+}
+
 private struct SurfaceCloseEvent: Equatable, Sendable {
     let paneID: PaneID
     let processAlive: Bool
@@ -738,6 +992,35 @@ private final class SurfaceCloseRecorder {
 private enum SurfaceTestError: Error {
     case eventStreamEnded
     case timeout
+}
+
+private func firstValues<Value: Sendable>(
+    from stream: AsyncStream<Value>,
+    count: Int,
+    timeout: Duration
+) async throws -> [Value] {
+    try await withThrowingTaskGroup(of: [Value].self) { group in
+        group.addTask {
+            var values: [Value] = []
+            for await value in stream {
+                values.append(value)
+                if values.count == count {
+                    return values
+                }
+            }
+            throw SurfaceTestError.eventStreamEnded
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw SurfaceTestError.timeout
+        }
+
+        guard let values = try await group.next() else {
+            throw SurfaceTestError.eventStreamEnded
+        }
+        group.cancelAll()
+        return values
+    }
 }
 
 private func firstEvent(

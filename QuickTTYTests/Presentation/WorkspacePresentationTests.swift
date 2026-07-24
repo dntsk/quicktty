@@ -324,6 +324,8 @@ struct WorkspacePresentationTests {
     @Test
     func workspaceWindowKeyNotificationsUpdateChromeAndIgnoreStaleWindows() throws {
         let controller = WorkspaceViewController()
+        var keyStates: [Bool] = []
+        controller.onWindowKeyStateChanged = { keyStates.append($0) }
         let firstWindow = Self.mountWorkspace(controller)
         defer { firstWindow.orderOut(nil) }
 
@@ -367,6 +369,7 @@ struct WorkspacePresentationTests {
         #expect(!controller.windowIsKeyForTesting)
         #expect(controller.chromeAlphaForTesting == WorkspaceViewController.inactiveChromeAlpha)
         #expect(controller.terminalContentAlphaForTesting == 1)
+        #expect(keyStates == [false, false, true, false, false, true, false])
     }
 
     @Test
@@ -933,9 +936,308 @@ struct WorkspacePresentationTests {
     }
 
     @Test
-    func compactTabChromeUsesExactHeights() {
+    func terminalStatusAggregateIsNilWithoutContributorsAndUsesOrderIndependentPrecedence() {
+        let phases: [TerminalActivityPhase] = [
+            .completed,
+            .working(progress: 20),
+            .waiting(progress: 30),
+            .failed(progress: 40),
+        ]
+        let expected: [TerminalStatusPresentation.Phase] = [
+            .completed, .working, .waiting, .failed,
+        ]
+
+        #expect(TerminalStatusPresentation.aggregate([]) == nil)
+        for firstIndex in phases.indices {
+            for secondIndex in phases.indices where firstIndex != secondIndex {
+                let states = [
+                    TerminalActivityState(phase: phases[firstIndex], startedAt: 1),
+                    TerminalActivityState(phase: phases[secondIndex], startedAt: 2),
+                ]
+                let winningIndex = max(firstIndex, secondIndex)
+                #expect(
+                    TerminalStatusPresentation.aggregate(states)?.phase
+                        == expected[winningIndex]
+                )
+                #expect(
+                    TerminalStatusPresentation.aggregate(states.reversed())?.phase
+                        == expected[winningIndex]
+                )
+            }
+        }
+    }
+
+    @Test
+    func terminalStatusAggregateAveragesOnlyFullyDeterminateWinningContributors() {
+        let determinate = TerminalStatusPresentation.aggregate([
+            TerminalActivityState(phase: .working(progress: 20), startedAt: 1),
+            TerminalActivityState(phase: .working(progress: 61), startedAt: 2),
+            TerminalActivityState(phase: .completed, startedAt: 3),
+        ])
+        let mixed = TerminalStatusPresentation.aggregate([
+            TerminalActivityState(phase: .waiting(progress: 70), startedAt: 1),
+            TerminalActivityState(phase: .waiting(progress: nil), startedAt: 2),
+            TerminalActivityState(phase: .working(progress: nil), startedAt: 3),
+        ])
+        let failed = TerminalStatusPresentation.aggregate([
+            TerminalActivityState(phase: .failed(progress: 90), startedAt: 1),
+            TerminalActivityState(phase: .failed(progress: 50), startedAt: 2),
+        ])
+
+        #expect(determinate == TerminalStatusPresentation(phase: .working, percent: 40))
+        #expect(mixed == TerminalStatusPresentation(phase: .waiting, percent: nil))
+        #expect(failed == TerminalStatusPresentation(phase: .failed, percent: 70))
+    }
+
+    @Test
+    func tabStatusIncludesInactiveSplitPaneAndWorkspaceStatusIncludesInactiveTabs() throws {
+        let activePaneID = PaneID()
+        let inactivePaneID = PaneID()
+        let otherPaneID = PaneID()
+        let splitTab = try TerminalTab(
+            title: "Split",
+            root: .split(
+                id: UUID(),
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .pane(activePaneID),
+                second: .pane(inactivePaneID)
+            ),
+            paneDescriptors: [
+                TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp"),
+                TerminalPaneDescriptor(id: inactivePaneID, cwd: "/tmp"),
+            ],
+            activePaneID: activePaneID
+        )
+        let otherTab = TerminalTab(
+            title: "Other",
+            pane: TerminalPaneDescriptor(id: otherPaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(
+            name: "All panes",
+            tabs: [splitTab, otherTab],
+            activeTabID: splitTab.id
+        )
+        let statuses: [PaneID: TerminalActivityState] = [
+            activePaneID: TerminalActivityState(
+                phase: .working(progress: 10), startedAt: 1),
+            inactivePaneID: TerminalActivityState(
+                phase: .failed(progress: nil), startedAt: 2),
+            otherPaneID: TerminalActivityState(
+                phase: .waiting(progress: nil), startedAt: 3),
+        ]
+
+        #expect(
+            WorkspaceViewController.tabStatusesForTesting(
+                tabs: [splitTab], paneStatuses: statuses
+            )[splitTab.id]?.phase == .failed
+        )
+        #expect(
+            WorkspaceViewController.workspaceStatusesForTesting(
+                workspaces: [workspace], paneStatuses: statuses
+            )[workspace.id]?.phase == .failed
+        )
+    }
+
+    @Test
+    func tabBadgeUsesExactCompactRepresentationsAndAccessibilityLeftOfTitle() throws {
+        let tab = TerminalTab(
+            title: "Build",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let item = fixture.tabBar.tabItemForTesting(at: 0)
+        let presentations: [(TerminalStatusPresentation, String, String)] = [
+            (
+                TerminalStatusPresentation(phase: .working, percent: nil),
+                "spinner",
+                "Terminal working"
+            ),
+            (
+                TerminalStatusPresentation(phase: .working, percent: 42),
+                "42%",
+                "Terminal working, 42 percent"
+            ),
+            (
+                TerminalStatusPresentation(phase: .waiting, percent: nil),
+                "pause.fill",
+                "Terminal waiting"
+            ),
+            (
+                TerminalStatusPresentation(phase: .failed, percent: 90),
+                "xmark.octagon.fill",
+                "Terminal failed"
+            ),
+            (
+                TerminalStatusPresentation(phase: .completed, percent: nil),
+                "checkmark.circle.fill",
+                "Terminal completed"
+            ),
+        ]
+
+        for (presentation, representation, accessibilityLabel) in presentations {
+            fixture.tabBar.refreshStatuses([tab.id: presentation])
+            fixture.tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+
+            #expect(item.badgeRepresentationForTesting == representation)
+            #expect(item.badgeUsesNativeSpinnerForTesting == (representation == "spinner"))
+            #expect(item.badgeAccessibilityLabelForTesting == accessibilityLabel)
+            #expect(item.badgeToolTipForTesting == accessibilityLabel)
+            #expect(item.badgeFrameForTesting.maxX <= item.titleFrameForTesting.minX)
+        }
+        fixture.tabBar.refreshStatuses([
+            tab.id: TerminalStatusPresentation(phase: .waiting, percent: 75)
+        ])
+        #expect(item.badgeRepresentationForTesting == "75%")
+    }
+
+    @Test
+    func statusOnlyTabRefreshPreservesVisibleItemRenameSelectionAndFirstResponder() {
+        let tab = TerminalTab(
+            title: "Fallback",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        tabBar.refreshDisplayedTitles([tab.id: "Live title"])
+        tabBar.beginRenameForTesting(tab.id)
+        let item = tabBar.tabItemForTesting(at: 0)
+        item.renameEditorForTesting?.stringValue = "editing"
+        let reloadGeneration = tabBar.dataReloadGenerationForTesting
+        let firstResponder = fixture.window.firstResponder
+        let shortcut = item.shortcutForTesting
+
+        tabBar.refreshStatuses([
+            tab.id: TerminalStatusPresentation(phase: .working, percent: nil)
+        ])
+
+        #expect(tabBar.tabItemForTesting(at: 0) === item)
+        #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
+        #expect(tabBar.displayedTitlesForTesting[tab.id] == "Live title")
+        #expect(tabBar.activeTabIDForTesting == tab.id)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == [tab.id])
+        #expect(tabBar.editedTabIDForTesting == tab.id)
+        #expect(item.renameEditorForTesting?.stringValue == "editing")
+        #expect(fixture.window.firstResponder === firstResponder)
+        #expect(item.shortcutForTesting == shortcut)
+    }
+
+    @Test
+    func clearingTabStatusCollapsesBadgeAndRestoresTitleLayout() {
+        let tab = TerminalTab(
+            title: "Build",
+            pane: TerminalPaneDescriptor(id: PaneID(), cwd: "/tmp")
+        )
+        let fixture = Self.makeMountedTabBar(tabs: [tab], activeTabID: tab.id)
+        defer { fixture.window.orderOut(nil) }
+        let tabBar = fixture.tabBar
+        let item = tabBar.tabItemForTesting(at: 0)
+        tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+        let originalTitleFrame = item.titleFrameForTesting
+
+        tabBar.refreshStatuses([
+            tab.id: TerminalStatusPresentation(phase: .working, percent: 50)
+        ])
+        tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+        #expect(item.badgeRepresentationForTesting == "50%")
+
+        tabBar.refreshStatuses([:])
+        tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+
+        #expect(item.badgeRepresentationForTesting == nil)
+        #expect(item.titleFrameForTesting == originalTitleFrame)
+    }
+
+    @Test
+    func workspaceStatusRefreshUpdatesButtonAndMenuBadgesInPlaceDuringTracking() throws {
+        var store = WorkspaceStore()
+        let secondID = try store.createWorkspace(named: "Second")
+        let selector = WorkspaceSelector()
+        selector.apply(
+            workspaces: store.workspaces,
+            activeWorkspaceID: store.activeWorkspaceID
+        )
+        let originalItems = selector.menuItemsForTesting
+        let originalTargets = originalItems.map(\.target)
+        let originalActions = originalItems.map(\.action)
+        let originalStates = originalItems.map(\.state)
+        selector.menuForTesting.delegate?.menuWillOpen?(selector.menuForTesting)
+
+        selector.refreshStatuses([
+            store.activeWorkspaceID: TerminalStatusPresentation(
+                phase: .working, percent: 25),
+            secondID: TerminalStatusPresentation(phase: .failed, percent: nil),
+        ])
+
+        #expect(selector.menuIsTrackingForTesting)
+        #expect(selector.buttonBadgeRepresentationForTesting == "25%")
+        #expect(selector.menuItemsForTesting.count == originalItems.count)
+        for index in originalItems.indices {
+            #expect(selector.menuItemsForTesting[index] === originalItems[index])
+            #expect(selector.menuItemsForTesting[index].target === originalTargets[index])
+            #expect(selector.menuItemsForTesting[index].action == originalActions[index])
+            #expect(selector.menuItemsForTesting[index].state == originalStates[index])
+        }
+        #expect(selector.menuItemsForTesting[0].badge?.stringValue == "25%")
+        #expect(selector.menuItemsForTesting[1].badge?.stringValue == "!")
+
+        selector.refreshStatuses([:])
+        #expect(selector.buttonBadgeRepresentationForTesting == nil)
+        #expect(selector.menuItemsForTesting[0].badge == nil)
+        #expect(selector.menuItemsForTesting[1].badge == nil)
+        #expect(selector.menuIsTrackingForTesting)
+        selector.menuForTesting.delegate?.menuDidClose?(selector.menuForTesting)
+    }
+
+    @Test
+    func workspaceControllerStatusRefreshForwardsAllOriginalAggregatesWithoutReload() throws {
+        let activePaneID = PaneID()
+        let inactivePaneID = PaneID()
+        let activeTab = TerminalTab(
+            title: "Active",
+            pane: TerminalPaneDescriptor(id: activePaneID, cwd: "/tmp")
+        )
+        let inactiveTab = TerminalTab(
+            title: "Inactive",
+            pane: TerminalPaneDescriptor(id: inactivePaneID, cwd: "/tmp")
+        )
+        let workspace = Workspace(
+            name: "Workspace",
+            tabs: [activeTab, inactiveTab],
+            activeTabID: activeTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [workspace], activeWorkspaceID: workspace.id)
+        let controller = WorkspaceViewController()
+        controller.apply(store)
+        let generation = controller.tabBarViewController.dataReloadGenerationForTesting
+
+        controller.refreshStatuses(
+            in: store,
+            paneStatuses: [
+                inactivePaneID: TerminalActivityState(
+                    phase: .waiting(progress: nil), startedAt: 1)
+            ]
+        )
+
+        #expect(
+            controller.tabBarViewController.statusesForTesting[inactiveTab.id]?.phase
+                == .waiting
+        )
+        #expect(
+            controller.workspaceSelector.statusesForTesting[workspace.id]?.phase
+                == .waiting
+        )
+        #expect(controller.tabBarViewController.dataReloadGenerationForTesting == generation)
+    }
+
+    @Test
+    func compactStatusChromeUsesExactHeights() {
         #expect(WorkspaceViewController.chromeHeight == 28)
         #expect(TabBarViewController.itemHeight == 28)
+        #expect(WorkspaceSelector().intrinsicContentSize.height == 22)
     }
 
     @Test

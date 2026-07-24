@@ -32,6 +32,10 @@ QuickTTY читает `~/.config/quicktty/config`. Локальные сочет
 
 Ghostty `keybind` в пользовательском config не применяется: QuickTTY владеет управляющими сочетаниями, а неназначенные события передаются терминалу как обычный input.
 
+## Интеграции с coding agents
+
+QuickTTY понимает terminal progress sequences OSC `9;4`. Для Pi достаточно включить встроенный параметр Terminal progress; для Claude Code и Codex в app bundle лежат helper и примеры hooks, которые нужно вручную объединить с существующей конфигурацией. Приложение не устанавливает и не изменяет hooks автоматически. Подробности: [docs/agent-integrations.md](docs/agent-integrations.md).
+
 ## Команды
 
 ```sh

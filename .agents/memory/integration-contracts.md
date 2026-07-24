@@ -31,6 +31,7 @@ zig build -Dapp-runtime=none -Dxcframework-target=native -Demit-xcframework=true
 | Mouse и resize | Swift → Ghostty | События направляются только соответствующей surface; broadcast для них запрещён | Принят |
 | Config reload | Swift → Ghostty | Валидная конфигурация применяется ко всем существующим surfaces без перезапуска процессов | Принят |
 | Runtime callbacks | Ghostty → Swift | Bridge преобразует callbacks в Swift-события/команды модели и не раскрывает C payloads | Принят |
+| Terminal progress | Ghostty → Swift | Surface-targeted OSC 9;4 progress и command-finished fallback копируются в ordered stable events, transient UI и notifications | Принят |
 | Process exit | Ghostty → Swift | Завершение дочернего процесса преобразуется в событие закрытия соответствующей pane | Принят |
 | CWD и metadata | Ghostty → Swift | Bridge возвращает устойчивые Swift-значения, пригодные для модели и сохранения state | Принят |
 | Theme/config values | Ghostty → Swift | Palette, font, cursor, opacity и ANSI colors поступают из Ghostty config | Принят |
@@ -52,6 +53,14 @@ zig build -Dapp-runtime=none -Dxcframework-target=native -Demit-xcframework=true
 - App-level `userdata` передаётся напрямую только в wakeup callback: `Vendor/ghostty/src/apprt/embedded.zig:232-233`. Action callback синхронно получает `App*`: `Vendor/ghostty/src/apprt/embedded.zig:266-285`; сохранённый app-level `userdata` возвращает `ghostty_app_userdata`: `Vendor/ghostty/src/apprt/embedded.zig:1431-1434`. Поэтому оба callback восстанавливают один independently C-retained callback context: wakeup — прямо из `userdata`, action — через `ghostty_app_userdata(app)`. Raw pointer bridge в C runtime не передаётся, и callbacks не восстанавливают `GhosttyBridge`.
 - Surface config имеет отдельный `userdata`: `Vendor/ghostty/include/ghostty.h:440-453`. Именно surface userdata передаётся в read/confirm/write clipboard callbacks и close callback: `Vendor/ghostty/src/apprt/embedded.zig:639-645`, `Vendor/ghostty/src/apprt/embedded.zig:672-720`, `Vendor/ghostty/src/apprt/embedded.zig:737-755`. Task 3A реализует его как независимо C-retained `SurfaceCallbackContext`, не связанный владением с `GhosttyBridge`; контекст хранит только стабильный `PaneID`, close handler и синхронизированное состояние активности.
 - Reload action содержит обязательный `soft` payload: `Vendor/ghostty/include/ghostty.h:778-781`; union хранит его в `reload_config`: `Vendor/ghostty/include/ghostty.h:945-955`. Bridge полностью копирует payload в устойчивое Swift-значение `.reloadConfig(soft: Bool)` до выхода из callback.
+
+### Terminal progress и activity metadata
+
+- `GHOSTTY_ACTION_PROGRESS_REPORT` (`56`) и `GHOSTTY_ACTION_COMMAND_FINISHED` (`58`) принимаются только с `GHOSTTY_TARGET_SURFACE`. Payload состоит из scalar values и синхронно копируется в `GhosttyProgressReport`/`GhosttyCommandFinished` до MainActor hop; C target, surface handle и upstream enums bridge не покидают.
+- Progress и command-finished используют одну ordered FIFO в `SurfaceCallbackContext`: sequence `working → remove` и взаимный порядок с command fallback нельзя coalesce-ить. Deactivate дренирует очередь; старый context не доставляет metadata replacement surface с тем же `PaneID`.
+- OSC 9;4 состояния отображаются как transient `working`, `waiting`, `failed`, `completed`. `COMMAND_FINISHED` влияет только на уже активный working/waiting progress и не начинает activity для обычных shell-команд. Все state/timers/notification identity очищаются при close, Retry replacement, model-only collapse и shutdown.
+- Finalized `progress-style` и `desktop-notifications` публикуются как единый `GhosttyActivityConfiguration` вместе с валидным config reload. `progress-style = false` очищает и игнорирует badges; `desktop-notifications = false` сохраняет badges, но запрещает system notifications. Invalid reload сохраняет последнюю валидную activity configuration.
+- Notifications хранят только versioned UUID destination, используют generic body и лениво запрашивают authorization после eligibility/suppression checks. Pending effect повторно сверяется с текущим pane state; mapping ограничен одной записью на pane. Click активирует exact live workspace/tab/pane без mode transition, surface recreation или PTY restart.
 
 ### Config ownership
 

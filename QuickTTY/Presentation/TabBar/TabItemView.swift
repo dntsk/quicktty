@@ -20,6 +20,8 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     private let backgroundView = TabItemBackgroundView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let titleStack = NSStackView()
+    private let statusBadge = TerminalStatusBadgeView(frame: .zero)
     private let renameEditor = NSTextField(string: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let broadcastIndicator = NSImageView()
@@ -44,6 +46,14 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        titleStack.orientation = .horizontal
+        titleStack.alignment = .centerY
+        titleStack.distribution = .fill
+        titleStack.spacing = 4
+        titleStack.addArrangedSubview(statusBadge)
+        titleStack.addArrangedSubview(titleLabel)
+        titleStack.translatesAutoresizingMaskIntoConstraints = false
 
         renameEditor.isBordered = false
         renameEditor.drawsBackground = false
@@ -89,7 +99,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
             self?.updatePresentation()
         }
 
-        backgroundView.addSubview(titleLabel)
+        backgroundView.addSubview(titleStack)
         backgroundView.addSubview(renameEditor)
         backgroundView.addSubview(shortcutLabel)
         backgroundView.addSubview(broadcastIndicator)
@@ -108,17 +118,17 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
                 equalTo: backgroundView.trailingAnchor, constant: -8),
             shortcutLabel.centerYAnchor.constraint(equalTo: backgroundView.centerYAnchor),
             shortcutLabel.widthAnchor.constraint(equalToConstant: 27),
-            titleLabel.centerXAnchor.constraint(equalTo: backgroundView.centerXAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: backgroundView.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(
+            titleStack.centerXAnchor.constraint(equalTo: backgroundView.centerXAnchor),
+            titleStack.centerYAnchor.constraint(equalTo: backgroundView.centerYAnchor),
+            titleStack.leadingAnchor.constraint(
                 greaterThanOrEqualTo: backgroundView.leadingAnchor,
                 constant: 25
             ),
-            titleLabel.trailingAnchor.constraint(
+            titleStack.trailingAnchor.constraint(
                 lessThanOrEqualTo: shortcutLabel.leadingAnchor,
                 constant: -4
             ),
-            renameEditor.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            renameEditor.centerYAnchor.constraint(equalTo: titleStack.centerYAnchor),
             renameEditor.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             renameEditor.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
         ])
@@ -126,6 +136,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     func configure(
         title: String,
+        status: TerminalStatusPresentation?,
         tabIndex: Int,
         isActive: Bool,
         isSelected: Bool,
@@ -140,6 +151,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         menuProvider: @escaping () -> NSMenu
     ) {
         updateTitle(title)
+        updateStatus(status)
         self.tabIndex = tabIndex
         self.isBroadcasting = isBroadcasting
         backgroundView.isActive = isActive
@@ -161,6 +173,10 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         view.identifier = NSUserInterfaceItemIdentifier("tab-\(title)")
     }
 
+    func updateStatus(_ status: TerminalStatusPresentation?) {
+        statusBadge.apply(status)
+    }
+
     func beginRenaming(
         title: String,
         commit: @escaping (String) -> Void,
@@ -169,7 +185,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         guard renameSession == nil else { return }
         renameSession = RenameSession(commit: commit, finish: finish)
         renameEditor.stringValue = title
-        titleLabel.isHidden = true
+        titleLabel.alphaValue = 0
         renameEditor.isHidden = false
         isStartingRename = true
         view.window?.makeFirstResponder(renameEditor)
@@ -189,6 +205,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         backgroundView.plainDoubleClickHandler = nil
         backgroundView.menuProvider = nil
         renameEditor.stringValue = ""
+        statusBadge.apply(nil)
         super.prepareForReuse()
     }
 
@@ -260,7 +277,35 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         }
 
         var visibleTitleForTesting: String? {
-            titleLabel.isHidden ? nil : titleLabel.stringValue
+            titleLabel.alphaValue == 0 ? nil : titleLabel.stringValue
+        }
+
+        var badgeRepresentationForTesting: String? {
+            statusBadge.representationForTesting
+        }
+
+        var badgeAccessibilityLabelForTesting: String? {
+            statusBadge.accessibilityLabel()
+        }
+
+        var badgeUsesNativeSpinnerForTesting: Bool {
+            statusBadge.usesNativeSpinnerForTesting
+        }
+
+        var badgeToolTipForTesting: String? {
+            statusBadge.toolTip
+        }
+
+        var badgeFrameForTesting: NSRect {
+            statusBadge.frame
+        }
+
+        var titleFrameForTesting: NSRect {
+            titleLabel.frame
+        }
+
+        var shortcutForTesting: String {
+            shortcutLabel.stringValue
         }
 
         func invokeRenameCommandForTesting(_ commandSelector: Selector) {
@@ -280,7 +325,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         guard let renameSession else { return }
         self.renameSession = nil
         let value = renameEditor.stringValue
-        titleLabel.isHidden = false
+        titleLabel.alphaValue = 1
         renameEditor.isHidden = true
         if renameEditor.currentEditor() != nil {
             view.window?.makeFirstResponder(nil)

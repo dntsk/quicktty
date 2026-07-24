@@ -30,6 +30,7 @@ final class WorkspaceViewController: NSViewController {
     var onFinishReorderTabs: (() -> Void)?
     var onRenameTab: ((TabID, String) -> Void)?
     var onRenameEditingChanged: ((Bool) -> Void)?
+    var onWindowKeyStateChanged: ((Bool) -> Void)?
 
     let workspaceSelector = WorkspaceSelector()
     let tabBarViewController = TabBarViewController()
@@ -195,12 +196,17 @@ final class WorkspaceViewController: NSViewController {
 
     func apply(
         _ store: WorkspaceStore,
-        liveTitles: [PaneID: String] = [:]
+        liveTitles: [PaneID: String] = [:],
+        paneStatuses: [PaneID: TerminalActivityState] = [:]
     ) {
         loadViewIfNeeded()
         workspaceSelector.apply(
             workspaces: store.workspaces,
-            activeWorkspaceID: store.activeWorkspaceID
+            activeWorkspaceID: store.activeWorkspaceID,
+            statuses: Self.workspaceStatuses(
+                for: store.workspaces,
+                paneStatuses: paneStatuses
+            )
         )
         let activeWorkspace = store.workspace(id: store.activeWorkspaceID)
         let destinations = store.workspaces.compactMap { workspace in
@@ -216,7 +222,8 @@ final class WorkspaceViewController: NSViewController {
             tabs: tabs,
             activeTabID: activeWorkspace?.activeTabID,
             destinations: destinations,
-            displayedTitles: Self.displayedTitles(for: tabs, liveTitles: liveTitles)
+            displayedTitles: Self.displayedTitles(for: tabs, liveTitles: liveTitles),
+            statuses: Self.tabStatuses(for: tabs, paneStatuses: paneStatuses)
         )
     }
 
@@ -230,12 +237,57 @@ final class WorkspaceViewController: NSViewController {
         )
     }
 
+    func refreshStatuses(
+        in store: WorkspaceStore,
+        paneStatuses: [PaneID: TerminalActivityState]
+    ) {
+        let tabs = store.workspace(id: store.activeWorkspaceID)?.tabs ?? []
+        tabBarViewController.refreshStatuses(
+            Self.tabStatuses(for: tabs, paneStatuses: paneStatuses)
+        )
+        workspaceSelector.refreshStatuses(
+            Self.workspaceStatuses(
+                for: store.workspaces,
+                paneStatuses: paneStatuses
+            )
+        )
+    }
+
     func presentTabTitlePrompt(for tabID: TabID) {
         tabBarViewController.beginRename(tabID)
     }
 
     func cancelTabRename() {
         tabBarViewController.cancelRename()
+    }
+
+    private static func tabStatuses(
+        for tabs: [TerminalTab],
+        paneStatuses: [PaneID: TerminalActivityState]
+    ) -> [TabID: TerminalStatusPresentation] {
+        Dictionary(
+            uniqueKeysWithValues: tabs.compactMap { tab in
+                TerminalStatusPresentation.aggregate(
+                    tab.root.leaves.compactMap { paneStatuses[$0] }
+                ).map { (tab.id, $0) }
+            }
+        )
+    }
+
+    private static func workspaceStatuses(
+        for workspaces: [Workspace],
+        paneStatuses: [PaneID: TerminalActivityState]
+    ) -> [WorkspaceID: TerminalStatusPresentation] {
+        Dictionary(
+            uniqueKeysWithValues: workspaces.compactMap { workspace in
+                let states = workspace.tabs.flatMap { tab in
+                    tab.root.leaves.compactMap { paneStatuses[$0] }
+                }
+                return TerminalStatusPresentation.aggregate(states).map {
+                    (workspace.id, $0)
+                }
+            }
+        )
     }
 
     private static func displayedTitles(
@@ -253,6 +305,20 @@ final class WorkspaceViewController: NSViewController {
     }
 
     #if DEBUG
+        static func tabStatusesForTesting(
+            tabs: [TerminalTab],
+            paneStatuses: [PaneID: TerminalActivityState]
+        ) -> [TabID: TerminalStatusPresentation] {
+            tabStatuses(for: tabs, paneStatuses: paneStatuses)
+        }
+
+        static func workspaceStatusesForTesting(
+            workspaces: [Workspace],
+            paneStatuses: [PaneID: TerminalActivityState]
+        ) -> [WorkspaceID: TerminalStatusPresentation] {
+            workspaceStatuses(for: workspaces, paneStatuses: paneStatuses)
+        }
+
         var chromePaletteForTesting: GhosttyChromePalette {
             chromePalette
         }
@@ -509,6 +575,7 @@ final class WorkspaceViewController: NSViewController {
     private func updateWindowPresentation(isKeyWindow: Bool) {
         presentationState.setKeyWindow(isKeyWindow)
         chromeView.alphaValue = isKeyWindow ? 1 : Self.inactiveChromeAlpha
+        onWindowKeyStateChanged?(isKeyWindow)
     }
 
     private func removeSplitHost() {
