@@ -801,19 +801,19 @@ struct AppDelegateLifecycleTests {
             ("Next Pane", "]", .command),
             (
                 "Focus Left Pane", String(UnicodeScalar(NSLeftArrowFunctionKey)!),
-                [.command, .option]
+                [.command, .shift]
             ),
             (
                 "Focus Right Pane", String(UnicodeScalar(NSRightArrowFunctionKey)!),
-                [.command, .option]
+                [.command, .shift]
             ),
             (
                 "Focus Up Pane", String(UnicodeScalar(NSUpArrowFunctionKey)!),
-                [.command, .option]
+                [.command, .shift]
             ),
             (
                 "Focus Down Pane", String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                [.command, .option]
+                [.command, .shift]
             ),
         ]
 
@@ -839,29 +839,36 @@ struct AppDelegateLifecycleTests {
         let commandBracket = NSMenuItem(title: "Foreign Previous", action: nil, keyEquivalent: "[")
         commandBracket.keyEquivalentModifierMask = [.command]
         let titledPrevious = NSMenuItem(title: "Previous Pane", action: nil, keyEquivalent: "x")
-        let commandOptionLeft = NSMenuItem(
-            title: "Foreign Left",
+        let commandShiftLeft = NSMenuItem(
+            title: "Reusable Left",
             action: nil,
             keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
         )
-        commandOptionLeft.keyEquivalentModifierMask = [.command, .option]
+        commandShiftLeft.keyEquivalentModifierMask = [.command, .shift]
         let titledLeft = NSMenuItem(title: "Focus Left Pane", action: nil, keyEquivalent: "x")
         let commandShiftBracket = NSMenuItem(
             title: "Foreign Shift", action: nil, keyEquivalent: "[")
         commandShiftBracket.keyEquivalentModifierMask = [.command, .shift]
-        let commandControlOptionLeft = NSMenuItem(
-            title: "Foreign Control",
+        let commandOptionLeft = NSMenuItem(
+            title: "Foreign Option",
             action: nil,
             keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
         )
-        commandControlOptionLeft.keyEquivalentModifierMask = [.command, .option, .control]
+        commandOptionLeft.keyEquivalentModifierMask = [.command, .option]
+        let commandShiftControlLeft = NSMenuItem(
+            title: "Foreign Shift Control",
+            action: nil,
+            keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        )
+        commandShiftControlLeft.keyEquivalentModifierMask = [.command, .shift, .control]
         [
             commandBracket,
             titledPrevious,
-            commandOptionLeft,
+            commandShiftLeft,
             titledLeft,
             commandShiftBracket,
-            commandControlOptionLeft,
+            commandOptionLeft,
+            commandShiftControlLeft,
         ].forEach(viewMenu.addItem)
 
         for _ in 0..<2 {
@@ -877,18 +884,22 @@ struct AppDelegateLifecycleTests {
             )
         }
 
-        #expect(viewMenu.items.count == 8)
+        #expect(viewMenu.items.count == 9)
         #expect(viewMenu.items.filter { $0.title == "Previous Pane" }.count == 1)
         #expect(viewMenu.items.filter { $0.title == "Focus Left Pane" }.count == 1)
         #expect(commandBracket.title == "Previous Pane")
         #expect(
             commandBracket.action == #selector(PaneNavigationMenuActionTarget.focusPreviousPane))
         #expect(commandBracket.target === target)
-        #expect(commandOptionLeft.title == "Focus Left Pane")
-        #expect(commandOptionLeft.action == #selector(PaneNavigationMenuActionTarget.focusLeftPane))
-        #expect(commandOptionLeft.target === target)
+        #expect(commandShiftLeft.title == "Focus Left Pane")
+        #expect(commandShiftLeft.action == #selector(PaneNavigationMenuActionTarget.focusLeftPane))
+        #expect(commandShiftLeft.keyEquivalentModifierMask == [.command, .shift])
+        #expect(commandShiftLeft.target === target)
         #expect(viewMenu.items.contains { $0 === commandShiftBracket })
-        #expect(viewMenu.items.contains { $0 === commandControlOptionLeft })
+        #expect(viewMenu.items.contains { $0 === commandOptionLeft })
+        #expect(commandOptionLeft.keyEquivalentModifierMask == [.command, .option])
+        #expect(viewMenu.items.contains { $0 === commandShiftControlLeft })
+        #expect(commandShiftControlLeft.keyEquivalentModifierMask == [.command, .shift, .control])
     }
 
     @Test

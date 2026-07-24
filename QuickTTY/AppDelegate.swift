@@ -634,7 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 in: viewMenu,
                 title: "Focus Left Pane",
                 keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
-                modifierMask: [.command, .option],
+                modifierMask: [.command, .shift],
                 target: target,
                 action: leftAction
             ),
@@ -642,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 in: viewMenu,
                 title: "Focus Right Pane",
                 keyEquivalent: String(UnicodeScalar(NSRightArrowFunctionKey)!),
-                modifierMask: [.command, .option],
+                modifierMask: [.command, .shift],
                 target: target,
                 action: rightAction
             ),
@@ -650,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 in: viewMenu,
                 title: "Focus Up Pane",
                 keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!),
-                modifierMask: [.command, .option],
+                modifierMask: [.command, .shift],
                 target: target,
                 action: upAction
             ),
@@ -658,7 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 in: viewMenu,
                 title: "Focus Down Pane",
                 keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                modifierMask: [.command, .option],
+                modifierMask: [.command, .shift],
                 target: target,
                 action: downAction
             ),

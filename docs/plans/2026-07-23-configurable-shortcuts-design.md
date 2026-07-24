@@ -87,10 +87,10 @@ Global Quake toggle не входит в local registry; default `quicktty-globa
 | `split-down` | `cmd+shift+d` |
 | `previous-pane` | `cmd+left-bracket` |
 | `next-pane` | `cmd+right-bracket` |
-| `focus-left` | `cmd+opt+left` |
-| `focus-right` | `cmd+opt+right` |
-| `focus-up` | `cmd+opt+up` |
-| `focus-down` | `cmd+opt+down` |
+| `focus-left` | `cmd+shift+left` |
+| `focus-right` | `cmd+shift+right` |
+| `focus-up` | `cmd+shift+up` |
+| `focus-down` | `cmd+shift+down` |
 | `select-tab-1`…`select-tab-9` | `cmd+1`…`cmd+9` |
 | `toggle-broadcast` | `cmd+b` |
 
@@ -124,8 +124,8 @@ Global Quake toggle не входит в local registry; default `quicktty-globa
 | `scroll-page-up` | `cmd+page-up` | `scroll_page_up` |
 | `scroll-page-down` | `cmd+page-down` | `scroll_page_down` |
 | `scroll-to-selection` | `cmd+j` | `scroll_to_selection` |
-| `previous-prompt` | `cmd+shift+up` | `jump_to_prompt:-1` |
-| `next-prompt` | `cmd+shift+down` | `jump_to_prompt:1` |
+| `previous-prompt` | `disabled` | `jump_to_prompt:-1` |
+| `next-prompt` | `disabled` | `jump_to_prompt:1` |
 | `selection-left` | `shift+left` | `adjust_selection:left` |
 | `selection-right` | `shift+right` | `adjust_selection:right` |
 | `selection-up` | `shift+up` | `adjust_selection:up` |
@@ -134,6 +134,8 @@ Global Quake toggle не входит в local registry; default `quicktty-globa
 | `selection-page-down` | `shift+page-down` | `adjust_selection:page_down` |
 | `selection-home` | `shift+home` | `adjust_selection:home` |
 | `selection-end` | `shift+end` | `adjust_selection:end` |
+
+Навигация по prompts остаётся typed и настраиваемой, но без встроенного chord, поскольку сочетания Cmd+Shift со стрелками зарезервированы для directional pane focus.
 
 `copy`, `copy-url`, `clear-screen`, `scroll-to-selection` и keyboard selection adjustment сохраняют performable semantics: если core action возвращает `false`, исходное key event продолжает normal terminal input path.
 

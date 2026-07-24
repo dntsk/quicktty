@@ -169,10 +169,10 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         case .splitDown: chord(.d, .command, .shift)
         case .previousPane: chord(.leftBracket, .command)
         case .nextPane: chord(.rightBracket, .command)
-        case .focusLeft: chord(.left, .command, .option)
-        case .focusRight: chord(.right, .command, .option)
-        case .focusUp: chord(.up, .command, .option)
-        case .focusDown: chord(.down, .command, .option)
+        case .focusLeft: chord(.left, .command, .shift)
+        case .focusRight: chord(.right, .command, .shift)
+        case .focusUp: chord(.up, .command, .shift)
+        case .focusDown: chord(.down, .command, .shift)
         case .selectTab1: chord(.one, .command)
         case .selectTab2: chord(.two, .command)
         case .selectTab3: chord(.three, .command)
@@ -183,7 +183,8 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         case .selectTab8: chord(.eight, .command)
         case .selectTab9: chord(.nine, .command)
         case .toggleBroadcast: chord(.b, .command)
-        case .newWorkspace, .renameWorkspace, .deleteWorkspace, .copyURL, .resetTerminal:
+        case .newWorkspace, .renameWorkspace, .deleteWorkspace, .copyURL, .resetTerminal,
+            .previousPrompt, .nextPrompt:
             nil
         case .selectWorkspace1: chord(.one, .command, .option)
         case .selectWorkspace2: chord(.two, .command, .option)
@@ -207,8 +208,6 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         case .scrollPageUp: chord(.pageUp, .command)
         case .scrollPageDown: chord(.pageDown, .command)
         case .scrollToSelection: chord(.j, .command)
-        case .previousPrompt: chord(.up, .command, .shift)
-        case .nextPrompt: chord(.down, .command, .shift)
         case .selectionLeft: chord(.left, .shift)
         case .selectionRight: chord(.right, .shift)
         case .selectionUp: chord(.up, .shift)
