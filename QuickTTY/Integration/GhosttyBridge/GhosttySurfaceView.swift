@@ -368,6 +368,8 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     case progressReport(GhosttyProgressReport)
     case commandFinished(GhosttyCommandFinished)
     case scrollbarChanged(GhosttyScrollbarSnapshot)
+    case searchTotal(Int)
+    case searchSelected(Int?)
 }
 
 func ghosttyRuntimeCloseSurfaceCallback(
@@ -1904,6 +1906,8 @@ extension GhosttySurfaceView {
                 scrollbarDeliveryCount += 1
             #endif
             restoreViewportIfNeeded(after: snapshot)
+        case .searchTotal, .searchSelected:
+            break
         }
     }
 
@@ -2453,6 +2457,16 @@ final class SurfaceCallbackContext: Sendable {
             }
         }
         return true
+    }
+
+    @discardableResult
+    func scheduleSearchTotal(_ total: Int) -> Bool {
+        scheduleActivityEvent(.searchTotal(total))
+    }
+
+    @discardableResult
+    func scheduleSearchSelected(_ selected: Int?) -> Bool {
+        scheduleActivityEvent(.searchSelected(selected))
     }
 
     private func scheduleActivityEvent(_ event: GhosttySurfaceCallbackEvent) -> Bool {

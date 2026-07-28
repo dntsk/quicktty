@@ -47,6 +47,33 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_SEARCH_TOTAL {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let total = Int(action.action.search_total.total)
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleSearchTotal(total)
+    }
+
+    if action.tag == GHOSTTY_ACTION_SEARCH_SELECTED {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let rawSelected = Int(action.action.search_selected.selected)
+        let selected: Int? = rawSelected > 0 ? rawSelected : nil
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleSearchSelected(selected)
+    }
+
     if action.tag == GHOSTTY_ACTION_SCROLLBAR {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
             let surface = target.target.surface,
