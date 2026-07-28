@@ -414,6 +414,15 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private(set) var currentTitle: String?
     private(set) var currentWorkingDirectory: String?
 
+    final class SearchState {
+        var needle = ""
+        var total: UInt?
+        var selected: UInt?
+    }
+
+    private(set) var searchState: SearchState?
+    private var searchOverlayView: SearchOverlayView?
+
     var latestWorkingDirectoryForPersistence: String? {
         callbackContextOwnership?.takeUnretainedValue().latestWorkingDirectory
             ?? currentWorkingDirectory
@@ -547,6 +556,9 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         lastSentViewportRestoreTarget = nil
         lastSentViewportRestoreMaximumOffset = nil
         lastSentViewportRestoreSequence = nil
+        searchOverlayView?.removeFromSuperview()
+        searchOverlayView = nil
+        searchState = nil
         guard let surface else {
             callbackContextOwnership?.takeUnretainedValue().deactivateAndDrain()
             stopLocalEventHandling()
@@ -1374,7 +1386,8 @@ extension GhosttySurfaceView {
         guard event.type == .keyDown,
             window?.isKeyWindow == true,
             window?.firstResponder === self,
-            surface != nil
+            surface != nil,
+            searchOverlayView == nil
         else { return false }
 
         switch shortcutRoute(paneID, event) {
@@ -1859,6 +1872,19 @@ extension GhosttySurfaceView {
         if action.clearsViewportRestore {
             clearPendingViewportRestore()
         }
+        switch action {
+        case .findNext:
+            performSearchBinding("search:next")
+            return true
+        case .findPrevious:
+            performSearchBinding("search:previous")
+            return true
+        case .find:
+            // handled by overlay, not via binding
+            return false
+        default:
+            break
+        }
         guard let surface else { return false }
         let coreAction = action.coreAction
         let result = coreAction.withCString { pointer in
@@ -1906,9 +1932,73 @@ extension GhosttySurfaceView {
                 scrollbarDeliveryCount += 1
             #endif
             restoreViewportIfNeeded(after: snapshot)
-        case .searchTotal, .searchSelected:
-            break
+        case .searchTotal(let total):
+            searchState?.total = UInt(max(0, total))
+            updateSearchCountLabel()
+        case .searchSelected(let selected):
+            if let selected, selected > 0 {
+                searchState?.selected = UInt(selected)
+            } else {
+                searchState?.selected = nil
+            }
+            updateSearchCountLabel()
         }
+    }
+
+    func showSearchOverlay() {
+        guard searchOverlayView == nil, surface != nil else { return }
+        let overlay = SearchOverlayView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.onNeedleChange = { [weak self] needle in
+            self?.performSearchBinding("search:\(needle)")
+        }
+        overlay.onNavigate = { [weak self] nav in
+            switch nav {
+            case .next:
+                self?.performSearchBinding("search:next")
+            case .previous:
+                self?.performSearchBinding("search:previous")
+            }
+        }
+        overlay.onClose = { [weak self] clear in
+            self?.hideSearchOverlay(clearSearch: clear)
+        }
+
+        addSubview(overlay)
+        let safeTopAnchor = safeAreaLayoutGuide.topAnchor
+        NSLayoutConstraint.activate([
+            overlay.centerXAnchor.constraint(equalTo: centerXAnchor),
+            overlay.topAnchor.constraint(equalTo: safeTopAnchor, constant: 4),
+        ])
+
+        searchState = SearchState()
+        searchOverlayView = overlay
+        performSearchBinding("start_search")
+        overlay.focus()
+    }
+
+    func hideSearchOverlay(clearSearch: Bool = true) {
+        if clearSearch {
+            performSearchBinding("end_search")
+        }
+        searchOverlayView?.removeFromSuperview()
+        searchOverlayView = nil
+        searchState = nil
+    }
+
+    private func performSearchBinding(_ action: String) {
+        guard let surface else { return }
+        action.withCString { pointer in
+            _ = ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
+        }
+        #if DEBUG
+            bindingActionObservations.append(action)
+        #endif
+    }
+
+    private func updateSearchCountLabel() {
+        guard let state = searchState else { return }
+        searchOverlayView?.updateCount(selected: state.selected, total: state.total)
     }
 
     private func preserveViewportForDetachment() {
