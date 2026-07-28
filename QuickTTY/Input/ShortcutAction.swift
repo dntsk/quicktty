@@ -54,6 +54,9 @@ enum TerminalShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable
     case scrollToSelection = "scroll-to-selection"
     case previousPrompt = "previous-prompt"
     case nextPrompt = "next-prompt"
+    case find = "find"
+    case findNext = "find-next"
+    case findPrevious = "find-previous"
     case selectionLeft = "selection-left"
     case selectionRight = "selection-right"
     case selectionUp = "selection-up"
@@ -82,6 +85,9 @@ enum TerminalShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable
         case .scrollToSelection: "scroll_to_selection"
         case .previousPrompt: "jump_to_prompt:-1"
         case .nextPrompt: "jump_to_prompt:1"
+        case .findNext: "search:next"
+        case .findPrevious: "search:previous"
+        case .find: ""
         case .selectionLeft: "adjust_selection:left"
         case .selectionRight: "adjust_selection:right"
         case .selectionUp: "adjust_selection:up"
@@ -148,6 +154,9 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
     case scrollToSelection = "scroll-to-selection"
     case previousPrompt = "previous-prompt"
     case nextPrompt = "next-prompt"
+    case find = "find"
+    case findNext = "find-next"
+    case findPrevious = "find-previous"
     case selectionLeft = "selection-left"
     case selectionRight = "selection-right"
     case selectionUp = "selection-up"
@@ -186,6 +195,9 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         case .newWorkspace, .renameWorkspace, .deleteWorkspace, .copyURL, .resetTerminal,
             .previousPrompt, .nextPrompt:
             nil
+        case .find: chord(.f, .command)
+        case .findNext: chord(.g, .command)
+        case .findPrevious: chord(.g, .command, .shift)
         case .selectWorkspace1: chord(.one, .command, .option)
         case .selectWorkspace2: chord(.two, .command, .option)
         case .selectWorkspace3: chord(.three, .command, .option)
