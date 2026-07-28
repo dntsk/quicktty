@@ -14,35 +14,11 @@ Future behavior:
 - preserve pane IDs, split layout, active state, and persisted descriptors;
 - never execute a saved command before explicit approval.
 
-## Stateful terminal modes
-
-**Status:** Deferred until visible state is available.
-
-Do not export shortcuts for read-only mode, secure input, or mouse-reporting mode until QuickTTY can present their live state and clean it up with the owning surface.
-
-Required behavior:
-
-- expose only typed actions backed by the pinned Ghostty API;
-- show persistent visible state and synchronized checked menu state;
-- scope state to the correct live surface and clear it on pane close, workspace change, and teardown;
-- preserve normal terminal input and mouse behavior when a mode is inactive;
-- add callback/state synchronization, hidden-pane, hot-reload shortcut, and lifecycle cleanup tests.
-
 ## Interactive terminal search
 
-**Status:** Следующая обязательная интеграция.
+**Status:** Завершено 2026-07-28.
 
-Implement the search UI supported by pinned libghostty instead of exposing only headless search actions.
-
-Required behavior:
-
-- show a QuickTTY-owned search overlay inside the active terminal viewport;
-- route start, search-selection, next, previous, and end actions to the active pane;
-- consume search shortcuts without writing them into the PTY;
-- preserve live surfaces, split layout, focus, and running processes while search opens or closes;
-- synchronize query, selected match, and total match state through real embedded Ghostty callbacks;
-- keep search state scoped to its pane and clear stale state when that pane closes;
-- add callback lifetime, active/inactive pane, hot-reload shortcut, and no-PTY-write tests.
+QuickTTY показывает NSSearchField-оверлей поверх активного терминала с инкрементальным поиском через встроенный search thread Ghostty. Cmd+F открывает поиск, Cmd+G/Cmd+Shift+G или ↑↓ навигируют, Esc очищает подсветку, Enter закрывает с сохранением подсветки. Поиск привязан к одной активной панели и закрывается при смене панели. Debounce 200ms, счётчик совпадений. Контракт зафиксирован в `docs/plans/2026-07-27-interactive-terminal-search-design.md`.
 
 ## Terminal viewport preservation on tab restore
 
