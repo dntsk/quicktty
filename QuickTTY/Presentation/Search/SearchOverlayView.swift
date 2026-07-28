@@ -30,7 +30,8 @@ final class SearchOverlayView: NSView {
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.refusesFirstResponder = false
 
-        countLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        countLabel.font = .monospacedDigitSystemFont(
+            ofSize: NSFont.smallSystemFontSize, weight: .regular)
         countLabel.textColor = .secondaryLabelColor
         countLabel.alignment = .right
         countLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -85,7 +86,9 @@ final class SearchOverlayView: NSView {
 }
 
 extension SearchOverlayView: NSSearchFieldDelegate {
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+    func control(
+        _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
+    ) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.moveUp(_:)):
             onNavigate?(.previous)

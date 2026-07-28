@@ -1876,12 +1876,6 @@ extension GhosttySurfaceView {
         case .find:
             showSearchOverlay()
             return true
-        case .findNext:
-            performSearchBinding("search:next")
-            return true
-        case .findPrevious:
-            performSearchBinding("search:previous")
-            return true
         default:
             break
         }
