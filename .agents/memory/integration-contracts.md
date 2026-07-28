@@ -31,6 +31,7 @@ zig build -Dapp-runtime=none -Dxcframework-target=native -Demit-xcframework=true
 | Mouse и resize | Swift → Ghostty | События направляются только соответствующей surface; broadcast для них запрещён | Принят |
 | Config reload | Swift → Ghostty | Валидная конфигурация применяется ко всем существующим surfaces без перезапуска процессов | Принят |
 | Runtime callbacks | Ghostty → Swift | Bridge преобразует callbacks в Swift-события/команды модели и не раскрывает C payloads | Принят |
+| Scrollbar и viewport restore | Ghostty → Swift → Ghostty | Surface-targeted scrollbar `{total, offset, len}` копируется в coalesced Swift snapshot; при rehost non-bottom offset восстанавливается через pinned `scroll_to_row:<absolute row>` после актуального callback | Принят |
 | Terminal progress | Ghostty → Swift | Surface-targeted OSC 9;4 progress и command-finished fallback копируются в ordered stable events, transient UI и notifications | Принят |
 | Process exit | Ghostty → Swift | Завершение дочернего процесса преобразуется в событие закрытия соответствующей pane | Принят |
 | CWD и metadata | Ghostty → Swift | Bridge возвращает устойчивые Swift-значения, пригодные для модели и сохранения state | Принят |
@@ -54,7 +55,14 @@ zig build -Dapp-runtime=none -Dxcframework-target=native -Demit-xcframework=true
 - Surface config имеет отдельный `userdata`: `Vendor/ghostty/include/ghostty.h:440-453`. Именно surface userdata передаётся в read/confirm/write clipboard callbacks и close callback: `Vendor/ghostty/src/apprt/embedded.zig:639-645`, `Vendor/ghostty/src/apprt/embedded.zig:672-720`, `Vendor/ghostty/src/apprt/embedded.zig:737-755`. Task 3A реализует его как независимо C-retained `SurfaceCallbackContext`, не связанный владением с `GhosttyBridge`; контекст хранит только стабильный `PaneID`, close handler и синхронизированное состояние активности.
 - Reload action содержит обязательный `soft` payload: `Vendor/ghostty/include/ghostty.h:778-781`; union хранит его в `reload_config`: `Vendor/ghostty/include/ghostty.h:945-955`. Bridge полностью копирует payload в устойчивое Swift-значение `.reloadConfig(soft: Bool)` до выхода из callback.
 
-### Terminal progress и activity metadata
+### Scrollbar и восстановление viewport
+
+- `GHOSTTY_ACTION_SCROLLBAR` (`26`) принимается только с `GHOSTTY_TARGET_SURFACE`; scalar payload `{total, offset, len}` копируется в `GhosttyScrollbarState` до MainActor hop. `SurfaceCallbackContext` хранит sequence-tagged latest/pending snapshot под `Synchronization.Mutex`, coalescing только pending scrollbar delivery; progress/command FIFO и teardown callbacks не смешиваются с high-rate scrollbar stream.
+- При rehost `GhosttySurfaceView` атомарно захватывает pending либо latest snapshot. Если viewport не внизу, сохраняется clamped absolute `offset`; bottom-following не фиксируется и продолжает следовать текущему хвосту. После attach QuickTTY отправляет штатный pinned binding `scroll_to_row:<row>`, затем удерживает pending restore до нового scrollbar snapshot, чтобы пережить асинхронный resize/output pipeline и повторно clamp по актуальному `maximumOffset`.
+- Manual mouse scroll, key input, paste, terminal scroll actions, `clear-screen`, `reset-terminal`, `previous-prompt` и `next-prompt` сбрасывают pending restore. Close/deactivate очищает snapshot и pending state; queued delivery не может перейти к replacement surface с тем же `PaneID`.
+- ABI contract фиксирует tag `26` и layout `ghostty_action_scrollbar_s` (`size/stride 24`, alignment `8`). Pinned Ghostty не предоставляет отдельного C save/restore API; absolute restore выполняется только через существующий `ghostty_surface_binding_action`.
+
+## Terminal progress и activity metadata
 
 - `GHOSTTY_ACTION_PROGRESS_REPORT` (`56`) и `GHOSTTY_ACTION_COMMAND_FINISHED` (`58`) принимаются только с `GHOSTTY_TARGET_SURFACE`. Payload состоит из scalar values и синхронно копируется в `GhosttyProgressReport`/`GhosttyCommandFinished` до MainActor hop; C target, surface handle и upstream enums bridge не покидают.
 - Progress и command-finished используют одну ordered FIFO в `SurfaceCallbackContext`: sequence `working → remove` и взаимный порядок с command fallback нельзя coalesce-ить. Deactivate дренирует очередь; старый context не доставляет metadata replacement surface с тем же `PaneID`.
@@ -261,6 +269,7 @@ Real PTY test создаёт только временный explicit config с 
 
 | Дата | Изменение | Причина |
 |---|---|---|
+| 2026-07-27 | Добавлен surface-targeted scrollbar callback contract и rehost-safe viewport restore через `scroll_to_row`; bottom-following/manual actions/teardown имеют приоритет. `make lint`, Debug build и build-for-testing прошли; runtime integration tests требуют display | Убрать промотку большого фонового вывода при возврате вкладки без изменения pinned Ghostty и без пересоздания surface/PTY |
 | 2026-07-23 | Добавлены transactional `GhosttySplitAppearance`, Ghostty-style dimming, раздельные pane/window/first-responder states и window-transfer-safe observable presentation; cursor остаётся upstream hollow/normal focus behavior. Пробная frame полностью удалена после visual smoke. Финальный `make check`: 569 тестов в 27 suites, 0 failures | Сделать active pane и активность окна различимыми без собственного cursor renderer, pane border, изменения PTY/layout или recreation surfaces |
 | 2026-07-23 | Добавлены surface-targeted title/tab-title/tab-prompt callbacks со strict synchronous UTF-8 copy, coalescing и teardown/same-`PaneID` safety; ephemeral active-pane title отделён от persisted exact override, inline rename сохраняет focus и Quake lifecycle. Финальный `make check`: 562 теста в 27 suites, 0 failures | Повторить opaque title semantics pinned Ghostty без persistence automatic title, PTY writes и преждевременного AI protocol/parsing |
 | 2026-07-23 | Добавлены stable `open_url`, injectable MainActor workspace policy и surface-local `mouse_shape` через cursor rects; callback payloads копируются до return, accepted open доставляется one-shot, `mouse_over_link` и preview отсутствуют | URL detection/highlight/click остаются у pinned Ghostty, а QuickTTY изолирует только native open и cursor presentation без изменения selection, TUI mouse reporting, `copy-url` или shortcut grammar |

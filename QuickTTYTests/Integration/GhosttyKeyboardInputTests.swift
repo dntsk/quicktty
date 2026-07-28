@@ -241,6 +241,10 @@ extension GhosttyBridgeTests {
         let surfaceIdentity = ObjectIdentifier(surface)
         let window = makeKeyboardTestWindow()
         embedKeyboardSurface(surface, in: window)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        embedKeyboardSurface(surface, in: window)
         let defaultClear = try makeKeyboardEvent(
             type: .keyDown,
             modifierFlags: [.command],
@@ -259,6 +263,7 @@ extension GhosttyBridgeTests {
         )
 
         #expect(surface.performKeyEquivalent(with: defaultClear))
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
         #expect(surface.terminalActionObservationsForTesting.last?.action == .clearScreen)
         #expect(!surface.performKeyEquivalent(with: defaultNewTab))
 

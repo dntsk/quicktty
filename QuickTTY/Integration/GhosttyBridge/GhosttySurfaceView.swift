@@ -133,6 +133,24 @@ func conservativeMinimumSurfaceSize(
     )
 }
 
+struct GhosttyScrollbarState: Equatable, Sendable {
+    let total: UInt64
+    let offset: UInt64
+    let len: UInt64
+
+    var maximumOffset: UInt64 {
+        total > len ? total - len : 0
+    }
+
+    var isAtBottom: Bool {
+        offset >= maximumOffset
+    }
+
+    var clampedOffset: UInt64 {
+        min(offset, maximumOffset)
+    }
+}
+
 struct GhosttyMouseShape: RawRepresentable, Equatable, Hashable, Sendable {
     let rawValue: Int32
 
@@ -316,6 +334,24 @@ enum GhosttySurfaceInputReplay {
     case flagsChanged
 }
 
+struct GhosttyScrollbarSnapshot: Equatable, Sendable {
+    let state: GhosttyScrollbarState
+    let sequence: UInt64
+}
+
+extension TerminalShortcutAction {
+    fileprivate var clearsViewportRestore: Bool {
+        switch self {
+        case .paste, .pasteSelection, .clearScreen,
+            .scrollTop, .scrollBottom, .scrollPageUp, .scrollPageDown,
+            .scrollToSelection, .previousPrompt, .nextPrompt, .resetTerminal:
+            true
+        default:
+            false
+        }
+    }
+}
+
 enum GhosttySurfaceCallbackEvent: Sendable {
     case clipboardRead(token: UInt, location: GhosttyClipboardLocation)
     case clipboardConfirmation(GhosttyClipboardConfirmationRequest)
@@ -331,6 +367,7 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     case pwdChanged(String)
     case progressReport(GhosttyProgressReport)
     case commandFinished(GhosttyCommandFinished)
+    case scrollbarChanged(GhosttyScrollbarSnapshot)
 }
 
 func ghosttyRuntimeCloseSurfaceCallback(
@@ -364,6 +401,13 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private var keyTextAccumulator: [String]?
     private var currentMouseShape: GhosttyMouseShape = .text
     private var lastPerformKeyEvent: TimeInterval?
+    private var latestScrollbarSnapshot: GhosttyScrollbarSnapshot?
+    private var pendingViewportRestoreOffset: UInt64?
+    private var pendingViewportRestoreBaselineSequence: UInt64?
+    private var needsInitialViewportRestore = false
+    private var lastSentViewportRestoreTarget: UInt64?
+    private var lastSentViewportRestoreMaximumOffset: UInt64?
+    private var lastSentViewportRestoreSequence: UInt64?
     private(set) var isActive = false
     private(set) var currentTitle: String?
     private(set) var currentWorkingDirectory: String?
@@ -384,6 +428,8 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         private var mouseScrollObservations: [GhosttySurfaceMouseScrollObservation] = []
         private var mouseShapeUpdateCount = 0
         private var terminalActionObservations: [GhosttySurfaceTerminalActionObservation] = []
+        private var bindingActionObservations: [String] = []
+        private var scrollbarDeliveryCount = 0
         private var clipboardObservations: [GhosttySurfaceClipboardObservation] = []
         var clipboardObservationHandlerForTesting:
             (@MainActor @Sendable (GhosttySurfaceClipboardObservation) -> Void)?
@@ -409,6 +455,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     }
 
     override func keyDown(with event: NSEvent) {
+        clearPendingViewportRestore()
         inputRoute(paneID, event)
     }
 
@@ -491,6 +538,13 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     }
 
     func close() {
+        latestScrollbarSnapshot = nil
+        pendingViewportRestoreOffset = nil
+        pendingViewportRestoreBaselineSequence = nil
+        needsInitialViewportRestore = false
+        lastSentViewportRestoreTarget = nil
+        lastSentViewportRestoreMaximumOffset = nil
+        lastSentViewportRestoreSequence = nil
         guard let surface else {
             callbackContextOwnership?.takeUnretainedValue().deactivateAndDrain()
             stopLocalEventHandling()
@@ -555,6 +609,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if window !== newWindow {
+            preserveViewportForDetachment()
             stopObservingWindow(window)
             setSurfaceFocused(false)
         }
@@ -564,7 +619,13 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         startObservingWindow(window)
+        prepareViewportRestoreAfterAttach()
         synchronizeWindowState()
+        if let snapshot = callbackContextOwnership?.takeUnretainedValue()
+            .scrollbarSnapshotForViewportCapture() ?? latestScrollbarSnapshot
+        {
+            restoreViewportIfNeeded(after: snapshot, isInitial: true)
+        }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -673,6 +734,39 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         var terminalActionObservationsForTesting: [GhosttySurfaceTerminalActionObservation] {
             terminalActionObservations
+        }
+
+        var bindingActionObservationsForTesting: [String] {
+            bindingActionObservations
+        }
+
+        var scrollbarStateForTesting: GhosttyScrollbarState? {
+            latestScrollbarSnapshot?.state
+        }
+
+        var scrollbarDeliveryCountForTesting: Int {
+            scrollbarDeliveryCount
+        }
+
+        var pendingViewportRestoreOffsetForTesting: UInt64? {
+            pendingViewportRestoreOffset
+        }
+
+        @discardableResult
+        func scheduleScrollbarCallbackForTesting(
+            total: UInt64,
+            offset: UInt64,
+            len: UInt64,
+            target: GhosttyActivityCallbackTargetForTesting = .surface
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeScrollbarCallbackForTesting(
+                surface: surface,
+                total: total,
+                offset: offset,
+                len: len,
+                target: target
+            )
         }
 
         var clipboardObservationsForTesting: [GhosttySurfaceClipboardObservation] {
@@ -916,6 +1010,9 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         let minimumSize = conservativeMinimumSurfaceSize(for: ghostty_surface_size(surface))
         guard width >= minimumSize.widthPixels, height >= minimumSize.heightPixels else { return }
 
+        if pendingViewportRestoreOffset != nil, pendingViewportRestoreBaselineSequence == nil {
+            prepareViewportRestoreAfterAttach()
+        }
         ghostty_surface_set_size(surface, width, height)
 
         #if DEBUG
@@ -1141,6 +1238,7 @@ extension GhosttySurfaceView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        clearPendingViewportRestore()
         guard let surface else { return }
 
         var x = event.scrollingDeltaX
@@ -1282,6 +1380,7 @@ extension GhosttySurfaceView {
             lastPerformKeyEvent = nil
             return false
         case .handled:
+            clearPendingViewportRestore()
             lastPerformKeyEvent = nil
             return true
         case .unmatched:
@@ -1334,6 +1433,7 @@ extension GhosttySurfaceView {
     }
 
     private func captureKeyDown(_ event: NSEvent) -> GhosttySurfaceInputCapture {
+        clearPendingViewportRestore()
         guard let translationEvent = translationEvent(for: event) else {
             return GhosttySurfaceInputCapture(wasProcessed: false, replay: nil)
         }
@@ -1399,6 +1499,7 @@ extension GhosttySurfaceView {
         text: GhosttySurfaceInputReplay.KeyText,
         composing: Bool
     ) -> Bool {
+        clearPendingViewportRestore()
         guard let translationEvent = translationEvent(for: event) else { return false }
 
         switch text {
@@ -1672,6 +1773,7 @@ extension GhosttySurfaceView {
 
     func insertText(_ string: Any, replacementRange _: NSRange) {
         guard let surface else { return }
+        clearPendingViewportRestore()
 
         let text: String
         switch string {
@@ -1731,11 +1833,11 @@ extension GhosttySurfaceView {
     }
 
     @IBAction func paste(_ sender: Any?) {
-        _ = terminalActionRoute(paneID, .paste)
+        _ = dispatchTerminalAction(.paste)
     }
 
     @IBAction func pasteSelection(_ sender: Any?) {
-        _ = terminalActionRoute(paneID, .pasteSelection)
+        _ = dispatchTerminalAction(.pasteSelection)
     }
 
     @IBAction override func selectAll(_ sender: Any?) {
@@ -1743,7 +1845,18 @@ extension GhosttySurfaceView {
     }
 
     @discardableResult
+    private func dispatchTerminalAction(_ action: TerminalShortcutAction) -> Bool {
+        if action.clearsViewportRestore {
+            clearPendingViewportRestore()
+        }
+        return terminalActionRoute(paneID, action)
+    }
+
+    @discardableResult
     func performTerminalShortcutAction(_ action: TerminalShortcutAction) -> Bool {
+        if action.clearsViewportRestore {
+            clearPendingViewportRestore()
+        }
         guard let surface else { return false }
         let coreAction = action.coreAction
         let result = coreAction.withCString { pointer in
@@ -1785,6 +1898,95 @@ extension GhosttySurfaceView {
             currentWorkingDirectory = workingDirectory
         case .progressReport, .commandFinished:
             break
+        case .scrollbarChanged(let snapshot):
+            latestScrollbarSnapshot = snapshot
+            #if DEBUG
+                scrollbarDeliveryCount += 1
+            #endif
+            restoreViewportIfNeeded(after: snapshot)
+        }
+    }
+
+    private func preserveViewportForDetachment() {
+        guard window != nil else { return }
+        pendingViewportRestoreOffset = nil
+        pendingViewportRestoreBaselineSequence = nil
+        needsInitialViewportRestore = false
+        lastSentViewportRestoreTarget = nil
+        lastSentViewportRestoreMaximumOffset = nil
+        lastSentViewportRestoreSequence = nil
+
+        let snapshot =
+            callbackContextOwnership?.takeUnretainedValue()
+            .scrollbarSnapshotForViewportCapture()
+            ?? latestScrollbarSnapshot
+        guard let state = snapshot?.state, !state.isAtBottom else { return }
+        pendingViewportRestoreOffset = state.clampedOffset
+    }
+
+    private func prepareViewportRestoreAfterAttach() {
+        guard window != nil, pendingViewportRestoreOffset != nil else { return }
+        let snapshot =
+            callbackContextOwnership?.takeUnretainedValue()
+            .scrollbarSnapshotForViewportCapture()
+            ?? latestScrollbarSnapshot
+        pendingViewportRestoreBaselineSequence = snapshot?.sequence ?? 0
+        needsInitialViewportRestore = true
+        lastSentViewportRestoreTarget = nil
+        lastSentViewportRestoreMaximumOffset = nil
+        lastSentViewportRestoreSequence = nil
+    }
+
+    private func clearPendingViewportRestore() {
+        pendingViewportRestoreOffset = nil
+        pendingViewportRestoreBaselineSequence = nil
+        needsInitialViewportRestore = false
+        lastSentViewportRestoreTarget = nil
+        lastSentViewportRestoreMaximumOffset = nil
+        lastSentViewportRestoreSequence = nil
+    }
+
+    private func restoreViewportIfNeeded(
+        after snapshot: GhosttyScrollbarSnapshot,
+        isInitial: Bool = false
+    ) {
+        guard let surface, window != nil, let pendingViewportRestoreOffset,
+            let baselineSequence = pendingViewportRestoreBaselineSequence
+        else { return }
+
+        let isInitialRestore = isInitial || needsInitialViewportRestore
+        guard isInitialRestore || snapshot.sequence > baselineSequence else { return }
+
+        let target = min(pendingViewportRestoreOffset, snapshot.state.maximumOffset)
+        if !isInitialRestore,
+            snapshot.sequence > (lastSentViewportRestoreSequence ?? baselineSequence),
+            snapshot.state.clampedOffset == target
+        {
+            clearPendingViewportRestore()
+            return
+        }
+
+        if isInitialRestore {
+            needsInitialViewportRestore = false
+        } else {
+            guard snapshot.sequence > (lastSentViewportRestoreSequence ?? baselineSequence) else {
+                return
+            }
+            guard
+                lastSentViewportRestoreTarget != target
+                    || lastSentViewportRestoreMaximumOffset != snapshot.state.maximumOffset
+            else { return }
+        }
+
+        let action = "scroll_to_row:\(target)"
+        lastSentViewportRestoreTarget = target
+        lastSentViewportRestoreMaximumOffset = snapshot.state.maximumOffset
+        lastSentViewportRestoreSequence = snapshot.sequence
+        #if DEBUG
+            bindingActionObservations.append(action)
+        #endif
+        action.withCString { pointer in
+            _ = ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
         }
     }
 
@@ -1935,6 +2137,9 @@ final class SurfaceCallbackContext: Sendable {
         var pendingTabTitles: [String] = []
         var pendingTabTitlePromptCount = 0
         var pendingWorkingDirectory: String?
+        var latestScrollbarSnapshot: GhosttyScrollbarSnapshot?
+        var pendingScrollbarSnapshot: GhosttyScrollbarSnapshot?
+        var nextScrollbarSequence: UInt64 = 0
         var pendingActivityEvents: [GhosttySurfaceCallbackEvent] = []
         var reads: [UInt: PendingRead] = [:]
         var writes: [UUID: GhosttyClipboardConfirmationRequest] = [:]
@@ -1961,6 +2166,9 @@ final class SurfaceCallbackContext: Sendable {
             state.pendingTabTitles.removeAll()
             state.pendingTabTitlePromptCount = 0
             state.pendingWorkingDirectory = nil
+            state.latestScrollbarSnapshot = nil
+            state.pendingScrollbarSnapshot = nil
+            state.nextScrollbarSequence = 0
             state.pendingActivityEvents.removeAll()
             let tokens = Array(state.reads.keys)
             state.reads.removeAll()
@@ -2223,6 +2431,30 @@ final class SurfaceCallbackContext: Sendable {
         scheduleActivityEvent(.commandFinished(command))
     }
 
+    @discardableResult
+    func scheduleScrollbarState(_ scrollbarState: GhosttyScrollbarState) -> Bool {
+        let result = state.withLock { state in
+            guard state.isActive else { return (accepted: false, shouldSchedule: false) }
+            state.nextScrollbarSequence &+= 1
+            let snapshot = GhosttyScrollbarSnapshot(
+                state: scrollbarState,
+                sequence: state.nextScrollbarSequence
+            )
+            let shouldSchedule = state.pendingScrollbarSnapshot == nil
+            state.latestScrollbarSnapshot = snapshot
+            state.pendingScrollbarSnapshot = snapshot
+            return (accepted: true, shouldSchedule: shouldSchedule)
+        }
+        guard result.accepted else { return false }
+
+        if result.shouldSchedule {
+            Task { @MainActor [self] in
+                deliverScrollbarStateIfActive()
+            }
+        }
+        return true
+    }
+
     private func scheduleActivityEvent(_ event: GhosttySurfaceCallbackEvent) -> Bool {
         let result = state.withLock { state in
             guard state.isActive else { return (accepted: false, shouldSchedule: false) }
@@ -2358,6 +2590,25 @@ final class SurfaceCallbackContext: Sendable {
         }
         guard let workingDirectory else { return }
         eventHandler(paneID, .pwdChanged(workingDirectory))
+    }
+
+    func scrollbarSnapshotForViewportCapture() -> GhosttyScrollbarSnapshot? {
+        state.withLock { state in
+            guard state.isActive else { return nil }
+            return state.pendingScrollbarSnapshot ?? state.latestScrollbarSnapshot
+        }
+    }
+
+    @MainActor
+    private func deliverScrollbarStateIfActive() {
+        let snapshot = state.withLock { state -> GhosttyScrollbarSnapshot? in
+            guard state.isActive else { return nil }
+            let snapshot = state.pendingScrollbarSnapshot
+            state.pendingScrollbarSnapshot = nil
+            return snapshot
+        }
+        guard let snapshot else { return }
+        eventHandler(paneID, .scrollbarChanged(snapshot))
     }
 
     @MainActor

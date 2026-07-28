@@ -47,6 +47,24 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_SCROLLBAR {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        return context.scheduleScrollbarState(
+            GhosttyScrollbarState(
+                total: action.action.scrollbar.total,
+                offset: action.action.scrollbar.offset,
+                len: action.action.scrollbar.len
+            )
+        )
+    }
+
     if action.tag == GHOSTTY_ACTION_PROGRESS_REPORT {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
             let surface = target.target.surface,
@@ -227,6 +245,34 @@ private func copyGhosttyCommandFinished(
             nil,
             ghostty_target_s(tag: targetTag, target: targetValue),
             ghostty_action_s(tag: GHOSTTY_ACTION_PROGRESS_REPORT, action: payload)
+        )
+    }
+
+    func ghosttyRuntimeScrollbarCallbackForTesting(
+        surface: ghostty_surface_t,
+        total: UInt64,
+        offset: UInt64,
+        len: UInt64,
+        target: GhosttyActivityCallbackTargetForTesting
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        var payload = ghostty_action_u()
+        payload.scrollbar = ghostty_action_scrollbar_s(
+            total: total,
+            offset: offset,
+            len: len
+        )
+        return ghosttyRuntimeActionCallback(
+            nil,
+            ghostty_target_s(tag: targetTag, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_SCROLLBAR, action: payload)
         )
     }
 
@@ -715,6 +761,7 @@ final class GhosttyBridge {
             UInt32(GHOSTTY_ACTION_NEW_TAB.rawValue),
             UInt32(GHOSTTY_ACTION_CLOSE_ALL_WINDOWS.rawValue),
             UInt32(GHOSTTY_ACTION_TOGGLE_VISIBILITY.rawValue),
+            UInt32(GHOSTTY_ACTION_SCROLLBAR.rawValue),
             UInt32(GHOSTTY_ACTION_MOUSE_SHAPE.rawValue),
             UInt32(GHOSTTY_ACTION_OPEN_CONFIG.rawValue),
             UInt32(GHOSTTY_ACTION_RELOAD_CONFIG.rawValue),
@@ -724,7 +771,12 @@ final class GhosttyBridge {
             UInt32(GHOSTTY_ACTION_PROGRESS_REPORT.rawValue),
             UInt32(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue),
         ]
-        return actual == [0, 1, 2, 5, 12, 36, 40, 47, 48, 54, 55, 56, 58]
+        let scrollbarPayloadMatchesPinnedHeader =
+            MemoryLayout<ghostty_action_scrollbar_s>.size == 24
+            && MemoryLayout<ghostty_action_scrollbar_s>.stride == 24
+            && MemoryLayout<ghostty_action_scrollbar_s>.alignment == 8
+        return actual == [0, 1, 2, 5, 12, 26, 36, 40, 47, 48, 54, 55, 56, 58]
+            && scrollbarPayloadMatchesPinnedHeader
     }
 
     #if DEBUG
@@ -947,6 +999,11 @@ final class GhosttyBridge {
             surfaceProgressHandler?(paneID, report)
         case .commandFinished(let command):
             surfaceCommandFinishedHandler?(paneID, command)
+        case .scrollbarChanged:
+            surface.processCallbackEvent(
+                event,
+                confirmationHandler: clipboardConfirmationHandler
+            )
         default:
             surface.processCallbackEvent(
                 event,

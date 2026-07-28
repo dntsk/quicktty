@@ -96,6 +96,22 @@ do
     fi
 done
 
+for scrollbar_contract in \
+    'action.tag == GHOSTTY_ACTION_SCROLLBAR' \
+    'action.action.scrollbar.total' \
+    'context.scheduleScrollbarState' \
+    'var pendingScrollbarSnapshot: GhosttyScrollbarSnapshot?' \
+    'state.pendingScrollbarSnapshot = snapshot' \
+    'scrollbarSnapshotForViewportCapture' \
+    'deliverScrollbarStateIfActive' \
+    'case .scrollbarChanged(let snapshot)'
+do
+    if ! grep -Fq "$scrollbar_contract" "$bridge" "$surface"; then
+        printf 'surface scrollbar callback contract is missing: %s\n' "$scrollbar_contract" >&2
+        exit 1
+    fi
+done
+
 title_route='case .titleChanged(let title):
             surface.processCallbackEvent(
                 event,

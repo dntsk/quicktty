@@ -341,6 +341,205 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func scrollbarCallbacksCopyAndCoalesceLatestState() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 10, len: 20))
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 20))
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 30, len: 20))
+
+        #expect(surface.scrollbarDeliveryCountForTesting == 0)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(
+            surface.scrollbarStateForTesting
+                == GhosttyScrollbarState(total: 100, offset: 30, len: 20)
+        )
+        #expect(surface.scrollbarDeliveryCountForTesting == 1)
+    }
+
+    @Test
+    func scrollbarCallbackRejectsNonSurfaceTargets() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(
+            !surface.scheduleScrollbarCallbackForTesting(
+                total: 100,
+                offset: 10,
+                len: 20,
+                target: .app
+            )
+        )
+        #expect(
+            !surface.scheduleScrollbarCallbackForTesting(
+                total: 100,
+                offset: 10,
+                len: 20,
+                target: .unknown
+            )
+        )
+    }
+
+    @Test
+    func queuedScrollbarCallbackDoesNotReachSamePaneIDReplacement() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let oldSurface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(oldSurface.scheduleScrollbarCallbackForTesting(total: 100, offset: 10, len: 20))
+        bridge.closeSurface(id: paneID)
+        let replacement = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        await Task.yield()
+        await Task.yield()
+
+        #expect(oldSurface.scrollbarStateForTesting == nil)
+        #expect(replacement.scrollbarStateForTesting == nil)
+    }
+
+    @Test
+    func nonBottomScrollbarOffsetSurvivesRehostAndClampsToCurrentMaximum() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+
+        embed(surface, in: window)
+        #expect(surface.bindingActionObservationsForTesting.first == "scroll_to_row:20")
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 35, offset: 0, len: 30))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.bindingActionObservationsForTesting.last == "scroll_to_row:5")
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 35, offset: 5, len: 30))
+        await Task.yield()
+        await Task.yield()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+    }
+
+    @Test
+    func bottomScrollbarStateDoesNotScheduleViewportRestore() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 90, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        embed(surface, in: window)
+
+        #expect(surface.bindingActionObservationsForTesting.isEmpty)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+    }
+
+    @Test
+    func manualViewportActionClearsPendingRestore() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+
+        surface.paste(nil)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+
+        embed(surface, in: window)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        surface.pasteSelection(nil)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+
+        embed(surface, in: window)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        _ = surface.performTerminalShortcutAction(.clearScreen)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+
+        embed(surface, in: window)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        _ = surface.performTerminalShortcutAction(.previousPrompt)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+
+        embed(surface, in: window)
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        await Task.yield()
+        await Task.yield()
+        surface.removeFromSuperview()
+        #expect(surface.pendingViewportRestoreOffsetForTesting == 20)
+        _ = surface.performTerminalShortcutAction(.nextPrompt)
+        #expect(surface.pendingViewportRestoreOffsetForTesting == nil)
+
+        embed(surface, in: window)
+        #expect(surface.bindingActionObservationsForTesting.isEmpty)
+    }
+
+    @Test
+    func queuedScrollbarCallbackIsDroppedAfterSurfaceClose() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 20, len: 10))
+        bridge.closeSurface(id: surface.paneID)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.scrollbarStateForTesting == nil)
+        #expect(!surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 30, len: 10))
+    }
+
+    @Test
     func progressAndCommandCallbacksConvertExactPinnedPayloads() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

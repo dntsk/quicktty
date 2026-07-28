@@ -44,6 +44,12 @@ Required behavior:
 - keep search state scoped to its pane and clear stale state when that pane closes;
 - add callback lifetime, active/inactive pane, hot-reload shortcut, and no-PTY-write tests.
 
+## Terminal viewport preservation on tab restore
+
+**Status:** Завершено 2026-07-27.
+
+При rehost вкладки QuickTTY сохраняет последний scrollbar offset не внизу и восстанавливает его через штатный Ghostty `scroll_to_row:<row>` после актуального resize/output callback. Bottom-following и ручные scroll/input actions не перехватываются; callbacks очищаются при teardown и не переходят к replacement surface с тем же `PaneID`. Контракт закреплён integration regressions в `QuickTTYTests/Integration/GhosttySurfaceViewTests.swift`.
+
 ## URL hover and opening
 
 **Status:** Завершено 2026-07-23.
