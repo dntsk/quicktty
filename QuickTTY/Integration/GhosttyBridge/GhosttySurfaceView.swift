@@ -1873,15 +1873,15 @@ extension GhosttySurfaceView {
             clearPendingViewportRestore()
         }
         switch action {
+        case .find:
+            showSearchOverlay()
+            return true
         case .findNext:
             performSearchBinding("search:next")
             return true
         case .findPrevious:
             performSearchBinding("search:previous")
             return true
-        case .find:
-            // handled by overlay, not via binding
-            return false
         default:
             break
         }
