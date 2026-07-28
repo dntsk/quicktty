@@ -1153,6 +1153,76 @@ extension GhosttyBridgeTests {
         #expect(GhosttyBridge.callbackContextCountForTesting == initialAppContextCount)
         #expect(GhosttyBridge.surfaceCallbackContextCountForTesting == initialSurfaceContextCount)
     }
+
+    // MARK: - Search
+
+    @Test
+    func searchStateIsNilUntilOverlayShown() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(surface.searchState == nil)
+    }
+
+    @Test
+    func showAndHideSearchOverlay() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        surface.showSearchOverlay()
+        #expect(surface.searchState != nil)
+        #expect(surface.bindingActionObservationsForTesting.contains("start_search"))
+
+        surface.hideSearchOverlay(clearSearch: true)
+        #expect(surface.searchState == nil)
+        #expect(surface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
+    func hideSearchOverlayWithoutClear() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        surface.showSearchOverlay()
+        surface.hideSearchOverlay(clearSearch: false)
+
+        #expect(surface.searchState == nil)
+        #expect(!surface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
+    func showSearchOverlayIsIdempotent() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+
+        surface.showSearchOverlay()
+        let firstState = surface.searchState
+        surface.showSearchOverlay()
+
+        // Second call should be a no-op: same state, no duplicate bindings.
+        #expect(surface.searchState === firstState)
+        let startCount = surface.bindingActionObservationsForTesting
+            .filter { $0 == "start_search" }.count
+        #expect(startCount == 1)
+    }
 }
 
 private func syntheticSurfaceSize(
