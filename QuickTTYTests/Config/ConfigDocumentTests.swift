@@ -32,6 +32,7 @@ struct ConfigDocumentTests {
                     "quicktty-quake-animation-duration",
                     "quicktty-quake-padding",
                     "quicktty-quake-pin-to-screen",
+                    "quicktty-update-channel",
                     "quicktty-hide-on-focus-loss",
                     "quicktty-restore-workspaces",
                     "quicktty-config-editor",

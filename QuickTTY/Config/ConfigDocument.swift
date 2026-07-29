@@ -17,6 +17,7 @@ struct ConfigDiagnostic: Error, Equatable, Sendable {
         case globalShortcutConflict(chord: ShortcutChord, local: ShortcutAction)
         case invalidNumber(expected: String)
         case invalidBoolean
+        case invalidValue(String)
         case invalidConfigEditor
     }
 
@@ -62,6 +63,8 @@ extension ConfigDiagnostic: LocalizedError {
             return "\(prefix): expected \(expected)."
         case .invalidBoolean:
             return "\(prefix): expected 'true' or 'false'."
+        case .invalidValue(let expected):
+            return "\(prefix): \(expected)"
         case .invalidConfigEditor:
             return "\(prefix): must not contain NUL or line breaks."
         }
@@ -607,6 +610,18 @@ struct ConfigDocument: Equatable, Sendable {
                 return
             }
             config.quakePinToScreen = value == "true"
+        case .updateChannel:
+            guard let channel = UpdateChannel(rawValue: value) else {
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: line,
+                        key: key.rawValue,
+                        reason: .invalidValue("expected 'stable' or 'beta'")
+                    )
+                )
+                return
+            }
+            config.updateChannel = channel
         case .hideOnFocusLoss:
             guard value == "true" || value == "false" else {
                 diagnostics.append(

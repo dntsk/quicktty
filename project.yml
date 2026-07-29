@@ -39,6 +39,8 @@ targets:
       - sdk: Carbon.framework
       - framework: Vendor/ghostty/macos/GhosttyKit.xcframework
         embed: false
+      - framework: Vendor/sparkle/Sparkle.xcframework
+        embed: true
     postBuildScripts:
       - name: Copy Ghostty Runtime Resources
         script: |
@@ -55,6 +57,8 @@ targets:
         OTHER_LDFLAGS: "$(inherited) -lstdc++"
         PRODUCT_BUNDLE_IDENTIFIER: com.dntsk.QuickTTY
         PRODUCT_NAME: QuickTTY
+        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
+        INFOPLIST_KEY_SUFeedURL: ""
   QuickTTYTests:
     type: bundle.unit-test
     platform: macOS
