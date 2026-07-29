@@ -84,7 +84,7 @@ test_development_team=ABCDE12345
 test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
 default_developer_dir=/Applications/Xcode.app/Contents/Developer
 test_developer_dir=$default_developer_dir
-test_release_label=0.1.2.beta-1
+test_release_label=0.1.2.beta-2
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"

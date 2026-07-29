@@ -20,7 +20,7 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/release-helpers.sh"
 
 MARKETING_VERSION=0.1.2
-BUILD_NUMBER=7
+BUILD_NUMBER=8
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY

@@ -126,6 +126,14 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func betaUpdateFeedUsesTrackedRepositoryAppcast() {
+        #expect(
+            AppDelegate.betaFeedURL.absoluteString
+                == "https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml"
+        )
+    }
+
+    @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
         #expect(
             AppDelegate.shouldTerminateAfterLastWindowClosed(

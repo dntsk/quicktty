@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>QuickTTY</title>
+        <item>
+            <title>0.1.2</title>
+            <pubDate>Wed, 29 Jul 2026 19:11:12 +0300</pubDate>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/dntsk/quicktty/releases/download/v0.1.2.beta-1/QuickTTY-0.1.2.beta-1-arm64.dmg" length="10269509" type="application/octet-stream"/>
+        </item>
+    </channel>
+</rss>

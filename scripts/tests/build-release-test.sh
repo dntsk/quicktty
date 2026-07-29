@@ -65,7 +65,7 @@ sh -n "$ghostty_build_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
     || fail 'release build script does not set the trusted PATH'
 for required_build_setting in \
-    'BUILD_NUMBER=7' \
+    'BUILD_NUMBER=8' \
     'BUNDLE_IDENTIFIER=com.dntsk.QuickTTY' \
     'MARKETING_VERSION=0.1.2' \
     'PRODUCT_NAME=QuickTTY'
@@ -83,10 +83,12 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
-grep -F -x '        CURRENT_PROJECT_VERSION: 7' "$project_spec" >/dev/null \
-    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 7'
+grep -F -x '        CURRENT_PROJECT_VERSION: 8' "$project_spec" >/dev/null \
+    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 8'
 grep -F -x '        MARKETING_VERSION: 0.1.2' "$project_spec" >/dev/null \
     || fail 'project spec does not set MARKETING_VERSION to 0.1.2'
+grep -F -x '        INFOPLIST_KEY_SUPublicEDKey: e7y/m6sTWYFRLzJiBlvus8EZs8oeZ6nyQzayNfJEdrU=' "$project_spec" >/dev/null \
+    || fail 'project spec does not set the Sparkle Ed25519 public key'
 
 invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_build_script" 2>&1) \
     && fail 'invalid Ghostty force-rebuild flag unexpectedly succeeded'
@@ -107,14 +109,14 @@ unset APPLE_ID
 
 . "$helpers"
 
-assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.2.beta-1
+assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.2.beta-2
 assert_equals "$RELEASE_ARCHIVE_NAME" QuickTTY.xcarchive
-assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.2.beta-1-arm64.dmg
-assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.2.beta-1-stage
+assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.2.beta-2-arm64.dmg
+assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.2.beta-2-stage
 assert_equals "$RELEASE_APPCAST_DIRECTORY_NAME" appcast
 assert_equals "$RELEASE_APPCAST_NAME" appcast.xml
 assert_equals "$(release_appcast_download_url_prefix)" \
-    https://github.com/dntsk/quicktty/releases/download/v0.1.2.beta-1/
+    https://github.com/dntsk/quicktty/releases/download/v0.1.2.beta-2/
 release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'
@@ -238,7 +240,7 @@ appcast_fixture_dmg=$tmp_root/$RELEASE_DMG_NAME
 appcast_fixture=$tmp_root/$RELEASE_APPCAST_NAME
 printf 'final DMG\n' >"$appcast_fixture_dmg"
 appcast_fixture_size=$(/usr/bin/stat -f '%z' "$appcast_fixture_dmg")
-printf '<enclosure url="%s%s" length="%s" type="application/octet-stream"/>\n' \
+printf '<enclosure url="%s%s" sparkle:edSignature="fixture" length="%s" type="application/octet-stream"/>\n' \
     "$(release_appcast_download_url_prefix)" "$RELEASE_DMG_NAME" "$appcast_fixture_size" >"$appcast_fixture"
 release_verify_appcast "$appcast_fixture" "$appcast_fixture_dmg" /usr/bin/stat /usr/bin/grep
 printf '<enclosure url="%s" length="%s" type="application/octet-stream"/>\n' \

@@ -4,6 +4,12 @@ import OSLog
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let startupErrorMessage = "QuickTTY could not start"
+    static let stableFeedURL = URL(
+        string: "https://github.com/dntsk/quicktty/releases/latest/download/appcast.xml"
+    )!
+    static let betaFeedURL = URL(
+        string: "https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml"
+    )!
 
     private let logger = Logger(
         subsystem: "com.dntsk.QuickTTY",
@@ -100,12 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             windowCoordinator.applyConfiguration(config)
 
-            let releaseBase = "https://github.com/dntsk/quicktty/releases"
-            let defaultFeed = URL(string: "\(releaseBase)/latest/download/appcast.xml")!
-            let betaFeed = URL(string: "\(releaseBase)/download/beta/appcast.xml")!
             let updateManager = UpdateManager(
-                defaultFeedURL: defaultFeed,
-                betaFeedURL: betaFeed,
+                defaultFeedURL: Self.stableFeedURL,
+                betaFeedURL: Self.betaFeedURL,
                 initialChannel: config.updateChannel
             )
             self.updateManager = updateManager

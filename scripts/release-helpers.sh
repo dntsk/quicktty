@@ -1,12 +1,14 @@
 #!/bin/sh
 
-RELEASE_LABEL_DEFAULT=0.1.2.beta-1
+RELEASE_LABEL_DEFAULT=0.1.2.beta-2
 RELEASE_ARCHIVE_NAME=QuickTTY.xcarchive
-RELEASE_DMG_NAME=QuickTTY-0.1.2.beta-1-arm64.dmg
-RELEASE_STAGE_NAME=QuickTTY-0.1.2.beta-1-stage
+RELEASE_DMG_NAME=QuickTTY-0.1.2.beta-2-arm64.dmg
+RELEASE_STAGE_NAME=QuickTTY-0.1.2.beta-2-stage
 RELEASE_NOTARY_RESULT_NAME=$RELEASE_DMG_NAME.notary-result.json
 RELEASE_APPCAST_DIRECTORY_NAME=appcast
 RELEASE_APPCAST_NAME=appcast.xml
+RELEASE_BETA_APPCAST_RELATIVE_PATH=docs/appcasts/beta.xml
+RELEASE_BETA_APPCAST_RAW_URL=https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml
 RELEASE_GITHUB_RELEASE_DOWNLOAD_BASE=https://github.com/dntsk/quicktty/releases/download
 RELEASE_FIND_PATH=/usr/bin/find
 RELEASE_MKDIR_PATH=/bin/mkdir
@@ -48,9 +50,27 @@ release_verify_appcast() {
 
     release_dmg_size=$("$release_stat_path" -f '%z' "$release_dmg_path") \
         || release_fail "could not determine DMG size for appcast: $release_dmg_path"
-    release_expected_enclosure="<enclosure url=\"$(release_appcast_download_url_prefix)$RELEASE_DMG_NAME\" length=\"$release_dmg_size\" type=\"application/octet-stream\"/>"
-    "$release_grep_path" -F "$release_expected_enclosure" "$release_appcast_path" >/dev/null \
-        || release_fail "appcast enclosure does not match the final DMG: $release_appcast_path"
+    release_expected_enclosure_url="<enclosure url=\"$(release_appcast_download_url_prefix)$RELEASE_DMG_NAME\""
+    "$release_grep_path" -F "$release_expected_enclosure_url" "$release_appcast_path" >/dev/null \
+        || release_fail "appcast enclosure URL does not match the final DMG: $release_appcast_path"
+    "$release_grep_path" -F "length=\"$release_dmg_size\"" "$release_appcast_path" >/dev/null \
+        || release_fail "appcast enclosure length does not match the final DMG: $release_appcast_path"
+    "$release_grep_path" -F 'type="application/octet-stream"' "$release_appcast_path" >/dev/null \
+        || release_fail "appcast enclosure type is invalid: $release_appcast_path"
+    "$release_grep_path" -F 'sparkle:edSignature="' "$release_appcast_path" >/dev/null \
+        || release_fail "appcast enclosure is missing a Sparkle Ed25519 signature: $release_appcast_path"
+}
+
+release_beta_appcast_path() {
+    release_beta_repo_root=$1
+
+    [ -n "$release_beta_repo_root" ] || release_fail 'repository root must not be empty'
+    case "$release_beta_repo_root" in
+        /*) ;;
+        *) release_fail "repository root must be absolute: $release_beta_repo_root" ;;
+    esac
+
+    printf '%s/%s\n' "$release_beta_repo_root" "$RELEASE_BETA_APPCAST_RELATIVE_PATH"
 }
 
 release_validate_team() {

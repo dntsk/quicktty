@@ -29,11 +29,12 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 6. MVP не использует sandbox и не предназначен для Mac App Store; релиз — подписанный и notarized DMG для arm64.
 7. Не читать секреты и `.env`; не коммитить и не выполнять release/signing без явного запроса.
 8. После значимых изменений обновлять соответствующую project memory; при завершении сессии оставлять handoff.
-9. Любой release строго выполнять по `docs/releasing.md`; нельзя вручную изменять published release, tag или assets.
+9. Любой release строго выполнять по `docs/releasing.md`; нельзя вручную изменять published release, tag или assets. После каждого beta application release обязательно продвигать final appcast через `make beta-feed` в `docs/appcasts/beta.xml` отдельным post-release commit.
 
 ## Навигация
 
 - `docs/releasing.md` — обязательная процедура release, signing, notarization, appcast и GitHub publication.
+- `docs/appcasts/beta.xml` — generated tracked beta feed; изменяется только `make beta-feed` после public verification.
 - `.agents/rules/project-profile.md` — профиль проекта, ограничения MVP и процесс поставки.
 - `.agents/rules/architecture.md` — границы компонентов, зависимости и архитектурные инварианты.
 - `.agents/rules/coding-style.md` — правила Swift/AppKit, форматирования и concurrency.

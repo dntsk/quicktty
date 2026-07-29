@@ -6,9 +6,10 @@
 
 - Публикуется только notarized arm64 DMG.
 - Release tag указывает на exact commit, из которого собран DMG.
-- Каждый GitHub Release содержит ровно два assets: `QuickTTY-<version>-arm64.dmg` и `appcast.xml`. Stable release становится `latest`; prerelease никогда не становится `latest`.
+- Каждый application GitHub Release содержит ровно два assets: `QuickTTY-<version>-arm64.dmg` и `appcast.xml`. Stable release становится `latest`; prerelease никогда не становится `latest`. Единственное исключение — описанный ниже immutable legacy bootstrap beta release с одним `appcast.xml` asset.
 - `appcast.xml` создаётся из финального stapled DMG. Его `enclosure/@length` равен фактическому размеру опубликованного DMG; enclosure URL — абсолютный `https://github.com/dntsk/quicktty/releases/download/v<version>/…` того же release.
 - `https://github.com/dntsk/quicktty/releases/latest/download/appcast.xml` должен быть доступен после публикации и вести к текущему stable release.
+- Beta channel читает только `https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml`; tracked `docs/appcasts/beta.xml` создаётся из final stapled DMG и никогда не редактируется вручную.
 - Keychain profile для notarization: `QuickTTY`. Никогда не угадывать и не подменять его другим именем.
 - После publication tag и assets immutable: не заменять, не удалять и не загружать assets вручную в опубликованный release.
 - GitHub Release title и release notes пишутся только на английском.
@@ -104,7 +105,30 @@ grep 'enclosure' "$APPCAST"
 
 До завершения всех применимых пунктов release считается незавершённым.
 
-## 6. Evidence и запреты
+## 6. Beta appcast в репозитории
+
+### Обычный beta application release
+
+1. Обычный beta prerelease создаётся по разделам 1–5 и содержит ровно final DMG и final `appcast.xml` конкретного `v<version>` tag.
+2. Только после publication и анонимной проверки этого prerelease запустите из clean tree:
+
+   ```sh
+   make beta-feed
+   git diff --check
+   git diff -- docs/appcasts/beta.xml
+   ```
+
+   Команда принимает только `.build/Release/appcast/appcast.xml`, который проходит проверку против final DMG, и атомарно копирует exact bytes в tracked `docs/appcasts/beta.xml`. Она не выполняет GitHub, Git write, signing или notarization operations.
+3. Проверьте raw URL без GitHub credentials: скачанный XML обязан byte-for-byte совпасть с local final appcast; его absolute enclosure обязан скачать final public DMG с теми же size и SHA-256.
+4. Создайте отдельный post-release commit только для `docs/appcasts/beta.xml` и push его в `master`. Не редактируйте XML вручную, не создавайте его из pre-staple DMG и не публикуйте feed до public DMG.
+
+### Immutable legacy bootstrap
+
+Старые beta builds до repository feed запрашивают `https://github.com/dntsk/quicktty/releases/download/beta/appcast.xml`. Один immutable legacy bootstrap release c annotated tag `beta` создаётся только для миграции этих клиентов: он является prerelease, не становится `latest` и содержит ровно один final `appcast.xml` asset, указывающий на DMG конкретного migration release. Его title и notes — только на английском.
+
+Перед publication bootstrap release должен пройти draft verification: tag указывает на exact migration commit, XML byte-for-byte совпадает с final appcast migration release, enclosure использует его immutable `v<version>` direct DMG URL. После publication bootstrap tag и asset никогда не заменяются, не удаляются и не изменяются. Все builds после migration release получают новые beta updates только через raw repository feed; bootstrap больше не обновляется.
+
+## 7. Evidence и запреты
 
 После успешной публичной проверки записать tag, release commit, notarization submission ID, artifact path, size, SHA-256, public URLs и gates в `.agents/memory/tasks-completed.md` и handoff. Не записывать Apple ID, passwords, tokens, private keys или другие secrets.
 
