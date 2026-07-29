@@ -82,8 +82,8 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
-grep -F -x '        CURRENT_PROJECT_VERSION: 4' "$project_spec" >/dev/null \
-    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 4'
+grep -F -x '        CURRENT_PROJECT_VERSION: 5' "$project_spec" >/dev/null \
+    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 5'
 
 invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_build_script" 2>&1) \
     && fail 'invalid Ghostty force-rebuild flag unexpectedly succeeded'
