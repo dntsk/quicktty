@@ -53,14 +53,14 @@ make check
 
 Подписанный release предназначен для macOS 15+ на Apple Silicon. Bundle identifier — `com.dntsk.QuickTTY`. Текущий ярлык выпуска — `0.1.1`; в метаданных Apple ему соответствуют `CFBundleShortVersionString = 0.1.1` и `CFBundleVersion = 6`. Поэтому ярлык используется в имени DMG, а не в маркетинговой версии bundle.
 
-Перед выпуском нужны полная Xcode в `DEVELOPER_DIR` (по умолчанию `/Applications/Xcode.app/Contents/Developer`), сертификат Developer ID Application вашей команды и заранее сохранённый профиль Keychain `quicktty-notary`.
+Перед выпуском нужны полная Xcode в `DEVELOPER_DIR` (по умолчанию `/Applications/Xcode.app/Contents/Developer`), сертификат Developer ID Application вашей команды и заранее сохранённый профиль Keychain `QuickTTY`.
 
 1. В Xcode откройте Accounts и создайте сертификат **Developer ID Application** для своей команды.
 2. На [account.apple.com](https://account.apple.com) создайте пароль для конкретного приложения (app-specific password).
 3. Сохраните учётные данные в Keychain:
 
 ```sh
-DEVELOPER_DIR=... xcrun notarytool store-credentials quicktty-notary --apple-id "YOUR_APPLE_ID" --team-id YOUR_TEAM_ID
+DEVELOPER_DIR=... xcrun notarytool store-credentials QuickTTY --apple-id "YOUR_APPLE_ID" --team-id YOUR_TEAM_ID
 ```
 
 `notarytool` безопасно запросит app-specific password. Никогда не передавайте пароль в командной строке и не добавляйте его в репозиторий. Профиль также можно создать с ключом App Store Connect API.
@@ -81,7 +81,7 @@ DEVELOPMENT_TEAM=YOUR_TEAM_ID \
 DEVELOPMENT_TEAM=YOUR_TEAM_ID \
   CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
   DMG=.build/Release/QuickTTY-0.1.1-arm64.dmg \
-  NOTARY_PROFILE=quicktty-notary \
+  NOTARY_PROFILE=QuickTTY \
   make notarize
 ```
 
@@ -90,7 +90,7 @@ DEVELOPMENT_TEAM=YOUR_TEAM_ID \
 ```sh
 DEVELOPMENT_TEAM=YOUR_TEAM_ID \
   CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
-  NOTARY_PROFILE=quicktty-notary \
+  NOTARY_PROFILE=QuickTTY \
   make signed-release
 ```
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-NOTARY_PROFILE_DEFAULT=quicktty-notary
+NOTARY_PROFILE_DEFAULT=QuickTTY
 NOTARIZE_DEFAULT_DMG=.build/Release/$RELEASE_DMG_NAME
 
 notarize_apply_defaults() {

@@ -170,7 +170,7 @@ final_hash_report_line=$(grep -n -F -x \
     || fail 'notarization script does not report the final DMG SHA-256 after validating it'
 
 DMG=
-NOTARY_PROFILE=quicktty-notary
+NOTARY_PROFILE=QuickTTY
 DEVELOPMENT_TEAM=
 CODE_SIGN_IDENTITY=
 expect_notarize_failure 'error: this script accepts no options or positional arguments' unexpected-option
@@ -199,7 +199,7 @@ NOTARY_PROFILE=
 expect_notarize_failure 'error: NOTARY_PROFILE must not be empty'
 NOTARY_PROFILE='invalid profile'
 expect_notarize_failure 'error: NOTARY_PROFILE contains unsupported characters'
-NOTARY_PROFILE=quicktty-notary
+NOTARY_PROFILE=QuickTTY
 if secret_output=$(env -i \
     PATH="$PATH" \
     TMPDIR="${TMPDIR:-/tmp}" \
@@ -228,15 +228,15 @@ for invalid_sha256 in "$sha256_63" "$sha256_65" "$sha256_nonhex"; do
     fi
 done
 
-assert_equals "$NOTARY_PROFILE_DEFAULT" quicktty-notary
-notarize_validate_profile quicktty-notary
+assert_equals "$NOTARY_PROFILE_DEFAULT" QuickTTY
+notarize_validate_profile QuickTTY
 notarize_validate_profile ghostterm-notary
 release_validate_team "$test_development_team"
 release_validate_identity "$test_code_sign_identity"
 unset DMG NOTARY_PROFILE
 notarize_apply_defaults
 assert_equals "$DMG" ".build/Release/$RELEASE_DMG_NAME"
-assert_equals "$NOTARY_PROFILE" quicktty-notary
+assert_equals "$NOTARY_PROFILE" QuickTTY
 expect_failure /bin/sh -c '. "$1"; . "$2"; notarize_validate_profile "bad profile"' sh \
     "$release_helpers" "$notarize_helpers"
 
@@ -286,7 +286,7 @@ printf 'wrong DMG\n' >"$wrong_dmg"
 expect_failure /bin/sh -c '. "$1"; . "$2"; notarize_resolve_dmg_path "$3" "$4" "$5"' sh \
     "$release_helpers" "$notarize_helpers" "$wrong_dmg" "$fixture_repo" "$fixture_dmg"
 DMG=$wrong_dmg
-NOTARY_PROFILE=quicktty-notary
+NOTARY_PROFILE=QuickTTY
 expect_notarize_failure 'error: DMG must be the expected release artifact'
 
 symlink_dmg=$tmp_root/symlink.dmg
