@@ -1,5 +1,7 @@
 # Interactive Terminal Search — Implementation Plan
 
+> **Статус:** superseded планом `docs/plans/2026-07-29-ghostty-native-search-plan.md`; историческое содержание сохранено.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Добавить NSSearchField-оверлей поверх активного терминала с инкрементальным поиском через встроенный search thread Ghostty.

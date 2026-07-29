@@ -377,9 +377,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     @discardableResult
     private func commitWorkspaceStore(_ candidate: WorkspaceStore) -> Bool {
+        let previousActivePaneID = activePaneID
         guard candidate != workspaceStore else { return false }
         workspaceStore = candidate
+        let committedActivePaneID = activePaneID
         persistWorkspaceStore(workspaceStore)
+        if previousActivePaneID != committedActivePaneID,
+            let previousActivePaneID,
+            let previousSurface = surfaces[previousActivePaneID]
+        {
+            previousSurface.endSearchForDeactivation()
+        }
         return true
     }
 
@@ -1354,10 +1362,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces[destinationPaneID] != nil
         else { return }
 
-        if let oldSurface = surfaces[sourcePaneID] {
-            oldSurface.hideSearchOverlay(clearSearch: true)
-        }
-
         guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
     }
@@ -1483,11 +1487,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces[paneID] != nil
         else {
             return
-        }
-
-        // Close search overlay in the previously active pane.
-        if let oldSurface = surfaces[tab.activePaneID] {
-            oldSurface.hideSearchOverlay(clearSearch: true)
         }
 
         var candidate = workspaceStore

@@ -1,7 +1,7 @@
 # Interactive Terminal Search
 
 **Дата:** 2026-07-27
-**Статус:** Проектирование
+**Статус:** superseded документом `docs/plans/2026-07-29-ghostty-native-search-design.md`; историческое содержание сохранено.
 
 ## Сводка
 

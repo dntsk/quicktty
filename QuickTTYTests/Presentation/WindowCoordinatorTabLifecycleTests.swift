@@ -2948,6 +2948,216 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func splitPaneActivationEndsSearchOnlyOnceOnPreviouslyActiveSurface() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let oldSurface = try #require(coordinator.activeSurfaceForTesting)
+        let targetPaneID = try #require(
+            activeTab(of: coordinator).root.leaves.first { $0 != oldSurface.paneID }
+        )
+        let targetSurface = try #require(coordinator.surfaceForTesting(id: targetPaneID))
+        let targetEndSearchCount = targetSurface.bindingActionObservationsForTesting.filter {
+            $0 == "end_search"
+        }.count
+        oldSurface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        coordinator.focusNextPane()
+
+        let newSurface = try #require(coordinator.activeSurfaceForTesting)
+        #expect(newSurface === targetSurface)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+        #expect(
+            newSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count
+                == targetEndSearchCount
+        )
+    }
+
+    @Test
+    func queuedSearchStartIsEndedWhenActivePaneChangesBeforeDelivery() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let oldSurface = try #require(coordinator.activeSurfaceForTesting)
+
+        #expect(oldSurface.scheduleSearchCallbackForTesting(.started(nil)))
+        #expect(oldSurface.searchState == nil)
+        coordinator.focusNextPane()
+
+        #expect(coordinator.activeSurfaceForTesting !== oldSurface)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+        #expect(oldSurface.scheduleSearchCallbackForTesting(.ended))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(oldSurface.searchState == nil)
+        #expect(!oldSurface.searchOverlayInstalledForTesting)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+    }
+
+    @Test
+    func newTabActivationEndsSearchOnlyOnceOnPreviouslyActiveSurface() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let oldSurface = try #require(coordinator.activeSurfaceForTesting)
+        oldSurface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        coordinator.createNewTab()
+
+        let newSurface = try #require(coordinator.activeSurfaceForTesting)
+        #expect(newSurface !== oldSurface)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+        #expect(!newSurface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
+    func workspaceActivationEndsSearchOnlyOnceOnPreviouslyActiveSurface() throws {
+        let firstPaneID = PaneID()
+        let secondPaneID = PaneID()
+        let firstTab = TerminalTab(
+            title: "First",
+            pane: TerminalPaneDescriptor(id: firstPaneID, cwd: "/tmp/first")
+        )
+        let secondTab = TerminalTab(
+            title: "Second",
+            pane: TerminalPaneDescriptor(id: secondPaneID, cwd: "/tmp/second")
+        )
+        let firstWorkspace = Workspace(
+            name: "First",
+            tabs: [firstTab],
+            activeTabID: firstTab.id
+        )
+        let secondWorkspace = Workspace(
+            name: "Second",
+            tabs: [secondTab],
+            activeTabID: secondTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [firstWorkspace, secondWorkspace],
+            activeWorkspaceID: firstWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(ghosttyBridge: bridge, initialWorkspaceStore: store)
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let oldSurface = try #require(coordinator.surfaceForTesting(id: firstPaneID))
+        let newSurface = try #require(coordinator.surfaceForTesting(id: secondPaneID))
+        oldSurface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        coordinator.workspaceViewControllerForTesting.workspaceSelector
+            .performWorkspaceSelectionForTesting(secondWorkspace.id)
+
+        #expect(coordinator.activeSurfaceForTesting === newSurface)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+        #expect(!newSurface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
+    func destinationActivationEndsSearchOnlyOnceOnPreviouslyActiveSurface() throws {
+        let sourcePaneID = PaneID()
+        let destinationPaneID = PaneID()
+        let sourceTab = TerminalTab(
+            title: "Source",
+            pane: TerminalPaneDescriptor(id: sourcePaneID, cwd: "/tmp/source")
+        )
+        let destinationTab = TerminalTab(
+            title: "Destination",
+            pane: TerminalPaneDescriptor(id: destinationPaneID, cwd: "/tmp/destination")
+        )
+        let sourceWorkspace = Workspace(
+            name: "Source",
+            tabs: [sourceTab],
+            activeTabID: sourceTab.id
+        )
+        let destinationWorkspace = Workspace(
+            name: "Destination",
+            tabs: [destinationTab],
+            activeTabID: destinationTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [sourceWorkspace, destinationWorkspace],
+            activeWorkspaceID: sourceWorkspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(ghosttyBridge: bridge, initialWorkspaceStore: store)
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let oldSurface = try #require(coordinator.surfaceForTesting(id: sourcePaneID))
+        let newSurface = try #require(coordinator.surfaceForTesting(id: destinationPaneID))
+        oldSurface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        coordinator.activate(
+            destination: TerminalDestination(
+                workspaceID: destinationWorkspace.id,
+                tabID: destinationTab.id,
+                paneID: destinationPaneID
+            )
+        )
+
+        #expect(coordinator.activeSurfaceForTesting === newSurface)
+        #expect(
+            oldSurface.bindingActionObservationsForTesting.filter { $0 == "end_search" }.count == 1
+        )
+        #expect(!newSurface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
+    func samePaneNoOpAndFailedMutationDoNotEndSearch() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        coordinator.toggleBroadcast()
+        coordinator.activateTab(at: 1)
+        coordinator.activateWorkspace(at: 1)
+        coordinator.failNextSplitMutationForTesting()
+        #expect(throws: (any Error).self) {
+            try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        }
+
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(surface.searchState != nil)
+        #expect(!surface.bindingActionObservationsForTesting.contains("end_search"))
+    }
+
+    @Test
     func paneNavigationMovesThroughNestedLiveSurfacesWithoutRecreatingThem() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

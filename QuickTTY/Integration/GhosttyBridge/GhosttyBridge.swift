@@ -47,17 +47,55 @@ private func ghosttyRuntimeActionCallback(
     _ target: ghostty_target_s,
     _ action: ghostty_action_s
 ) -> Bool {
+    if action.tag == GHOSTTY_ACTION_START_SEARCH {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let needle: String?
+        if let needlePointer = action.action.start_search.needle {
+            guard let copiedNeedle = String(validatingCString: needlePointer) else {
+                return false
+            }
+            needle = copiedNeedle
+        } else {
+            needle = nil
+        }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        let accepted = context.scheduleSearchStarted(needle)
+        return accepted
+    }
+
+    if action.tag == GHOSTTY_ACTION_END_SEARCH {
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
+        else { return false }
+
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        let accepted = context.scheduleSearchEnded()
+        return accepted
+    }
+
     if action.tag == GHOSTTY_ACTION_SEARCH_TOTAL {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
             let surface = target.target.surface,
             let userdata = ghostty_surface_userdata(surface)
         else { return false }
 
-        let total = Int(action.action.search_total.total)
+        let rawTotal = Int(action.action.search_total.total)
+        let total: Int? = rawTotal >= 0 ? rawTotal : nil
         let context = Unmanaged<SurfaceCallbackContext>
             .fromOpaque(userdata)
             .takeUnretainedValue()
-        return context.scheduleSearchTotal(total)
+        let accepted = context.scheduleSearchTotal(total)
+        return accepted
     }
 
     if action.tag == GHOSTTY_ACTION_SEARCH_SELECTED {
@@ -67,11 +105,12 @@ private func ghosttyRuntimeActionCallback(
         else { return false }
 
         let rawSelected = Int(action.action.search_selected.selected)
-        let selected: Int? = rawSelected > 0 ? rawSelected : nil
+        let selected: Int? = rawSelected >= 0 ? rawSelected : nil
         let context = Unmanaged<SurfaceCallbackContext>
             .fromOpaque(userdata)
             .takeUnretainedValue()
-        return context.scheduleSearchSelected(selected)
+        let accepted = context.scheduleSearchSelected(selected)
+        return accepted
     }
 
     if action.tag == GHOSTTY_ACTION_SCROLLBAR {
@@ -247,6 +286,80 @@ private func copyGhosttyCommandFinished(
         case surface
         case app
         case unknown
+    }
+
+    enum GhosttySearchCallbackForTesting {
+        case started([UInt8]?)
+        case ended
+        case total(Int)
+        case selected(Int)
+    }
+
+    func ghosttyRuntimeSearchCallbackForTesting(
+        surface: ghostty_surface_t,
+        callback: GhosttySearchCallbackForTesting,
+        target: GhosttyActivityCallbackTargetForTesting,
+        overwritePayloadAfterCallback: Bool
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        let callbackTarget = ghostty_target_s(tag: targetTag, target: targetValue)
+
+        switch callback {
+        case .started(let optionalBytes):
+            func invoke(_ needle: UnsafePointer<CChar>?) -> Bool {
+                var payload = ghostty_action_u()
+                payload.start_search = ghostty_action_start_search_s(needle: needle)
+                return ghosttyRuntimeActionCallback(
+                    nil,
+                    callbackTarget,
+                    ghostty_action_s(tag: GHOSTTY_ACTION_START_SEARCH, action: payload)
+                )
+            }
+
+            guard var bytes = optionalBytes else { return invoke(nil) }
+            bytes.append(0)
+            let accepted = bytes.withUnsafeBytes { buffer in
+                invoke(buffer.baseAddress?.assumingMemoryBound(to: CChar.self))
+            }
+            if overwritePayloadAfterCallback {
+                for index in bytes.indices {
+                    bytes[index] = 0
+                }
+            }
+            return accepted
+        case .ended:
+            return ghosttyRuntimeActionCallback(
+                nil,
+                callbackTarget,
+                ghostty_action_s(
+                    tag: GHOSTTY_ACTION_END_SEARCH,
+                    action: ghostty_action_u()
+                )
+            )
+        case .total(let total):
+            var payload = ghostty_action_u()
+            payload.search_total = ghostty_action_search_total_s(total: total)
+            return ghosttyRuntimeActionCallback(
+                nil,
+                callbackTarget,
+                ghostty_action_s(tag: GHOSTTY_ACTION_SEARCH_TOTAL, action: payload)
+            )
+        case .selected(let selected):
+            var payload = ghostty_action_u()
+            payload.search_selected = ghostty_action_search_selected_s(selected: selected)
+            return ghosttyRuntimeActionCallback(
+                nil,
+                callbackTarget,
+                ghostty_action_s(tag: GHOSTTY_ACTION_SEARCH_SELECTED, action: payload)
+            )
+        }
     }
 
     func ghosttyRuntimeProgressCallbackForTesting(
@@ -797,13 +910,34 @@ final class GhosttyBridge {
             UInt32(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue),
             UInt32(GHOSTTY_ACTION_PROGRESS_REPORT.rawValue),
             UInt32(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue),
+            UInt32(GHOSTTY_ACTION_START_SEARCH.rawValue),
+            UInt32(GHOSTTY_ACTION_END_SEARCH.rawValue),
+            UInt32(GHOSTTY_ACTION_SEARCH_TOTAL.rawValue),
+            UInt32(GHOSTTY_ACTION_SEARCH_SELECTED.rawValue),
         ]
         let scrollbarPayloadMatchesPinnedHeader =
             MemoryLayout<ghostty_action_scrollbar_s>.size == 24
             && MemoryLayout<ghostty_action_scrollbar_s>.stride == 24
             && MemoryLayout<ghostty_action_scrollbar_s>.alignment == 8
-        return actual == [0, 1, 2, 5, 12, 26, 36, 40, 47, 48, 54, 55, 56, 58]
+        let searchPayloadsMatchPinnedHeader =
+            MemoryLayout<ghostty_action_start_search_s>.size
+            == MemoryLayout<UnsafePointer<CChar>?>.size
+            && MemoryLayout<ghostty_action_start_search_s>.stride
+                == MemoryLayout<UnsafePointer<CChar>?>.stride
+            && MemoryLayout<ghostty_action_start_search_s>.alignment
+                == MemoryLayout<UnsafePointer<CChar>?>.alignment
+            && MemoryLayout<ghostty_action_search_total_s>.size == 8
+            && MemoryLayout<ghostty_action_search_total_s>.stride == 8
+            && MemoryLayout<ghostty_action_search_total_s>.alignment == 8
+            && MemoryLayout<ghostty_action_search_selected_s>.size == 8
+            && MemoryLayout<ghostty_action_search_selected_s>.stride == 8
+            && MemoryLayout<ghostty_action_search_selected_s>.alignment == 8
+        return actual == [
+            0, 1, 2, 5, 12, 26, 36, 40, 47, 48, 54, 55, 56, 58, 59, 60, 61,
+            62,
+        ]
             && scrollbarPayloadMatchesPinnedHeader
+            && searchPayloadsMatchPinnedHeader
     }
 
     #if DEBUG
@@ -1097,6 +1231,10 @@ final class GhosttyBridge {
         guard case .terminal(let terminalAction) = action.executionRoute else {
             return .appKit
         }
+        guard let source = surfaces[paneID],
+            source.isShortcutDispatchSource,
+            source.allowsTerminalShortcutAction(terminalAction)
+        else { return .passThrough }
 
         let performed = routeTerminalShortcutAction(terminalAction, from: paneID)
         return action.performPolicy.consumes(performed: performed) ? .handled : .passThrough

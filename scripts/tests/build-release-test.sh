@@ -65,8 +65,9 @@ sh -n "$ghostty_build_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
     || fail 'release build script does not set the trusted PATH'
 for required_build_setting in \
-    'BUILD_NUMBER=5' \
+    'BUILD_NUMBER=6' \
     'BUNDLE_IDENTIFIER=com.dntsk.QuickTTY' \
+    'MARKETING_VERSION=0.1.1' \
     'PRODUCT_NAME=QuickTTY'
 do
     grep -F -x "$required_build_setting" "$build_script" >/dev/null \
@@ -82,8 +83,10 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
-grep -F -x '        CURRENT_PROJECT_VERSION: 5' "$project_spec" >/dev/null \
-    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 5'
+grep -F -x '        CURRENT_PROJECT_VERSION: 6' "$project_spec" >/dev/null \
+    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 6'
+grep -F -x '        MARKETING_VERSION: 0.1.1' "$project_spec" >/dev/null \
+    || fail 'project spec does not set MARKETING_VERSION to 0.1.1'
 
 invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_build_script" 2>&1) \
     && fail 'invalid Ghostty force-rebuild flag unexpectedly succeeded'
@@ -104,10 +107,10 @@ unset APPLE_ID
 
 . "$helpers"
 
-assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.0
+assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.1
 assert_equals "$RELEASE_ARCHIVE_NAME" QuickTTY.xcarchive
-assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.0-arm64.dmg
-assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.0-stage
+assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.1-arm64.dmg
+assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.1-stage
 release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'

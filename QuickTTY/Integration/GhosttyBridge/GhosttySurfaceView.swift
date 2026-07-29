@@ -1,7 +1,9 @@
 import AppKit
+import Combine
 import Foundation
 import GhosttyKit
 import QuartzCore
+import SwiftUI
 import Synchronization
 
 #if DEBUG
@@ -368,7 +370,9 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     case progressReport(GhosttyProgressReport)
     case commandFinished(GhosttyCommandFinished)
     case scrollbarChanged(GhosttyScrollbarSnapshot)
-    case searchTotal(Int)
+    case searchStarted(String?)
+    case searchEnded
+    case searchTotal(Int?)
     case searchSelected(Int?)
 }
 
@@ -381,6 +385,53 @@ func ghosttyRuntimeCloseSurfaceCallback(
         .fromOpaque(userdata)
         .takeUnretainedValue()
     context.scheduleClose(processAlive: processAlive)
+}
+
+@MainActor
+final class GhosttySearchHostingView: NSHostingView<GhosttySurfaceSearchOverlay> {
+    private let interactionState: GhosttySearchInteractionState
+
+    #if DEBUG
+        var baseHitTestForTesting: ((NSPoint) -> NSView?)?
+    #endif
+
+    init(
+        rootView: GhosttySurfaceSearchOverlay,
+        interactionState: GhosttySearchInteractionState
+    ) {
+        self.interactionState = interactionState
+        super.init(rootView: rootView)
+    }
+
+    @available(*, unavailable)
+    required init(rootView: GhosttySurfaceSearchOverlay) {
+        fatalError("init(rootView:) is unavailable")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let interactionRegion = interactionState.interactionRegion
+        let contains =
+            interactionRegion?.contains(
+                hostPoint: point,
+                hostBounds: bounds,
+                hostIsFlipped: isFlipped
+            ) ?? false
+        let superHitView = contains ? super.hitTest(point) : nil
+
+        guard contains else { return nil }
+
+        #if DEBUG
+            if let baseHitTestForTesting {
+                return baseHitTestForTesting(point)
+            }
+        #endif
+        return superHitView
+    }
 }
 
 @MainActor
@@ -414,14 +465,11 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private(set) var currentTitle: String?
     private(set) var currentWorkingDirectory: String?
 
-    final class SearchState {
-        var needle = ""
-        var total: UInt?
-        var selected: UInt?
-    }
-
     private(set) var searchState: SearchState?
-    private var searchOverlayView: SearchOverlayView?
+    private var searchNeedleCancellable: AnyCancellable?
+    private var searchInteractionState: GhosttySearchInteractionState?
+    private var searchOverlayView: GhosttySearchHostingView?
+    private var isSearchFieldFocused = false
 
     var latestWorkingDirectoryForPersistence: String? {
         callbackContextOwnership?.takeUnretainedValue().latestWorkingDirectory
@@ -440,6 +488,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         private var mouseShapeUpdateCount = 0
         private var terminalActionObservations: [GhosttySurfaceTerminalActionObservation] = []
         private var bindingActionObservations: [String] = []
+        private var searchFocusRequestCountForTesting = 0
         private var scrollbarDeliveryCount = 0
         private var clipboardObservations: [GhosttySurfaceClipboardObservation] = []
         var clipboardObservationHandlerForTesting:
@@ -451,9 +500,20 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     }
 
     var isShortcutDispatchSource: Bool {
-        surface != nil
-            && window?.firstResponder === self
+        let responderIsSearchField = searchState != nil && isSearchFieldFocused
+        return surface != nil
+            && (window?.firstResponder === self || responderIsSearchField)
             && !isHiddenOrHasHiddenAncestor
+    }
+
+    func allowsTerminalShortcutAction(_ action: TerminalShortcutAction) -> Bool {
+        guard isSearchFieldFocused else { return true }
+        return switch action {
+        case .find, .findNext, .findPrevious:
+            true
+        default:
+            false
+        }
     }
 
     func needsConfirmQuit() -> Bool {
@@ -556,9 +616,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         lastSentViewportRestoreTarget = nil
         lastSentViewportRestoreMaximumOffset = nil
         lastSentViewportRestoreSequence = nil
-        searchOverlayView?.removeFromSuperview()
-        searchOverlayView = nil
-        searchState = nil
+        removeSearchLocally()
         guard let surface else {
             callbackContextOwnership?.takeUnretainedValue().deactivateAndDrain()
             stopLocalEventHandling()
@@ -766,6 +824,49 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
 
         var bindingActionObservationsForTesting: [String] {
             bindingActionObservations
+        }
+
+        var searchOverlayInstalledForTesting: Bool {
+            searchOverlayView != nil
+        }
+
+        var searchOverlayViewForTesting: GhosttySearchHostingView? {
+            searchOverlayView
+        }
+
+        var searchInteractionRegionForTesting: GhosttySearchInteractionRegion? {
+            searchInteractionState?.interactionRegion
+        }
+
+        var searchFocusRequestsForTesting: Int {
+            searchFocusRequestCountForTesting
+        }
+
+        func closeSearchFromUIForTesting() {
+            closeSearchFromUI()
+        }
+
+        var isSearchFieldFocusedForTesting: Bool {
+            isSearchFieldFocused
+        }
+
+        func setSearchFieldFocusForTesting(_ focused: Bool) {
+            searchFieldFocusDidChange(focused)
+        }
+
+        @discardableResult
+        func scheduleSearchCallbackForTesting(
+            _ callback: GhosttySearchCallbackForTesting,
+            target: GhosttyActivityCallbackTargetForTesting = .surface,
+            overwritePayloadAfterCallback: Bool = false
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeSearchCallbackForTesting(
+                surface: surface,
+                callback: callback,
+                target: target,
+                overwritePayloadAfterCallback: overwritePayloadAfterCallback
+            )
         }
 
         var scrollbarStateForTesting: GhosttyScrollbarState? {
@@ -1137,21 +1238,29 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             let window,
             event.window != nil,
             event.window === window
-        else { return event }
+        else {
+            return event
+        }
 
-        let location = convert(event.locationInWindow, from: nil)
-        guard hitTest(location) === self else { return event }
+        let windowPoint = event.locationInWindow
+        let surfacePoint = convert(windowPoint, from: nil)
+        let hitView = hitTest(surfacePoint)
+        guard hitView === self else {
+            return event
+        }
 
         suppressNextLeftMouseUp = false
-        guard window.firstResponder !== self else { return event }
+        guard window.firstResponder !== self else {
+            return event
+        }
 
         if applicationIsActive && window.isKeyWindow {
-            window.makeFirstResponder(self)
+            _ = window.makeFirstResponder(self)
             suppressNextLeftMouseUp = true
             return nil
         }
 
-        window.makeFirstResponder(self)
+        _ = window.makeFirstResponder(self)
         return event
     }
 
@@ -1399,9 +1508,7 @@ extension GhosttySurfaceView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown,
             window?.isKeyWindow == true,
-            window?.firstResponder === self,
-            surface != nil,
-            searchOverlayView == nil
+            isShortcutDispatchSource
         else { return false }
 
         switch shortcutRoute(paneID, event) {
@@ -1886,13 +1993,6 @@ extension GhosttySurfaceView {
         if action.clearsViewportRestore {
             clearPendingViewportRestore()
         }
-        switch action {
-        case .find:
-            showSearchOverlay()
-            return true
-        default:
-            break
-        }
         guard let surface else { return false }
         let coreAction = action.coreAction
         let result = coreAction.withCString { pointer in
@@ -1940,73 +2040,155 @@ extension GhosttySurfaceView {
                 scrollbarDeliveryCount += 1
             #endif
             restoreViewportIfNeeded(after: snapshot)
+        case .searchStarted(let needle):
+            startSearchLocally(needle: needle)
+        case .searchEnded:
+            removeSearchLocally()
         case .searchTotal(let total):
-            searchState?.total = UInt(max(0, total))
-            updateSearchCountLabel()
+            searchState?.total = total.map(UInt.init)
         case .searchSelected(let selected):
-            if let selected, selected > 0 {
-                searchState?.selected = UInt(selected)
-            } else {
-                searchState?.selected = nil
-            }
-            updateSearchCountLabel()
+            searchState?.selected = selected.map(UInt.init)
         }
     }
 
-    func showSearchOverlay() {
-        guard searchOverlayView == nil, surface != nil else { return }
-        let overlay = SearchOverlayView()
-        overlay.translatesAutoresizingMaskIntoConstraints = false
-        overlay.onNeedleChange = { [weak self] needle in
-            self?.performSearchBinding("search:\(needle)")
-        }
-        overlay.onNavigate = { [weak self] nav in
-            switch nav {
-            case .next:
-                self?.performSearchBinding("search:next")
-            case .previous:
-                self?.performSearchBinding("search:previous")
+    func endSearch() {
+        guard searchState != nil else { return }
+        performSearchBinding("end_search")
+    }
+
+    func endSearchForDeactivation() {
+        performSearchBinding("end_search")
+    }
+
+    private func startSearchLocally(needle: String?) {
+        guard surface != nil else { return }
+        if let searchState {
+            if let needle, !needle.isEmpty {
+                searchState.needle = needle
             }
-        }
-        overlay.onClose = { [weak self] clear in
-            self?.hideSearchOverlay(clearSearch: clear)
+            searchState.requestFocus()
+            #if DEBUG
+                searchFocusRequestCountForTesting += 1
+            #endif
+            return
         }
 
-        addSubview(overlay)
-        let safeTopAnchor = safeAreaLayoutGuide.topAnchor
+        let searchState = SearchState(needle: needle ?? "")
+        self.searchState = searchState
+        searchNeedleCancellable = searchState.$needle
+            .removeDuplicates()
+            .map { needle -> AnyPublisher<String, Never> in
+                if needle.isEmpty || needle.count >= 3 {
+                    return Just(needle).eraseToAnyPublisher()
+                } else {
+                    return Just(needle)
+                        .delay(for: .milliseconds(300), scheduler: DispatchQueue.main)
+                        .eraseToAnyPublisher()
+                }
+            }
+            .switchToLatest()
+            .sink { @MainActor [weak self, weak searchState] needle in
+                guard let self, let searchState,
+                    self.searchState === searchState
+                else { return }
+                self.performSearchBinding("search:\(needle)")
+            }
+
+        let interactionState = GhosttySearchInteractionState()
+        searchInteractionState = interactionState
+        let overlay = GhosttySurfaceSearchOverlay(
+            searchState: searchState,
+            interactionState: interactionState,
+            onBindingAction: { [weak self] action in
+                self?.performSearchBinding(action)
+            },
+            onSearchFieldFocusChanged: { [weak self, weak searchState] focused in
+                guard let self, self.searchState === searchState else { return }
+                self.searchFieldFocusDidChange(focused)
+            },
+            onClose: { [weak self] in
+                self?.closeSearchFromUI()
+            }
+        )
+        let hostingView = GhosttySearchHostingView(
+            rootView: overlay,
+            interactionState: interactionState
+        )
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(hostingView)
         NSLayoutConstraint.activate([
-            overlay.centerXAnchor.constraint(equalTo: centerXAnchor),
-            overlay.topAnchor.constraint(equalTo: safeTopAnchor, constant: 4),
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-
-        searchState = SearchState()
-        searchOverlayView = overlay
-        performSearchBinding("start_search")
-        overlay.focus()
+        searchOverlayView = hostingView
+        scheduleInitialSearchFocus(for: searchState, hostingView: hostingView)
     }
 
-    func hideSearchOverlay(clearSearch: Bool = true) {
-        if clearSearch {
-            performSearchBinding("end_search")
+    private func scheduleInitialSearchFocus(
+        for searchState: SearchState,
+        hostingView: GhosttySearchHostingView
+    ) {
+        DispatchQueue.main.async { [weak self, weak searchState, weak hostingView] in
+            guard let self, let searchState, let hostingView else { return }
+            guard self.canRequestInitialSearchFocus(
+                for: searchState,
+                hostingView: hostingView
+            ) else { return }
+            DispatchQueue.main.async { [weak self, weak searchState, weak hostingView] in
+                guard let self, let searchState, let hostingView else { return }
+                guard self.canRequestInitialSearchFocus(
+                    for: searchState,
+                    hostingView: hostingView
+                ) else { return }
+                searchState.requestFocus()
+            }
         }
+    }
+
+    private func canRequestInitialSearchFocus(
+        for searchState: SearchState,
+        hostingView: GhosttySearchHostingView
+    ) -> Bool {
+        surface != nil
+            && self.searchState === searchState
+            && self.searchOverlayView === hostingView
+            && hostingView.superview != nil
+    }
+
+    private func closeSearchFromUI() {
+        focusTerminal()
+        endSearch()
+    }
+
+    private func focusTerminal() {
+        searchFieldFocusDidChange(false)
+        _ = window?.makeFirstResponder(self) ?? false
+    }
+
+    private func searchFieldFocusDidChange(_ focused: Bool) {
+        isSearchFieldFocused = focused && searchState != nil
+    }
+
+    private func removeSearchLocally() {
+        isSearchFieldFocused = false
+        searchNeedleCancellable = nil
         searchOverlayView?.removeFromSuperview()
         searchOverlayView = nil
+        searchInteractionState = nil
         searchState = nil
     }
 
     private func performSearchBinding(_ action: String) {
         guard let surface else { return }
-        action.withCString { pointer in
-            _ = ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
+        _ = action.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
         }
         #if DEBUG
             bindingActionObservations.append(action)
         #endif
-    }
-
-    private func updateSearchCountLabel() {
-        guard let state = searchState else { return }
-        searchOverlayView?.updateCount(selected: state.selected, total: state.total)
     }
 
     private func preserveViewportForDetachment() {
@@ -2558,7 +2740,17 @@ final class SurfaceCallbackContext: Sendable {
     }
 
     @discardableResult
-    func scheduleSearchTotal(_ total: Int) -> Bool {
+    func scheduleSearchStarted(_ needle: String?) -> Bool {
+        scheduleActivityEvent(.searchStarted(needle))
+    }
+
+    @discardableResult
+    func scheduleSearchEnded() -> Bool {
+        scheduleActivityEvent(.searchEnded)
+    }
+
+    @discardableResult
+    func scheduleSearchTotal(_ total: Int?) -> Bool {
         scheduleActivityEvent(.searchTotal(total))
     }
 

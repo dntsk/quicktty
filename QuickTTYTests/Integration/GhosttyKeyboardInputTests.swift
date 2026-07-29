@@ -318,6 +318,122 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func searchFocusCallbackAndConfiguredFindRoutingUseProductionPaths() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let broadcastTarget = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in [surface.paneID, broadcastTarget.paneID] }
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        #expect(window.makeFirstResponder(surface))
+
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        #expect(
+            waitForKeyboardCondition {
+                window.contentView?.layoutSubtreeIfNeeded()
+                surface.layoutSubtreeIfNeeded()
+                return surface.searchOverlayInstalledForTesting
+                    && surface.searchInteractionRegionForTesting != nil
+            }
+        )
+        let searchHostingView = try #require(surface.searchOverlayViewForTesting)
+        let searchInteractionRegion = try #require(
+            surface.searchInteractionRegionForTesting
+        )
+        let searchHitPoint = CGPoint(
+            x: searchHostingView.bounds.minX
+                + searchInteractionRegion.swiftUIFrame.midX,
+            y: searchHostingView.isFlipped
+                ? searchHostingView.bounds.maxY
+                    - searchInteractionRegion.swiftUIFrame.midY
+                : searchHostingView.bounds.minY
+                    + searchInteractionRegion.swiftUIFrame.midY
+        )
+        #expect(searchHostingView.hitTest(searchHitPoint) != nil)
+        #expect(surface.searchOverlayInstalledForTesting)
+        surface.setSearchFieldFocusForTesting(true)
+        #expect(surface.isSearchFieldFocusedForTesting)
+        #expect(surface.isShortcutDispatchSource)
+
+        var customConfiguration = ShortcutConfiguration.defaults
+        customConfiguration.assign(
+            ShortcutChord(key: .u, modifiers: [.command, .option]),
+            to: .find
+        )
+        bridge.applyShortcutConfiguration(customConfiguration)
+        bridge.setTerminalActionResultForTesting(true, for: .find)
+        bridge.setTerminalActionResultForTesting(true, for: .paste)
+        let configuredFind = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command, .option],
+            characters: "u",
+            charactersIgnoringModifiers: "u",
+            keyCode: 32,
+            timestamp: 351,
+            windowNumber: window.windowNumber
+        )
+        let defaultFind = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "f",
+            charactersIgnoringModifiers: "f",
+            keyCode: 3,
+            timestamp: 352,
+            windowNumber: window.windowNumber
+        )
+        let paste = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "v",
+            charactersIgnoringModifiers: "v",
+            keyCode: 9,
+            timestamp: 353,
+            windowNumber: window.windowNumber
+        )
+        let bridgeInputCount = bridge.inputObservationsForTesting.count
+        let surfaceInputCount = surface.inputObservationsForTesting.count
+        let broadcastInputCount = broadcastTarget.inputObservationsForTesting.count
+        let actionCount = surface.terminalActionObservationsForTesting.count
+        let broadcastActionCount = broadcastTarget.terminalActionObservationsForTesting.count
+
+        #expect(surface.performKeyEquivalent(with: configuredFind))
+        #expect(surface.terminalActionObservationsForTesting.count == actionCount + 1)
+        #expect(surface.terminalActionObservationsForTesting.last?.action == .find)
+        #expect(!surface.performKeyEquivalent(with: defaultFind))
+        #expect(!surface.performKeyEquivalent(with: paste))
+        #expect(surface.terminalActionObservationsForTesting.count == actionCount + 1)
+        #expect(
+            broadcastTarget.terminalActionObservationsForTesting.count == broadcastActionCount
+        )
+        #expect(bridge.inputObservationsForTesting.count == bridgeInputCount)
+        #expect(surface.inputObservationsForTesting.count == surfaceInputCount)
+        #expect(broadcastTarget.inputObservationsForTesting.count == broadcastInputCount)
+
+        surface.closeSearchFromUIForTesting()
+        #expect(!surface.isSearchFieldFocusedForTesting)
+        surface.processCallbackEvent(.searchEnded, confirmationHandler: nil)
+        #expect(!surface.isSearchFieldFocusedForTesting)
+        #expect(!surface.searchOverlayInstalledForTesting)
+        let unrelatedResponder = NSTextField(
+            frame: NSRect(x: 0, y: 0, width: 120, height: 24)
+        )
+        window.contentView?.addSubview(unrelatedResponder)
+        #expect(window.makeFirstResponder(unrelatedResponder))
+        #expect(!surface.isShortcutDispatchSource)
+        #expect(!surface.performKeyEquivalent(with: configuredFind))
+
+        bridge.closeSurface(id: surface.paneID)
+        #expect(!surface.isSearchFieldFocusedForTesting)
+        #expect(window.firstResponder !== surface)
+        #expect(!surface.isShortcutDispatchSource)
+    }
+
+    @Test
     func performableFalseFallsThroughWhileConsumePolicyConsumesFalse() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -1158,6 +1274,24 @@ private final class KeyboardPTYFixture {
         }
         try? FileManager.default.removeItem(at: directoryURL)
     }
+}
+
+@MainActor
+private func waitForKeyboardCondition(
+    timeout: TimeInterval = 1,
+    _ condition: () -> Bool
+) -> Bool {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while Date() < deadline {
+        if condition() {
+            return true
+        }
+        RunLoop.current.run(
+            mode: .default,
+            before: min(deadline, Date(timeIntervalSinceNow: 0.01))
+        )
+    }
+    return condition()
 }
 
 @MainActor

@@ -12,13 +12,14 @@ QuickTTY использует Ghostty v1.3.1, закреплённый на comm
 
 Кроме того, QuickTTY адаптирует узкие части AppKit keyboard/IME и mouse/scroll-поведения из следующих файлов той же закреплённой ревизии:
 
-- `include/ghostty.h:43-57,59-98,972-1000,1100-1127` — clipboard и mouse/scroll ABI;
+- `include/ghostty.h:43-57,59-98,835-847,918-963,972-1000,1100-1127` — clipboard, search и mouse/scroll ABI;
 - `macos/Sources/Ghostty/NSEvent+Extension.swift:3-76`;
 - `macos/Sources/Ghostty/Ghostty.Input.swift` — modifier mapping, scoped key-event wrappers и mouse/scroll value mapping около строк 253-535;
-- `macos/Sources/Ghostty/Ghostty.App.swift:326-425` — clipboard read/confirm/write mapping;
+- `macos/Sources/Ghostty/Ghostty.App.swift:326-425,2023-2119` — clipboard read/confirm/write mapping и search callback lifecycle;
 - `macos/Sources/Ghostty/GhosttyPackage.swift:248-309` — owned clipboard request/content types;
 - `macos/Sources/Ghostty/Ghostty.Shell.swift:3-17` — shell escaping;
-- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift:376-390,641-701,820-1426,1485-1569,1808-2037`;
+- `macos/Sources/Ghostty/Surface View/SurfaceView.swift:193-205,400-600,1268-1279` — search state, SwiftUI overlay и debounce;
+- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift:71-106,376-390,641-701,820-1426,1485-1569,1571-1617,1808-2037` — search actions и keyboard/IME/mouse behavior;
 - `macos/Sources/Helpers/Extensions/NSPasteboard+Extension.swift`;
 - `macos/Sources/Helpers/KeyboardLayout.swift`;
 - `macos/Sources/Features/ClipboardConfirmation/ClipboardConfirmationController.swift`;

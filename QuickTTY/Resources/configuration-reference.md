@@ -148,6 +148,9 @@ Global Quake toggle не входит в локальный registry; его def
 | `scroll-to-selection` | `cmd+j` | `scroll_to_selection` |
 | `previous-prompt` | `disabled` | `jump_to_prompt:-1` |
 | `next-prompt` | `disabled` | `jump_to_prompt:1` |
+| `find` | `cmd+f` | `start_search` |
+| `find-next` | `cmd+g` | `navigate_search:next` |
+| `find-previous` | `cmd+shift+g` | `navigate_search:previous` |
 | `selection-left` | `shift+left` | `adjust_selection:left` |
 | `selection-right` | `shift+right` | `adjust_selection:right` |
 | `selection-up` | `shift+up` | `adjust_selection:up` |
@@ -187,7 +190,7 @@ Terminal actions вызываются только через фиксирова
 
 ## Отложенные terminal actions
 
-Stateful actions read-only, secure input и mouse reporting не экспортируются до появления видимого состояния, checked menu state и корректного lifecycle cleanup. Interactive Search и URL hover/open остаются обязательными следующими интеграциями; их требования зафиксированы в `docs/backlog.md` исходного проекта.
+Interactive Search уже использует нативный Ghostty contract: `start_search`, `end_search`, `search:<needle>`, `navigate_search:next` и `navigate_search:previous`, а состояние overlay обновляется runtime callbacks начала, завершения, общего числа и выбранного результата. Stateful actions read-only, secure input и mouse reporting не экспортируются до появления видимого состояния, checked menu state и корректного lifecycle cleanup.
 
 ## Интеграции с coding agents
 

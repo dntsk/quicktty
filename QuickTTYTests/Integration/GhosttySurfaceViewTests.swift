@@ -1157,18 +1157,7 @@ extension GhosttyBridgeTests {
     // MARK: - Search
 
     @Test
-    func searchStateIsNilUntilOverlayShown() throws {
-        let bridge = try GhosttyBridge()
-        defer { bridge.shutdown() }
-        let surface = try bridge.makeSurface(
-            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
-        )
-
-        #expect(surface.searchState == nil)
-    }
-
-    @Test
-    func showAndHideSearchOverlay() throws {
+    func searchStartsAndEndsOnlyFromRuntimeCallbacks() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let window = makeHiddenWindow()
@@ -1177,34 +1166,160 @@ extension GhosttyBridgeTests {
         )
         embed(surface, in: window)
 
-        surface.showSearchOverlay()
-        #expect(surface.searchState != nil)
-        #expect(surface.bindingActionObservationsForTesting.contains("start_search"))
-
-        surface.hideSearchOverlay(clearSearch: true)
         #expect(surface.searchState == nil)
-        #expect(surface.bindingActionObservationsForTesting.contains("end_search"))
-    }
+        #expect(surface.scheduleSearchCallbackForTesting(.started(nil)))
+        await Task.yield()
+        await Task.yield()
 
-    @Test
-    func hideSearchOverlayWithoutClear() throws {
-        let bridge = try GhosttyBridge()
-        defer { bridge.shutdown() }
-        let window = makeHiddenWindow()
-        let surface = try bridge.makeSurface(
-            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
-        )
-        embed(surface, in: window)
+        #expect(surface.searchState?.needle == "")
+        #expect(surface.searchOverlayInstalledForTesting)
+        #expect(!surface.bindingActionObservationsForTesting.contains("start_search"))
 
-        surface.showSearchOverlay()
-        surface.hideSearchOverlay(clearSearch: false)
+        #expect(surface.scheduleSearchCallbackForTesting(.ended))
+        await Task.yield()
+        await Task.yield()
 
         #expect(surface.searchState == nil)
+        #expect(!surface.searchOverlayInstalledForTesting)
         #expect(!surface.bindingActionObservationsForTesting.contains("end_search"))
     }
 
     @Test
-    func showSearchOverlayIsIdempotent() throws {
+    func repeatedStartPreservesStateUpdatesOnlyNonemptyNeedleAndRequestsFocus() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(
+            surface.scheduleSearchCallbackForTesting(
+                .started(Array("first".utf8)),
+                overwritePayloadAfterCallback: true
+            )
+        )
+        await Task.yield()
+        await Task.yield()
+        let state = try #require(surface.searchState)
+        #expect(state.needle == "first")
+
+        #expect(surface.scheduleSearchCallbackForTesting(.started([])))
+        await Task.yield()
+        await Task.yield()
+        #expect(surface.searchState === state)
+        #expect(state.needle == "first")
+
+        #expect(surface.scheduleSearchCallbackForTesting(.started(Array("second".utf8))))
+        await Task.yield()
+        await Task.yield()
+        #expect(surface.searchState === state)
+        #expect(state.needle == "second")
+        #expect(surface.searchFocusRequestsForTesting == 2)
+    }
+
+    @Test
+    func searchCallbackRejectsInvalidUTF8AndNonSurfaceTargets() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(!surface.scheduleSearchCallbackForTesting(.started([0xFF])))
+        #expect(
+            !surface.scheduleSearchCallbackForTesting(
+                .started(nil),
+                target: .app
+            )
+        )
+        #expect(surface.searchState == nil)
+    }
+
+    @Test
+    func searchCountsUseOptionalZeroBasedCallbackValues() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        #expect(surface.scheduleSearchCallbackForTesting(.started(nil)))
+        #expect(surface.scheduleSearchCallbackForTesting(.total(17)))
+        #expect(surface.scheduleSearchCallbackForTesting(.selected(0)))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.searchState?.total == 17)
+        #expect(surface.searchState?.selected == 0)
+
+        #expect(surface.scheduleSearchCallbackForTesting(.total(-1)))
+        #expect(surface.scheduleSearchCallbackForTesting(.selected(-1)))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.searchState?.total == nil)
+        #expect(surface.searchState?.selected == nil)
+    }
+
+    @Test
+    func nativeFindActionsAreSentWithoutPrecreatingOverlay() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        _ = surface.performTerminalShortcutAction(.find)
+        _ = surface.performTerminalShortcutAction(.findNext)
+        _ = surface.performTerminalShortcutAction(.findPrevious)
+
+        #expect(surface.searchState == nil)
+        #expect(
+            surface.terminalActionObservationsForTesting.map(\.action)
+                == [.find, .findNext, .findPrevious]
+        )
+    }
+
+    @Test
+    func endSearchWaitsForRuntimeCallbackBeforeRemovingLocalState() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+
+        surface.endSearch()
+
+        #expect(surface.searchState != nil)
+        #expect(surface.bindingActionObservationsForTesting.last == "end_search")
+        surface.processCallbackEvent(.searchEnded, confirmationHandler: nil)
+        #expect(surface.searchState == nil)
+    }
+
+    @Test
+    func acceptedUICloseFocusesTerminalAndWaitsForEndCallback() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let window = makeHiddenWindow()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        embed(surface, in: window)
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        let otherResponder = NSTextField()
+        window.contentView?.addSubview(otherResponder)
+        #expect(window.makeFirstResponder(otherResponder))
+
+        surface.closeSearchFromUIForTesting()
+
+        #expect(window.firstResponder === surface)
+        #expect(surface.searchState != nil)
+        #expect(surface.bindingActionObservationsForTesting.last == "end_search")
+    }
+
+    @Test
+    func initialDeferredSearchFocusIsCancelledAfterSearchEndsBeforeDelivery() async throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let window = makeHiddenWindow()
@@ -1213,15 +1328,99 @@ extension GhosttyBridgeTests {
         )
         embed(surface, in: window)
 
-        surface.showSearchOverlay()
-        let firstState = surface.searchState
-        surface.showSearchOverlay()
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        surface.processCallbackEvent(.searchEnded, confirmationHandler: nil)
+        try await Task.sleep(for: .milliseconds(100))
 
-        // Second call should be a no-op: same state, no duplicate bindings.
-        #expect(surface.searchState === firstState)
-        let startCount = surface.bindingActionObservationsForTesting
-            .filter { $0 == "start_search" }.count
-        #expect(startCount == 1)
+        #expect(surface.searchState == nil)
+        #expect(!surface.searchOverlayInstalledForTesting)
+        #expect(!surface.isSearchFieldFocusedForTesting)
+    }
+
+    @Test
+    func searchNeedleUsesPinnedImmediateAndDebouncedPipeline() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        let state = try #require(surface.searchState)
+        #expect(surface.bindingActionObservationsForTesting.last == "search:")
+
+        state.needle = "a"
+        #expect(surface.bindingActionObservationsForTesting.last == "search:")
+        state.needle = "abc"
+        #expect(surface.bindingActionObservationsForTesting.last == "search:abc")
+
+        state.needle = "xy"
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(surface.bindingActionObservationsForTesting.last == "search:xy")
+    }
+
+    @Test
+    func searchEndCancelsPendingShortNeedleDelivery() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        let state = try #require(surface.searchState)
+        #expect(surface.bindingActionObservationsForTesting == ["search:"])
+
+        state.needle = "xy"
+        surface.processCallbackEvent(.searchEnded, confirmationHandler: nil)
+        try await Task.sleep(for: .milliseconds(350))
+
+        #expect(surface.bindingActionObservationsForTesting == ["search:"])
+        #expect(surface.searchState == nil)
+    }
+
+    @Test
+    func closeAndSamePaneReplacementCancelPendingOldNeedleDelivery() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        let oldSurface = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        oldSurface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        let oldState = try #require(oldSurface.searchState)
+        oldState.needle = "x"
+
+        bridge.closeSurface(id: paneID)
+        let replacement = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        replacement.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        try await Task.sleep(for: .milliseconds(350))
+
+        #expect(oldSurface.bindingActionObservationsForTesting == ["search:"])
+        #expect(oldSurface.searchState == nil)
+        #expect(replacement.bindingActionObservationsForTesting == ["search:"])
+        #expect(replacement.searchState != nil)
+    }
+
+    @Test
+    func closeRemovesSearchBeforeQueuedCallbacksCanDeliver() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        #expect(surface.scheduleSearchCallbackForTesting(.total(8)))
+
+        surface.close()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(surface.searchState == nil)
+        #expect(!surface.searchOverlayInstalledForTesting)
+        #expect(!surface.isActive)
     }
 }
 

@@ -96,6 +96,30 @@ do
     fi
 done
 
+for search_contract in \
+    'action.tag == GHOSTTY_ACTION_START_SEARCH' \
+    'action.tag == GHOSTTY_ACTION_END_SEARCH' \
+    'action.tag == GHOSTTY_ACTION_SEARCH_TOTAL' \
+    'action.tag == GHOSTTY_ACTION_SEARCH_SELECTED' \
+    'action.action.start_search.needle' \
+    'String(validatingCString: needlePointer)' \
+    'target.tag == GHOSTTY_TARGET_SURFACE' \
+    'ghostty_surface_userdata(surface)' \
+    'context.scheduleSearchStarted' \
+    'context.scheduleSearchEnded' \
+    'context.scheduleSearchTotal' \
+    'context.scheduleSearchSelected' \
+    'case searchStarted(String?)' \
+    'case searchEnded' \
+    'case searchTotal(Int?)' \
+    'case searchSelected(Int?)'
+do
+    if ! grep -Fq "$search_contract" "$bridge" "$surface"; then
+        printf 'surface search callback contract is missing: %s\n' "$search_contract" >&2
+        exit 1
+    fi
+done
+
 for scrollbar_contract in \
     'action.tag == GHOSTTY_ACTION_SCROLLBAR' \
     'action.action.scrollbar.total' \
