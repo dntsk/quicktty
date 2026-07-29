@@ -95,6 +95,16 @@ grep -F -x '        INFOPLIST_FILE: QuickTTY/Resources/Info.plist' "$project_spe
     || fail 'project spec does not use the app Info.plist'
 grep -F -x '        MARKETING_VERSION: 0.1.2' "$project_spec" >/dev/null \
     || fail 'project spec does not set MARKETING_VERSION to 0.1.2'
+grep -F -x '    <key>CFBundleExecutable</key>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not define CFBundleExecutable'
+grep -F -x '    <string>$(EXECUTABLE_NAME)</string>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not use the product executable name'
+grep -F -x '    <key>CFBundleIconFile</key>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not define CFBundleIconFile'
+grep -F -x '    <key>CFBundleIconName</key>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not define CFBundleIconName'
+grep -F -x '    <string>AppIcon</string>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not set AppIcon'
 grep -F -x '    <key>SUPublicEDKey</key>' "$app_info_plist" >/dev/null \
     || fail 'app Info.plist does not define the Sparkle Ed25519 public key'
 grep -F -x '    <string>e7y/m6sTWYFRLzJiBlvus8EZs8oeZ6nyQzayNfJEdrU=</string>' "$app_info_plist" >/dev/null \
