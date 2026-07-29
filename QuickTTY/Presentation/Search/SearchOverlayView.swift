@@ -9,6 +9,7 @@ final class SearchOverlayView: NSView {
     private let searchField = NSSearchField()
     private let countLabel = NSTextField(labelWithString: "")
     private var debounceWork: DispatchWorkItem?
+    private var localKeyMonitor: Any?
     private let debounceDelay: DispatchTimeInterval = .milliseconds(200)
 
     var onNeedleChange: ((String) -> Void)?
@@ -70,6 +71,44 @@ final class SearchOverlayView: NSView {
 
     func focus() {
         window?.makeFirstResponder(searchField)
+        if localKeyMonitor == nil {
+            localKeyMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: .keyDown
+            ) { [weak self] event in
+                self?.handleSearchKeyEvent(event)
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let monitor = localKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            localKeyMonitor = nil
+        }
+    }
+
+    func dismiss() {
+        removeKeyMonitor()
+    }
+
+    private func handleSearchKeyEvent(_ event: NSEvent) {
+        guard
+            window?.firstResponder === searchField
+                || window?.firstResponder === searchField.currentEditor()
+        else { return }
+        switch event.keyCode {
+        case 126:  // Up arrow
+            onNavigate?(.previous)
+        case 125:  // Down arrow
+            onNavigate?(.next)
+        case 53:  // Escape
+            onClose?(true)
+        case 36:  // Return
+            onClose?(false)
+        default:
+            break
+        }
     }
 
     @objc private func searchFieldDidChange() {
@@ -86,6 +125,7 @@ final class SearchOverlayView: NSView {
 }
 
 extension SearchOverlayView: NSSearchFieldDelegate {
+    // NSSearchFieldDelegate methods for search text changes only
     func control(
         _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
     ) -> Bool {

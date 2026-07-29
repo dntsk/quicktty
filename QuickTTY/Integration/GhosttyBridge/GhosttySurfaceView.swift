@@ -1989,6 +1989,7 @@ extension GhosttySurfaceView {
         if clearSearch {
             performSearchBinding("end_search")
         }
+        searchOverlayView?.dismiss()
         searchOverlayView?.removeFromSuperview()
         searchOverlayView = nil
         searchState = nil
