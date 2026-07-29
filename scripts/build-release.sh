@@ -20,7 +20,7 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/release-helpers.sh"
 
 MARKETING_VERSION=0.1.0
-BUILD_NUMBER=4
+BUILD_NUMBER=5
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY
@@ -398,5 +398,13 @@ verify_signature_metadata "$dmg_path" '' no
 [ -f "$dmg_path" ] || release_fail "release DMG was not created: $dmg_path"
 archive_pending=no
 dmg_pending=no
+
+appcast_dir=$release_dir/appcast
+"$mkdir_path" "$appcast_dir" || release_fail "could not create appcast directory: $appcast_dir"
+cp "$dmg_path" "$appcast_dir/"
+"$script_dir/generate_appcast" "$appcast_dir" \
+    || release_fail 'could not generate appcast'
+rm "$appcast_dir/$RELEASE_DMG_NAME"
+
 trap - 0 HUP INT TERM
 printf '%s\n' ".build/Release/$RELEASE_DMG_NAME"
