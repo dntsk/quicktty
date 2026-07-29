@@ -104,10 +104,10 @@ unset APPLE_ID
 
 . "$helpers"
 
-assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.0-beta.2
+assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.0
 assert_equals "$RELEASE_ARCHIVE_NAME" QuickTTY.xcarchive
-assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.0-beta.2-arm64.dmg
-assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.0-beta.2-stage
+assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.0-arm64.dmg
+assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.0-stage
 release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'

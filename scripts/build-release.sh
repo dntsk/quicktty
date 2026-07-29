@@ -192,6 +192,14 @@ verify_bundle() {
         release_fail 'GhosttyKit.framework must not be embedded; Ghostty is linked statically'
     fi
 
+    sparkle_linked=yes
+    if [ -e "$archive_app/Contents/Frameworks/Sparkle.framework" ] \
+        || [ -L "$archive_app/Contents/Frameworks/Sparkle.framework" ]; then
+        sparkle_linked=no
+    fi
+    [ "$sparkle_linked" = no ] \
+        || release_fail 'Sparkle.framework must be embedded in Frameworks'
+
     linked_libraries=$("$otool_path" -L "$archive_app/Contents/MacOS/$PRODUCT_NAME") \
         || release_fail 'could not inspect executable linked libraries'
     ghosttykit_linked=no

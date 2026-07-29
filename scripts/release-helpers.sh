@@ -1,9 +1,9 @@
 #!/bin/sh
 
-RELEASE_LABEL_DEFAULT=0.1.0-beta.2
+RELEASE_LABEL_DEFAULT=0.1.0
 RELEASE_ARCHIVE_NAME=QuickTTY.xcarchive
-RELEASE_DMG_NAME=QuickTTY-0.1.0-beta.2-arm64.dmg
-RELEASE_STAGE_NAME=QuickTTY-0.1.0-beta.2-stage
+RELEASE_DMG_NAME=QuickTTY-0.1.0-arm64.dmg
+RELEASE_STAGE_NAME=QuickTTY-0.1.0-stage
 RELEASE_NOTARY_RESULT_NAME=$RELEASE_DMG_NAME.notary-result.json
 RELEASE_FIND_PATH=/usr/bin/find
 RELEASE_MKDIR_PATH=/bin/mkdir
@@ -246,11 +246,30 @@ release_verify_app_code_layout() {
         "$release_contents_dir/Library/Automator" \
         "$release_contents_dir/Library/Internet Plug-Ins"
     do
-        release_require_empty_or_absent_directory "$release_nested_code_dir"
+        case "$release_nested_code_dir" in
+            */Frameworks)
+                for frameworks_entry in "$release_nested_code_dir"/*; do
+                    [ -e "$frameworks_entry" ] || [ -L "$frameworks_entry" ] || continue
+                    case "$frameworks_entry" in
+                        */Sparkle.framework) ;;
+                        */Sparkle.framework/*) ;;
+                        */Sparkle.framework/Contents/*) ;;
+                        *)
+                            release_fail "unexpected nested code directory contents: $release_nested_code_dir"
+                            ;;
+                    esac
+                done
+                ;;
+            *)
+                release_require_empty_or_absent_directory "$release_nested_code_dir"
+                ;;
+        esac
     done
 
     release_nested_file_descriptions=$("$RELEASE_FIND_PATH" "$release_contents_dir" -type f \
-        ! -path "$release_main_executable" -exec "$release_file_path" -b {} \;) \
+        ! -path "$release_main_executable" \
+        ! -path "$release_contents_dir/Frameworks/Sparkle.framework/*" \
+        -exec "$release_file_path" -b {} \;) \
         || release_fail "could not inspect app files for nested Mach-O code: $release_app_bundle"
     case "$release_nested_file_descriptions" in
         *Mach-O*) release_fail "unexpected nested Mach-O code: $release_app_bundle" ;;
