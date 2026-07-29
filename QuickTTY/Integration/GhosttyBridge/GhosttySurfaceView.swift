@@ -630,6 +630,20 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         super.viewWillMove(toWindow: newWindow)
     }
 
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if superview == nil {
+            preserveViewportForDetachment()
+        } else if window != nil {
+            prepareViewportRestoreAfterAttach()
+            if let snapshot = callbackContextOwnership?.takeUnretainedValue()
+                .scrollbarSnapshotForViewportCapture() ?? latestScrollbarSnapshot
+            {
+                restoreViewportIfNeeded(after: snapshot, isInitial: true)
+            }
+        }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         startObservingWindow(window)

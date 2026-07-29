@@ -65,7 +65,7 @@ sh -n "$ghostty_build_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
     || fail 'release build script does not set the trusted PATH'
 for required_build_setting in \
-    'BUILD_NUMBER=4' \
+    'BUILD_NUMBER=5' \
     'BUNDLE_IDENTIFIER=com.dntsk.QuickTTY' \
     'PRODUCT_NAME=QuickTTY'
 do
