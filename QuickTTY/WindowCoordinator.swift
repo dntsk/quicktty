@@ -32,6 +32,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let quakeWindowController: QuakeWindowController
     private let presentationController: PresentationController
     private let hotKeyController: any HotKeyControlling
+    private let menuBarManager: MenuBarManager
     private let surfaceConfiguration: GhosttySurfaceConfiguration
     private let terminalActivityController: TerminalActivityController
     private var terminalNotificationController: TerminalNotificationController?
@@ -197,6 +198,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.normalWindowController = normalWindowController
         self.quakeWindowController = quakeWindowController
         self.hotKeyController = resolvedHotKeyController
+        self.menuBarManager = MenuBarManager()
         self.surfaceConfiguration = surfaceConfiguration
         self.terminalActivityController =
             terminalActivityController ?? TerminalActivityController()
@@ -223,6 +225,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
         normalWindowController.window?.delegate = self
         hotKeyRelay.action = { [weak self] in
+            self?.presentationController.toggleQuakeVisibility()
+        }
+        menuBarManager.applyMode(presentationMode)
+        menuBarManager.setToggleCallback { [weak self] in
             self?.presentationController.toggleQuakeVisibility()
         }
         ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
@@ -1178,6 +1184,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         let target: PresentationMode = presentationMode == .normal ? .quake : .normal
         do {
             try presentationController.transition(to: target)
+            menuBarManager.applyMode(target)
             if target == .quake {
                 try hotKeyController.replace(with: configuredGlobalChord)
             } else {
