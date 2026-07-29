@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
     private var isTerminating = false
+    private var updateManager: UpdateManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !ApplicationEnvironment.isRunningHostedTests else { return }
@@ -98,6 +99,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 terminalNotificationController
             )
             windowCoordinator.applyConfiguration(config)
+
+            let releaseBase = "https://github.com/dntsk/quicktty/releases"
+            let defaultFeed = URL(string: "\(releaseBase)/latest/download/appcast.xml")!
+            let betaFeed = URL(string: "\(releaseBase)/download/beta/appcast.xml")!
+            let updateManager = UpdateManager(
+                defaultFeedURL: defaultFeed,
+                betaFeedURL: betaFeed,
+                initialChannel: config.updateChannel
+            )
+            self.updateManager = updateManager
+
             Self.applyRuntimeShortcutConfiguration(
                 config.shortcuts,
                 registeredGlobalChord: windowCoordinator.registeredGlobalChord,
@@ -107,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try windowCoordinator.start()
             applyPendingConfigurationDiagnostics()
             installApplicationMenuItems()
+            installCheckForUpdatesMenuItem()
             installNewTabMenuItem()
             installSplitPaneMenuItems()
             installCloseMenuItems()
@@ -1367,6 +1380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let windowCoordinator = self.windowCoordinator
                     else { return }
                     windowCoordinator.applyConfiguration(config)
+                    self.updateManager?.setChannel(config.updateChannel)
                     Self.applyRuntimeShortcutConfiguration(
                         config.shortcuts,
                         registeredGlobalChord: windowCoordinator.registeredGlobalChord,
@@ -1580,6 +1594,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if NSApp.mainMenu == nil {
             NSApp.mainMenu = mainMenu
         }
+    }
+
+    private func installCheckForUpdatesMenuItem() {
+        guard updateManager != nil else { return }
+        let appMenu = NSApp.mainMenu?.items.first?.submenu
+        guard let appMenu else { return }
+
+        for item in appMenu.items where item.action == #selector(checkForUpdates) {
+            appMenu.removeItem(item)
+        }
+
+        let separator = appMenu.items.last { $0.isSeparatorItem }
+        let insertIndex: Int
+        if let separator {
+            insertIndex = appMenu.index(of: separator)
+        } else {
+            insertIndex = appMenu.numberOfItems
+        }
+
+        let item = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        item.target = self
+        appMenu.insertItem(item, at: insertIndex)
+    }
+
+    @objc private func checkForUpdates() {
+        updateManager?.checkForUpdates()
     }
 
     private func logConfigurationError(_ error: Error) {
