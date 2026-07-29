@@ -8,9 +8,7 @@ enum SearchNavigation: Equatable {
 final class SearchOverlayView: NSView {
     private let searchField = NSSearchField()
     private let countLabel = NSTextField(labelWithString: "")
-    private var debounceWork: DispatchWorkItem?
     private var localKeyMonitor: Any?
-    private let debounceDelay: DispatchTimeInterval = .milliseconds(200)
 
     var onNeedleChange: ((String) -> Void)?
     var onNavigate: ((SearchNavigation) -> Void)?
@@ -19,17 +17,26 @@ final class SearchOverlayView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.95).cgColor
+        layer?.cornerRadius = 8
+        layer?.backgroundColor =
+            NSColor.controlBackgroundColor
+            .withAlphaComponent(0.97).cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.borderWidth = 0.5
+        layer?.masksToBounds = true
 
         searchField.placeholderString = "Search"
         searchField.sendsSearchStringImmediately = true
-        searchField.delegate = self
         searchField.target = self
         searchField.action = #selector(searchFieldDidChange)
-        searchField.cell?.sendsActionOnEndEditing = false
+        searchField.isBezeled = false
+        searchField.isBordered = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.refusesFirstResponder = false
+        searchField.font = .systemFont(
+            ofSize: NSFont.systemFontSize)
 
         countLabel.font = .monospacedDigitSystemFont(
             ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -48,13 +55,14 @@ final class SearchOverlayView: NSView {
         addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 280),
-            heightAnchor.constraint(equalToConstant: 28),
+            widthAnchor.constraint(equalToConstant: 320),
+            heightAnchor.constraint(equalToConstant: 32),
 
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stackView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            stackView.leadingAnchor.constraint(
+                equalTo: leadingAnchor, constant: 10),
+            stackView.trailingAnchor.constraint(
+                equalTo: trailingAnchor, constant: -10),
+            stackView.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -75,75 +83,55 @@ final class SearchOverlayView: NSView {
             localKeyMonitor = NSEvent.addLocalMonitorForEvents(
                 matching: .keyDown
             ) { [weak self] event in
-                self?.handleSearchKeyEvent(event)
+                if self?.handleSearchKeyEvent(event) == true {
+                    return nil
+                }
                 return event
             }
         }
     }
 
-    private func removeKeyMonitor() {
+    func dismiss() {
         if let monitor = localKeyMonitor {
             NSEvent.removeMonitor(monitor)
             localKeyMonitor = nil
         }
     }
 
-    func dismiss() {
-        removeKeyMonitor()
-    }
-
-    private func handleSearchKeyEvent(_ event: NSEvent) {
+    private func handleSearchKeyEvent(_ event: NSEvent) -> Bool {
+        let editor = searchField.currentEditor()
         guard
             window?.firstResponder === searchField
-                || window?.firstResponder === searchField.currentEditor()
-        else { return }
+                || window?.firstResponder === editor
+        else { return false }
+
+        // Only intercept when no modifier keys are held
+        guard
+            event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) == []
+        else {
+            return false
+        }
+
         switch event.keyCode {
         case 126:  // Up arrow
             onNavigate?(.previous)
+            return true
         case 125:  // Down arrow
             onNavigate?(.next)
+            return true
         case 53:  // Escape
             onClose?(true)
-        case 36:  // Return
-            onClose?(false)
-        default:
-            break
-        }
-    }
-
-    @objc private func searchFieldDidChange() {
-        debounceWork?.cancel()
-        let needle = searchField.stringValue
-        guard !needle.isEmpty else { return }
-
-        let work = DispatchWorkItem { [weak self] in
-            self?.onNeedleChange?(needle)
-        }
-        debounceWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + debounceDelay, execute: work)
-    }
-}
-
-extension SearchOverlayView: NSSearchFieldDelegate {
-    // NSSearchFieldDelegate methods for search text changes only
-    func control(
-        _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
-    ) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.moveUp(_:)):
-            onNavigate?(.previous)
             return true
-        case #selector(NSResponder.moveDown(_:)):
-            onNavigate?(.next)
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            onClose?(true)
-            return true
-        case #selector(NSResponder.insertNewline(_:)):
+        case 36, 76:  // Return, Enter
             onClose?(false)
             return true
         default:
             return false
         }
+    }
+
+    @objc private func searchFieldDidChange() {
+        onNeedleChange?(searchField.stringValue)
     }
 }
