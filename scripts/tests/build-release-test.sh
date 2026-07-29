@@ -53,8 +53,10 @@ helpers=$repo_root/scripts/release-helpers.sh
 build_script=$repo_root/scripts/build-release.sh
 ghostty_build_script=$repo_root/scripts/build-ghostty.sh
 project_spec=$repo_root/project.yml
+app_info_plist=$repo_root/QuickTTY/Resources/Info.plist
 
 [ -f "$project_spec" ] || fail "project spec is missing: $project_spec"
+[ -f "$app_info_plist" ] || fail "app Info.plist is missing: $app_info_plist"
 [ -f "$helpers" ] || fail "release helpers are missing: $helpers"
 [ -f "$build_script" ] || fail "release build script is missing: $build_script"
 [ -f "$ghostty_build_script" ] || fail "Ghostty build script is missing: $ghostty_build_script"
@@ -85,10 +87,16 @@ grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$b
     || fail 'release build script does not force a Ghostty rebuild'
 grep -F -x '        CURRENT_PROJECT_VERSION: 8' "$project_spec" >/dev/null \
     || fail 'project spec does not set CURRENT_PROJECT_VERSION to 8'
+grep -F -x '    GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
+    || fail 'project spec does not disable generated Info.plist'
+grep -F -x '        INFOPLIST_FILE: QuickTTY/Resources/Info.plist' "$project_spec" >/dev/null \
+    || fail 'project spec does not use the app Info.plist'
 grep -F -x '        MARKETING_VERSION: 0.1.2' "$project_spec" >/dev/null \
     || fail 'project spec does not set MARKETING_VERSION to 0.1.2'
-grep -F -x '        INFOPLIST_KEY_SUPublicEDKey: e7y/m6sTWYFRLzJiBlvus8EZs8oeZ6nyQzayNfJEdrU=' "$project_spec" >/dev/null \
-    || fail 'project spec does not set the Sparkle Ed25519 public key'
+grep -F -x '    <key>SUPublicEDKey</key>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not define the Sparkle Ed25519 public key'
+grep -F -x '    <string>e7y/m6sTWYFRLzJiBlvus8EZs8oeZ6nyQzayNfJEdrU=</string>' "$app_info_plist" >/dev/null \
+    || fail 'app Info.plist does not set the Sparkle Ed25519 public key'
 
 invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_build_script" 2>&1) \
     && fail 'invalid Ghostty force-rebuild flag unexpectedly succeeded'
