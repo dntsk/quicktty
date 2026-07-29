@@ -9,6 +9,7 @@ struct QuickTTYConfig: Equatable, Sendable {
         case quakeHeight = "quicktty-quake-height"
         case quakeAnimationDuration = "quicktty-quake-animation-duration"
         case quakePadding = "quicktty-quake-padding"
+        case quakePinToScreen = "quicktty-quake-pin-to-screen"
         case hideOnFocusLoss = "quicktty-hide-on-focus-loss"
         case restoreWorkspaces = "quicktty-restore-workspaces"
         case configEditor = "quicktty-config-editor"
@@ -20,6 +21,7 @@ struct QuickTTYConfig: Equatable, Sendable {
     var quakeHeight: Double = 0.75
     var quakeAnimationDuration: TimeInterval = 0.18
     var quakePadding: CGFloat = 0
+    var quakePinToScreen = false
     var hideOnFocusLoss = true
     var restoreWorkspaces = true
     var configEditor = "nano"

@@ -1162,7 +1162,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             QuakeWindowConfiguration(
                 geometry: geometry,
                 animationDuration: config.quakeAnimationDuration,
-                hideOnFocusLoss: config.hideOnFocusLoss
+                hideOnFocusLoss: config.hideOnFocusLoss,
+                pinToScreen: config.quakePinToScreen
             )
         )
 

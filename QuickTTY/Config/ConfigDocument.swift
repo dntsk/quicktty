@@ -599,6 +599,14 @@ struct ConfigDocument: Equatable, Sendable {
                 return
             }
             config.quakePadding = padding
+        case .quakePinToScreen:
+            guard value == "true" || value == "false" else {
+                diagnostics.append(
+                    ConfigDiagnostic(line: line, key: key.rawValue, reason: .invalidBoolean)
+                )
+                return
+            }
+            config.quakePinToScreen = value == "true"
         case .hideOnFocusLoss:
             guard value == "true" || value == "false" else {
                 diagnostics.append(

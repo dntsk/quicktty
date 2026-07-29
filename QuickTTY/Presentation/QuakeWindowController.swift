@@ -90,6 +90,7 @@ struct QuakeWindowConfiguration: Equatable, Sendable {
     var animationDuration: TimeInterval
     var focusLossDelay: TimeInterval
     var hideOnFocusLoss: Bool
+    var pinToScreen: Bool
 
     init(
         geometry: QuakeWindowGeometry = QuakeWindowGeometry(
@@ -98,7 +99,8 @@ struct QuakeWindowConfiguration: Equatable, Sendable {
         )!,
         animationDuration: TimeInterval = 0.18,
         focusLossDelay: TimeInterval = 0.15,
-        hideOnFocusLoss: Bool = true
+        hideOnFocusLoss: Bool = true,
+        pinToScreen: Bool = false
     ) {
         precondition(animationDuration.isFinite && animationDuration >= 0)
         precondition(focusLossDelay.isFinite && focusLossDelay >= 0)
@@ -106,6 +108,7 @@ struct QuakeWindowConfiguration: Equatable, Sendable {
         self.animationDuration = animationDuration
         self.focusLossDelay = focusLossDelay
         self.hideOnFocusLoss = hideOnFocusLoss
+        self.pinToScreen = pinToScreen
     }
 }
 
@@ -236,6 +239,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     private var deferredAnimationCancellation: (any PresentationCancellation)?
     private var focusLossCancellation: (any PresentationCancellation)?
     private var animationGeneration = 0
+    private var pinnedScreenFrame: NSRect?
     private var lastVisibleFrame: NSRect?
     private var priorApplication: (any PresentationApplicationActivation)?
     private var isLiveResizing = false
@@ -519,12 +523,22 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     private func selectedVisibleFrame() throws -> NSRect {
+        if configuration.pinToScreen, let pinnedFrame = pinnedScreenFrame {
+            let frames = visibleFrames()
+            if frames.contains(where: { $0 == pinnedFrame }) {
+                return pinnedFrame
+            }
+            pinnedScreenFrame = nil
+        }
         guard
             let frame = QuakeWindowGeometry.visibleFrame(
                 under: cursorLocation(),
                 from: visibleFrames()
             )
         else { throw QuakePresentationError.noVisibleScreen }
+        if configuration.pinToScreen {
+            pinnedScreenFrame = frame
+        }
         return frame
     }
 

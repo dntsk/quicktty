@@ -39,6 +39,10 @@ quicktty-shortcut = action-id=disabled
 
 Скрывать Quake-окно после потери фокуса: `true` или `false`. Значение по умолчанию — `true`.
 
+### `quicktty-quake-pin-to-screen`
+
+Закреплять Quake-окно за монитором, на котором оно было впервые показано: `true` или `false`. Значение по умолчанию — `false`. При `false` окно открывается на экране, где находится курсор мыши. При `true` окно всегда открывается на том же мониторе, даже если курсор переместился на другой.
+
 ### `quicktty-restore-workspaces`
 
 Восстанавливать сохранённые рабочие пространства при следующем запуске: `true` или `false`. Значение по умолчанию — `true`. При `false` QuickTTY открывает новое рабочее пространство Default; восстановление рамки окна при этом сохраняется.
@@ -220,6 +224,7 @@ quicktty-quake-height = 75%
 quicktty-quake-animation-duration = 0.18
 quicktty-quake-padding = 0
 quicktty-hide-on-focus-loss = true
+quicktty-quake-pin-to-screen = false
 quicktty-restore-workspaces = true
 quicktty-config-editor = nano
 
