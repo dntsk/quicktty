@@ -78,16 +78,18 @@ repo_root=$(CDPATH= cd -P "$script_dir/../.." && pwd -P) || fail 'could not reso
 release_helpers=$repo_root/scripts/release-helpers.sh
 notarize_helpers=$repo_root/scripts/notarize-helpers.sh
 notarize_script=$repo_root/scripts/notarize-dmg.sh
+build_script=$repo_root/scripts/build-release.sh
 makefile=$repo_root/Makefile
 test_development_team=ABCDE12345
 test_code_sign_identity="Developer ID Application: Contract Test ($test_development_team)"
 default_developer_dir=/Applications/Xcode.app/Contents/Developer
 test_developer_dir=$default_developer_dir
-test_release_label=0.1.1
+test_release_label=0.1.2.beta-1
 
 [ -f "$release_helpers" ] || fail "release helpers are missing: $release_helpers"
 [ -f "$notarize_helpers" ] || fail "notarization helpers are missing: $notarize_helpers"
 [ -f "$notarize_script" ] || fail "notarization script is missing: $notarize_script"
+[ -f "$build_script" ] || fail "release build script is missing: $build_script"
 [ -f "$makefile" ] || fail "Makefile is missing: $makefile"
 
 for shell_script in "$repo_root"/scripts/*.sh "$repo_root"/scripts/tests/*.sh; do
@@ -96,6 +98,13 @@ for shell_script in "$repo_root"/scripts/*.sh "$repo_root"/scripts/tests/*.sh; d
 done
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$notarize_script" >/dev/null \
     || fail 'notarization script does not set the trusted PATH'
+if grep -F 'generate_appcast' "$build_script" >/dev/null; then
+    fail 'release build script must not generate an appcast before notarization'
+fi
+grep -F -x '    --download-url-prefix "$(release_appcast_download_url_prefix)" \' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not generate appcast with an absolute download URL prefix'
+grep -F -x 'release_verify_appcast \' "$notarize_script" >/dev/null \
+    || fail 'notarization script does not verify the final appcast against the DMG'
 grep -F -x '"$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \' \
     "$notarize_script" >/dev/null \
     || fail 'notarization script does not use the required Gatekeeper assessment context'

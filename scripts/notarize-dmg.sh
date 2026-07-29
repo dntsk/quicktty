@@ -90,6 +90,7 @@ assert_result_path() {
 }
 
 notary_result_tmp=
+appcast_pending=no
 
 cleanup_notary_result_tmp() {
     cleanup_status=$?
@@ -99,6 +100,9 @@ cleanup_notary_result_tmp() {
         "$rm_path" -f "$notary_result_tmp" || {
             printf 'error: could not remove temporary notarization result: %s\n' "$notary_result_tmp" >&2
         }
+    fi
+    if [ "$appcast_pending" = yes ]; then
+        release_remove_generated_directory "$release_dir" "$appcast_dir"
     fi
 
     exit "$cleanup_status"
@@ -117,7 +121,9 @@ expected_dmg_path=$repo_root/.build/Release/$RELEASE_DMG_NAME
 DMG=$(notarize_resolve_dmg_path "$DMG" "$repo_root" "$expected_dmg_path")
 release_dir=${expected_dmg_path%/*}
 notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
+appcast_dir=$release_dir/$RELEASE_APPCAST_DIRECTORY_NAME
 assert_result_path
+release_remove_generated_directory "$release_dir" "$appcast_dir"
 
 DEVELOPER_DIR=${DEVELOPER_DIR:-$DEFAULT_DEVELOPER_DIR}
 [ -d "$DEVELOPER_DIR" ] || release_fail "DEVELOPER_DIR is not an existing directory: $DEVELOPER_DIR"
@@ -135,7 +141,11 @@ stat_path=/usr/bin/stat
 mktemp_path=/usr/bin/mktemp
 mv_path=/bin/mv
 rm_path=/bin/rm
+mkdir_path=/bin/mkdir
+cp_path=/bin/cp
+grep_path=/usr/bin/grep
 git_path=/usr/bin/git
+generate_appcast_path=$script_dir/generate_appcast
 
 for required_tool_path in \
     "$codesign_path" \
@@ -147,7 +157,11 @@ for required_tool_path in \
     "$mktemp_path" \
     "$mv_path" \
     "$rm_path" \
-    "$git_path"
+    "$mkdir_path" \
+    "$cp_path" \
+    "$grep_path" \
+    "$git_path" \
+    "$generate_appcast_path"
 do
     require_executable_path "$required_tool_path"
 done
@@ -223,6 +237,21 @@ printf '%s\n' 'Stage: validating stapled notarization ticket.'
     || release_fail "stapled DMG did not pass strict code-signature verification: $DMG"
 "$spctl_path" --assess --type open --context context:primary-signature --verbose=4 "$DMG" \
     || release_fail "Gatekeeper assessment failed: $DMG"
+
+release_assert_generated_path_absent "$release_dir" "$appcast_dir"
+"$mkdir_path" "$appcast_dir" || release_fail "could not create appcast directory: $appcast_dir"
+appcast_pending=yes
+"$cp_path" "$DMG" "$appcast_dir/$RELEASE_DMG_NAME" \
+    || release_fail "could not stage final DMG for appcast: $DMG"
+"$generate_appcast_path" \
+    --download-url-prefix "$(release_appcast_download_url_prefix)" \
+    "$appcast_dir" \
+    || release_fail 'could not generate appcast from the final DMG'
+"$rm_path" -f "$appcast_dir/$RELEASE_DMG_NAME" \
+    || release_fail "could not remove staged appcast DMG: $appcast_dir/$RELEASE_DMG_NAME"
+release_verify_appcast \
+    "$appcast_dir/$RELEASE_APPCAST_NAME" "$DMG" "$stat_path" "$grep_path"
+appcast_pending=no
 
 dmg_size=$("$stat_path" -f '%z' "$DMG") \
     || release_fail "could not determine final DMG size: $DMG"

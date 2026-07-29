@@ -1,10 +1,13 @@
 #!/bin/sh
 
-RELEASE_LABEL_DEFAULT=0.1.1
+RELEASE_LABEL_DEFAULT=0.1.2.beta-1
 RELEASE_ARCHIVE_NAME=QuickTTY.xcarchive
-RELEASE_DMG_NAME=QuickTTY-0.1.1-arm64.dmg
-RELEASE_STAGE_NAME=QuickTTY-0.1.1-stage
+RELEASE_DMG_NAME=QuickTTY-0.1.2.beta-1-arm64.dmg
+RELEASE_STAGE_NAME=QuickTTY-0.1.2.beta-1-stage
 RELEASE_NOTARY_RESULT_NAME=$RELEASE_DMG_NAME.notary-result.json
+RELEASE_APPCAST_DIRECTORY_NAME=appcast
+RELEASE_APPCAST_NAME=appcast.xml
+RELEASE_GITHUB_RELEASE_DOWNLOAD_BASE=https://github.com/dntsk/quicktty/releases/download
 RELEASE_FIND_PATH=/usr/bin/find
 RELEASE_MKDIR_PATH=/bin/mkdir
 RELEASE_RM_PATH=/bin/rm
@@ -22,6 +25,32 @@ release_validate_label() {
     [ -n "$1" ] || release_fail 'RELEASE_LABEL must not be empty'
     [ "$1" = "$RELEASE_LABEL_DEFAULT" ] \
         || release_fail "RELEASE_LABEL must be fixed at $RELEASE_LABEL_DEFAULT"
+}
+
+release_appcast_download_url_prefix() {
+    printf '%s\n' "$RELEASE_GITHUB_RELEASE_DOWNLOAD_BASE/v$RELEASE_LABEL_DEFAULT/"
+}
+
+release_verify_appcast() {
+    release_appcast_path=$1
+    release_dmg_path=$2
+    release_stat_path=$3
+    release_grep_path=$4
+
+    [ -f "$release_appcast_path" ] \
+        || release_fail "appcast is not a regular file: $release_appcast_path"
+    [ ! -L "$release_appcast_path" ] \
+        || release_fail "appcast must not be a symlink: $release_appcast_path"
+    [ -f "$release_dmg_path" ] \
+        || release_fail "DMG is not a regular file: $release_dmg_path"
+    [ ! -L "$release_dmg_path" ] \
+        || release_fail "DMG must not be a symlink: $release_dmg_path"
+
+    release_dmg_size=$("$release_stat_path" -f '%z' "$release_dmg_path") \
+        || release_fail "could not determine DMG size for appcast: $release_dmg_path"
+    release_expected_enclosure="<enclosure url=\"$(release_appcast_download_url_prefix)$RELEASE_DMG_NAME\" length=\"$release_dmg_size\" type=\"application/octet-stream\"/>"
+    "$release_grep_path" -F "$release_expected_enclosure" "$release_appcast_path" >/dev/null \
+        || release_fail "appcast enclosure does not match the final DMG: $release_appcast_path"
 }
 
 release_validate_team() {
@@ -372,7 +401,8 @@ release_assert_generated_path() {
         "$release_output_dir/$RELEASE_ARCHIVE_NAME" | \
         "$release_output_dir/$RELEASE_DMG_NAME" | \
         "$release_output_dir/$RELEASE_NOTARY_RESULT_NAME" | \
-        "$release_output_dir/$RELEASE_STAGE_NAME") ;;
+        "$release_output_dir/$RELEASE_STAGE_NAME" | \
+        "$release_output_dir/$RELEASE_APPCAST_DIRECTORY_NAME") ;;
         *) release_fail "refusing to remove non-generated release path: $release_candidate" ;;
     esac
 }

@@ -19,8 +19,8 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 # shellcheck source=release-helpers.sh
 . "$script_dir/release-helpers.sh"
 
-MARKETING_VERSION=0.1.1
-BUILD_NUMBER=6
+MARKETING_VERSION=0.1.2
+BUILD_NUMBER=7
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY
@@ -328,11 +328,13 @@ archive_path=$release_dir/$RELEASE_ARCHIVE_NAME
 dmg_path=$release_dir/$RELEASE_DMG_NAME
 notary_result_path=$release_dir/$RELEASE_NOTARY_RESULT_NAME
 stage_dir=$release_dir/$RELEASE_STAGE_NAME
+appcast_dir=$release_dir/$RELEASE_APPCAST_DIRECTORY_NAME
 
-printf '%s\n' 'cleanup: only prior QuickTTY archive, DMG, notarization result, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
+printf '%s\n' 'cleanup: only prior QuickTTY archive, DMG, notarization result, appcast, and staging directory under canonical .build/Release may be removed; unrelated files are preserved.'
 release_remove_generated_directory "$release_dir" "$archive_path"
 release_remove_generated_file "$release_dir" "$dmg_path"
 release_remove_generated_file "$release_dir" "$notary_result_path"
+release_remove_generated_directory "$release_dir" "$appcast_dir"
 release_remove_generated_directory "$release_dir" "$stage_dir"
 
 trap cleanup_release_exit 0
@@ -427,13 +429,6 @@ verify_signature_metadata "$dmg_path" '' no
 [ -f "$dmg_path" ] || release_fail "release DMG was not created: $dmg_path"
 archive_pending=no
 dmg_pending=no
-
-appcast_dir=$release_dir/appcast
-"$mkdir_path" "$appcast_dir" || release_fail "could not create appcast directory: $appcast_dir"
-cp "$dmg_path" "$appcast_dir/"
-"$script_dir/generate_appcast" "$appcast_dir" \
-    || release_fail 'could not generate appcast'
-rm "$appcast_dir/$RELEASE_DMG_NAME"
 
 trap - 0 HUP INT TERM
 printf '%s\n' ".build/Release/$RELEASE_DMG_NAME"
