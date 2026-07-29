@@ -379,6 +379,27 @@ verify_bundle "$archive_app"
 "$mkdir_path" "$stage_dir" || release_fail "could not create staging directory: $stage_dir"
 stage_created=yes
 "$ditto_path" "$archive_app" "$stage_dir/$PRODUCT_NAME.app"
+
+# Re-sign Sparkle binaries with our Developer ID certificate for notarization
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \
+    || release_fail 'could not sign Sparkle Autoupdate'
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc" \
+    || release_fail 'could not sign Sparkle Installer.xpc'
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" \
+    || release_fail 'could not sign Sparkle Downloader.xpc'
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+    || release_fail 'could not sign Sparkle Updater.app'
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework" \
+    || release_fail 'could not re-sign Sparkle.framework'
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    "$stage_dir/$PRODUCT_NAME.app" \
+    || release_fail 'could not re-sign staged app after Sparkle re-sign'
+
 "$ln_path" -s /Applications "$stage_dir/Applications" \
     || release_fail 'could not create Applications symlink in staging directory'
 [ -L "$stage_dir/Applications" ] || release_fail 'Applications staging entry is not a symlink'
