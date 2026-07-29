@@ -87,8 +87,10 @@ grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$b
     || fail 'release build script does not force a Ghostty rebuild'
 grep -F -x '        CURRENT_PROJECT_VERSION: 8' "$project_spec" >/dev/null \
     || fail 'project spec does not set CURRENT_PROJECT_VERSION to 8'
-grep -F -x '    GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
-    || fail 'project spec does not disable generated Info.plist'
+grep -F -x '        GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
+    || fail 'project spec does not disable generated app Info.plist'
+grep -F -x '        GENERATE_INFOPLIST_FILE: YES' "$project_spec" >/dev/null \
+    || fail 'project spec does not generate the test Info.plist'
 grep -F -x '        INFOPLIST_FILE: QuickTTY/Resources/Info.plist' "$project_spec" >/dev/null \
     || fail 'project spec does not use the app Info.plist'
 grep -F -x '        MARKETING_VERSION: 0.1.2' "$project_spec" >/dev/null \
