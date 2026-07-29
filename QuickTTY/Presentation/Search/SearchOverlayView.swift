@@ -6,9 +6,8 @@ enum SearchNavigation: Equatable {
 }
 
 final class SearchOverlayView: NSView {
-    private let searchField = NSSearchField()
+    private let searchField = SearchTextField()
     private let countLabel = NSTextField(labelWithString: "")
-    private var localKeyMonitor: Any?
 
     var onNeedleChange: ((String) -> Void)?
     var onNavigate: ((SearchNavigation) -> Void)?
@@ -35,8 +34,13 @@ final class SearchOverlayView: NSView {
         searchField.focusRingType = .none
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.refusesFirstResponder = false
-        searchField.font = .systemFont(
-            ofSize: NSFont.systemFontSize)
+
+        searchField.onNavigate = { [weak self] nav in
+            self?.onNavigate?(nav)
+        }
+        searchField.onClose = { [weak self] clear in
+            self?.onClose?(clear)
+        }
 
         countLabel.font = .monospacedDigitSystemFont(
             ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -79,59 +83,39 @@ final class SearchOverlayView: NSView {
 
     func focus() {
         window?.makeFirstResponder(searchField)
-        if localKeyMonitor == nil {
-            localKeyMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: .keyDown
-            ) { [weak self] event in
-                if self?.handleSearchKeyEvent(event) == true {
-                    return nil
-                }
-                return event
-            }
-        }
     }
 
-    func dismiss() {
-        if let monitor = localKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            localKeyMonitor = nil
-        }
+    @objc private func searchFieldDidChange() {
+        onNeedleChange?(searchField.stringValue)
     }
+}
 
-    private func handleSearchKeyEvent(_ event: NSEvent) -> Bool {
-        let editor = searchField.currentEditor()
-        guard
-            window?.firstResponder === searchField
-                || window?.firstResponder === editor
-        else { return false }
+// Custom NSSearchField that handles arrow keys for search navigation
+private final class SearchTextField: NSSearchField {
 
-        // Only intercept when no modifier keys are held
+    var onNavigate: ((SearchNavigation) -> Void)?
+    var onClose: ((Bool) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
         guard
             event.modifierFlags
                 .intersection(.deviceIndependentFlagsMask) == []
         else {
-            return false
+            super.keyDown(with: event)
+            return
         }
 
         switch event.keyCode {
         case 126:  // Up arrow
             onNavigate?(.previous)
-            return true
         case 125:  // Down arrow
             onNavigate?(.next)
-            return true
         case 53:  // Escape
             onClose?(true)
-            return true
-        case 36, 76:  // Return, Enter
-            onClose?(false)
-            return true
+        case 36:  // Return
+            onClose?(true)
         default:
-            return false
+            super.keyDown(with: event)
         }
-    }
-
-    @objc private func searchFieldDidChange() {
-        onNeedleChange?(searchField.stringValue)
     }
 }
