@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="What QuickTTY stores locally, when it contacts GitHub for updates, and how terminal processes and manually configured agent hooks behave.">
+    <meta name="theme-color" content="#080b0d">
+    <link rel="canonical" href="https://quicktty.app/privacy/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Privacy — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <header class="page-hero shell reveal">
+        <p class="page-meta">Privacy / product behavior</p>
+        <div>
+          <p class="eyebrow">QuickTTY privacy</p>
+          <h1>Local workspace. Explicit connections.</h1>
+          <p class="lede">A factual account of QuickTTY’s own storage and update behavior. Commands you run inside a terminal remain separate processes with their own behavior.</p>
+        </div>
+      </header>
+
+      <article class="privacy-content shell">
+        <section class="privacy-section reveal" aria-labelledby="telemetry-heading">
+          <h2 id="telemetry-heading">Telemetry</h2>
+          <div>
+            <p>QuickTTY does not include analytics or advertising SDKs. The application does not add product telemetry to terminal sessions.</p>
+            <p>Standard macOS and network services used by processes outside QuickTTY may have their own policies.</p>
+          </div>
+        </section>
+
+        <section class="privacy-section reveal" aria-labelledby="updates-heading">
+          <h2 id="updates-heading">Update checks</h2>
+          <div>
+            <p>When QuickTTY checks for application updates, Sparkle requests a GitHub-hosted feed:</p>
+            <ul>
+              <li>The stable channel uses the public GitHub latest release feed.</li>
+              <li>The beta channel uses the versioned feed tracked in the QuickTTY GitHub repository.</li>
+            </ul>
+            <p>Downloading an update retrieves the corresponding immutable GitHub Release artifact. Those requests are subject to GitHub’s infrastructure and policies.</p>
+          </div>
+        </section>
+
+        <section class="privacy-section reveal" aria-labelledby="terminal-heading">
+          <h2 id="terminal-heading">Terminal activity</h2>
+          <div>
+            <p>QuickTTY starts shells and other commands selected by the user. Their terminal output, file access, subprocesses, and network activity belong to those processes and depend on the commands, tools, remote hosts, and configuration the user chooses.</p>
+            <p>QuickTTY does not promise network isolation for terminal processes. For example, <code>ssh</code>, package managers, development servers, and coding agents can make network connections as part of their normal operation.</p>
+          </div>
+        </section>
+
+        <section class="privacy-section reveal" aria-labelledby="agents-heading">
+          <h2 id="agents-heading">Agent integrations</h2>
+          <div>
+            <p>QuickTTY can display standard OSC 9;4 terminal progress. Pi can emit these sequences through its own setting. Claude Code and Codex examples are bundled with QuickTTY, but their hooks are installed only when the user manually merges them into an agent configuration.</p>
+            <p>QuickTTY does not automatically install, overwrite, or update agent hooks. The bundled helper does not inspect prompt, transcript, hook stdin, or environment secrets.</p>
+          </div>
+        </section>
+
+        <section class="privacy-section reveal" aria-labelledby="storage-heading">
+          <h2 id="storage-heading">Local files</h2>
+          <div>
+            <p>QuickTTY uses these user-local paths:</p>
+            <ul>
+              <li><code>~/.config/quicktty/config</code> — user-authored QuickTTY and terminal configuration.</li>
+              <li><code>~/.config/quicktty/.ghostty-effective-config</code> — generated effective Ghostty configuration.</li>
+              <li><code>~/Library/Application Support/QuickTTY/state.json</code> — workspace descriptions, tabs, split layout, working directories, startup command descriptions, focus, and normal window frame.</li>
+            </ul>
+            <p>Saved state describes a workspace; it does not preserve live shell processes. On restore, every saved pane starts a fresh shell in its saved working directory. A saved custom startup command is never run automatically.</p>
+          </div>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

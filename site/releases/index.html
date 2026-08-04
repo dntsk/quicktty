@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Download QuickTTY 0.1.2 build 9 for Apple Silicon and understand the stable and beta update channels.">
+    <meta name="theme-color" content="#080b0d">
+    <link rel="canonical" href="https://quicktty.app/releases/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Releases — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a href="/docs/">Docs</a>
+        <a aria-current="page" href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <header class="page-hero shell reveal">
+        <p class="page-meta">Release channel / stable</p>
+        <div>
+          <p class="eyebrow">QuickTTY downloads</p>
+          <h1>Current builds. Clear channels.</h1>
+          <p class="lede">Stable is the default. Beta is an explicit choice. Every application release is tied to an immutable GitHub tag.</p>
+        </div>
+      </header>
+
+      <section class="release-current shell reveal" aria-labelledby="stable-heading">
+        <div class="version-stamp">
+          <span>Latest stable</span>
+          <strong>0.1.2</strong>
+          <span>Build 9 / arm64</span>
+        </div>
+        <div class="release-copy">
+          <p class="section-index">STABLE / RECOMMENDED</p>
+          <h2 id="stable-heading">Signed, notarized, and ready for macOS 15+.</h2>
+          <p>QuickTTY 0.1.2 restores the signed stable update pipeline, embeds the Sparkle verification metadata, preserves application identity, and keeps beta updates on the repository-backed feed.</p>
+          <div class="release-actions">
+            <a class="button button-primary" href="https://github.com/dntsk/quicktty/releases/download/v0.1.2/QuickTTY-0.1.2-arm64.dmg">Download 0.1.2 DMG <span aria-hidden="true">↓</span></a>
+            <a class="button button-secondary" href="https://github.com/dntsk/quicktty/releases/tag/v0.1.2">Release notes <span aria-hidden="true">↗</span></a>
+          </div>
+          <dl class="release-facts">
+            <div><dt>System</dt><dd>macOS 15+</dd></div>
+            <div><dt>Architecture</dt><dd>Apple Silicon</dd></div>
+            <div><dt>Distribution</dt><dd>Developer ID DMG</dd></div>
+          </dl>
+          <div class="note"><strong>Updating from 0.1.1</strong>If Check for Updates does not offer 0.1.2, install this DMG manually. The 0.1.1 stable feed was incomplete.</div>
+        </div>
+      </section>
+
+      <section class="channel-section shell reveal" aria-labelledby="beta-heading">
+        <div>
+          <p class="section-index amber-text">OPT-IN / BETA</p>
+          <h2 id="beta-heading">One stream for the newest build.</h2>
+        </div>
+        <div class="channel-copy">
+          <p>Beta is an opt-in channel and a superset of stable: it offers the newest public QuickTTY build, whether that build is a stable release or a beta prerelease. Stable remains separate and never receives prereleases.</p>
+          <pre><code>quicktty-update-channel = beta</code></pre>
+          <p>When a stable build is newer than the current beta, beta-channel users receive that stable build and remain subscribed for a later beta with a higher build number.</p>
+          <p class="fine-print">The beta feed is versioned in the repository and points to immutable application release artifacts. Changing channels does not alter terminal sessions.</p>
+        </div>
+      </section>
+
+      <section class="final-cta shell reveal" aria-labelledby="history-heading">
+        <div>
+          <p class="eyebrow">Release history</p>
+          <h2 id="history-heading">Read every shipped change.</h2>
+        </div>
+        <div class="final-actions">
+          <a class="button button-secondary" href="https://github.com/dntsk/quicktty/releases">View full changelog <span aria-hidden="true">↗</span></a>
+          <p>Immutable tags · English release notes</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

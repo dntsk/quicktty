@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Install, configure, and use QuickTTY workspaces, splits, Quake mode, broadcast input, search, shortcuts, and coding-agent integrations.">
+    <meta name="theme-color" content="#080b0d">
+    <link rel="canonical" href="https://quicktty.app/docs/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Documentation — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <header class="page-hero shell reveal">
+        <p class="page-meta">Manual / current</p>
+        <div>
+          <p class="eyebrow">QuickTTY documentation</p>
+          <h1>Run the workspace your way.</h1>
+          <p class="lede">A concise guide to installation, terminal configuration, structural shortcuts, Quake access, and progress signals.</p>
+        </div>
+      </header>
+
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="Documentation contents">
+          <h2>Contents</h2>
+          <ol>
+            <li><a href="#getting-started">Getting Started</a></li>
+            <li><a href="#installation-updates">Installation &amp; Updates</a></li>
+            <li><a href="#configuration">Configuration</a></li>
+            <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
+            <li><a href="#tabs-splits-workspaces">Tabs, Splits &amp; Workspaces</a></li>
+            <li><a href="#quake-mode">Quake Mode</a></li>
+            <li><a href="#broadcast-input">Broadcast Input</a></li>
+            <li><a href="#search">Search</a></li>
+            <li><a href="#coding-agent-integrations">Coding Agent Integrations</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+          </ol>
+        </nav>
+
+        <article class="docs-content">
+          <section id="getting-started">
+            <h2>Getting Started</h2>
+            <p>QuickTTY is a native macOS terminal workspace for Apple Silicon. It keeps tabs, binary splits, and named workspaces inside one physical window. Switching a workspace or changing between normal and Quake presentation does not restart its live shell processes.</p>
+            <h3>Requirements</h3>
+            <ul>
+              <li>macOS 15 or newer.</li>
+              <li>An Apple Silicon Mac.</li>
+              <li>A downloaded, signed, and notarized QuickTTY DMG.</li>
+            </ul>
+            <p>On first launch QuickTTY creates a <strong>Default</strong> workspace. Use the menus or default shortcuts to add tabs and split the active tab. Inactive workspaces continue running until the application exits.</p>
+          </section>
+
+          <section id="installation-updates">
+            <h2>Installation &amp; Updates</h2>
+            <ol>
+              <li><a href="https://github.com/dntsk/quicktty/releases/latest">Download the latest stable release</a>.</li>
+              <li>Open the DMG and move QuickTTY to Applications.</li>
+              <li>Launch QuickTTY. macOS can verify its Developer ID signature and notarization ticket.</li>
+            </ol>
+            <h3>Update channels</h3>
+            <p>The default <strong>stable</strong> channel reads the current GitHub latest feed and receives stable releases only. It never receives a prerelease.</p>
+            <p>The opt-in <strong>beta</strong> channel reads the versioned feed tracked in the QuickTTY repository. It is a superset of stable and offers the newest public build, whether that build is stable or beta. A newer stable can therefore follow a beta while the app remains subscribed to the beta channel.</p>
+            <pre><code>quicktty-update-channel = beta</code></pre>
+            <p>Use <strong>QuickTTY → Check for Updates…</strong> to request a check. See the <a href="/releases/">release channels page</a> for the current build.</p>
+          </section>
+
+          <section id="configuration">
+            <h2>Configuration</h2>
+            <p>The exact user configuration path is:</p>
+            <pre><code>~/.config/quicktty/config</code></pre>
+            <p>Keys prefixed with <code>quicktty-</code> configure the workspace shell. Other supported terminal keys pass to Ghostty, except top-level <code>keybind</code> assignments: QuickTTY owns keyboard command routing and clears Ghostty bindings in its generated effective configuration.</p>
+            <p>Choose <strong>QuickTTY → Open Configuration…</strong> to edit the file in a terminal tab. Valid changes hot reload without recreating terminal surfaces or shell processes. If parsing fails, the last valid configuration remains active and an inline diagnostic identifies the file and line.</p>
+            <pre><code>theme = catppuccin-mocha
+font-size = 14
+copy-on-select = clipboard
+
+quicktty-presentation-mode = normal
+quicktty-global-toggle = f12
+quicktty-quake-height = 75%
+quicktty-restore-workspaces = true</code></pre>
+            <p>The generated sibling file <code>~/.config/quicktty/.ghostty-effective-config</code> belongs to QuickTTY and should not be edited.</p>
+          </section>
+
+          <section id="keyboard-shortcuts">
+            <h2>Keyboard Shortcuts</h2>
+            <p>Local commands use repeatable assignments. An action receives a chord or the literal value <code>disabled</code>:</p>
+            <pre><code>quicktty-shortcut = action-id=cmd+key
+quicktty-shortcut = action-id=disabled</code></pre>
+            <p>A chord has optional modifiers and exactly one key separated by <code>+</code>. Modifiers are <code>cmd</code>, <code>opt</code>, <code>ctrl</code>, and <code>shift</code>; canonical order is <code>cmd+opt+ctrl+shift+key</code>. Supported keys include letters, digits, F1–F20, arrows, navigation and named punctuation such as <code>left-bracket</code>, <code>minus</code>, and <code>slash</code>. A single key such as <code>f12</code> is valid.</p>
+            <p>The last valid owner of a chord wins. The separately registered global Quake chord takes priority over a conflicting local command. Invalid known assignments preserve that action’s last active value during hot reload.</p>
+            <p>Read the <a href="https://github.com/dntsk/quicktty/blob/master/QuickTTY/Resources/configuration-reference.md">full shortcut registry, grammar, defaults, and conflict rules</a> in the first-party configuration reference.</p>
+          </section>
+
+          <section id="tabs-splits-workspaces">
+            <h2>Tabs, Splits &amp; Workspaces</h2>
+            <h3>Tabs</h3>
+            <p>Create a tab with <code>cmd+t</code>, select tabs 1–9 with <code>cmd+1</code> through <code>cmd+9</code>, and close the active pane with <code>cmd+w</code>. Closing the last pane also closes its tab.</p>
+            <h3>Splits</h3>
+            <p>Split right with <code>cmd+d</code> or down with <code>cmd+shift+d</code>. Move between panes using previous/next or directional focus commands. Splits form a resizable binary tree inside each tab.</p>
+            <h3>Workspaces</h3>
+            <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <code>cmd+opt+1</code> through <code>cmd+opt+9</code>.</p>
+            <p>QuickTTY can restore workspace descriptions, tabs, split layout, current working directories, and focus after restart. It starts new processes; it does not preserve live processes across application termination.</p>
+          </section>
+
+          <section id="quake-mode">
+            <h2>Quake Mode</h2>
+            <p>Quake is an alternate presentation of the same single workspace window. By default, <code>f12</code> shows or hides it from the display under the pointer. Returning to normal mode reuses the existing panes and processes.</p>
+            <p>Configure startup mode, global chord, height, animation duration, padding, focus-loss behavior, and screen pinning with <code>quicktty-presentation-mode</code>, <code>quicktty-global-toggle</code>, and the related <code>quicktty-quake-*</code> keys.</p>
+            <div class="note"><strong>Focus behavior</strong>Quake mode hides after focus loss by default, except while a menu, sheet, or system dialog is active.</div>
+          </section>
+
+          <section id="broadcast-input">
+            <h2>Broadcast Input</h2>
+            <p>Toggle broadcast for the active tab with <code>cmd+b</code>. The tab and workspace chrome show when it is active.</p>
+            <p>QuickTTY routes the original logical keyboard event to every pane in that tab, allowing each terminal to encode it for its own keyboard mode. Paste asks for confirmation once and then targets those panes. Mouse events, scrolling, resizing, and interface commands are never broadcast.</p>
+            <p>Broadcast automatically turns off when you change tab or workspace, restore the app, or encounter a target surface error.</p>
+          </section>
+
+          <section id="search">
+            <h2>Search</h2>
+            <p>Start native terminal search with <code>cmd+f</code>. Use <code>cmd+g</code> for the next result and <code>cmd+shift+g</code> for the previous result. The overlay reports the current selection and total match count from Ghostty runtime callbacks.</p>
+            <p>Search is scoped to its terminal surface. Escape always closes search, regardless of whether the query is empty. Closing the pane clears its search state.</p>
+          </section>
+
+          <section id="coding-agent-integrations">
+            <h2>Coding Agent Integrations</h2>
+            <p>QuickTTY displays standard terminal progress sequences, OSC <code>9;4</code>, as transient tab and workspace status. It does not infer agent identity from terminal output, titles, prompts, or process trees.</p>
+            <ul>
+              <li><strong>Pi:</strong> enable <strong>Terminal progress</strong> in <code>/settings</code>; no helper is needed.</li>
+              <li><strong>Claude Code and Codex:</strong> manually merge the bundled helper examples from <code>QuickTTY.app/Contents/Resources/AgentIntegrations</code> into the agent configuration.</li>
+            </ul>
+            <p>QuickTTY does not install or alter agent hooks automatically. Follow the <a href="https://github.com/dntsk/quicktty/blob/master/docs/agent-integrations.md">full coding-agent integration guide</a> for supported lifecycle events and exact helper behavior.</p>
+          </section>
+
+          <section id="troubleshooting">
+            <h2>Troubleshooting</h2>
+            <h3>A configuration change is ignored</h3>
+            <p>Read the inline diagnostic, correct the reported line in <code>~/.config/quicktty/config</code>, and save again. QuickTTY keeps the last valid configuration while errors remain.</p>
+            <h3>A shortcut reaches the shell</h3>
+            <p>Confirm its action ID and chord in the full registry. An unassigned or non-performable event intentionally follows the normal terminal input path.</p>
+            <h3>A pane failed to start</h3>
+            <p>Use <strong>Retry</strong> to create a fresh shell in the saved working directory, or <strong>Close Pane</strong> to remove the failed leaf without disturbing neighboring sessions.</p>
+            <h3>An update is not offered</h3>
+            <p>Confirm the selected channel. Stable excludes prereleases; beta follows the newest build in its repository feed. QuickTTY 0.1.1 may require a manual download of 0.1.2 because its stable feed was incomplete.</p>
+          </section>
+        </article>
+      </div>
+    </main>
+
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

@@ -53,7 +53,7 @@ quicktty-shortcut = action-id=disabled
 
 ### `quicktty-update-channel`
 
-Канал обновлений: `stable` или `beta`. Значение по умолчанию — `stable`. `beta` читает versioned appcast из репозитория QuickTTY; он не использует stable `latest` feed и не обращается к изменяемым GitHub Release assets.
+Канал обновлений: `stable` или `beta`. Значение по умолчанию — `stable`. Stable channel читает GitHub `latest` feed и не получает prerelease. `beta` читает versioned appcast из репозитория QuickTTY; этот feed является надмножеством stable и предлагает самый новый публичный stable или beta build через immutable GitHub Release assets.
 
 ## Грамматика сочетаний
 

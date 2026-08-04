@@ -31,7 +31,7 @@ SWIFT_SOURCES := QuickTTY QuickTTYTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-integrations-contract lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-integrations-contract site-check lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -78,7 +78,10 @@ callback-contract:
 agent-integrations-contract:
 	./scripts/tests/agent-integrations-test.sh
 
-lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract
+site-check:
+	/usr/bin/python3 scripts/check-site.py
+
+lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract site-check
 	swift format lint --recursive $(SWIFT_SOURCES)
 
 build: generate
