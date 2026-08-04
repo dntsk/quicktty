@@ -9,7 +9,7 @@
 - Главная `site/index.html` перестроена вокруг реальных скриншотов workspace, Quake и broadcast.
 - Fake CSS terminal и связанный декоративный UI удалены из `site/assets/styles.css`.
 - Добавлены light/dark homepage-секции, адаптивное кадрирование скриншотов, контрастный focus и mobile navigation overrides.
-- После quality review исправлены селекторы `.js .home-page` для mobile menu, восстановлен flex-layout CTA и включены работающие `object-fit`/`object-position` screenshot crops.
+- После quality review исправлены селекторы `.js .home-page` для mobile menu и восстановлен flex-layout CTA. После public feedback fixed-height screenshot crops удалены: все изображения сохраняют intrinsic aspect ratio.
 - Docs, Releases, Privacy и `site/assets/site.js` не изменялись.
 - Редизайн опубликован commit `a5e43dc`; Pages run `30934679259` завершился успешно.
 
@@ -34,4 +34,4 @@
 
 - Главная CTA использует только `https://github.com/dntsk/quicktty/releases/latest`.
 - Текст не заявляет open-source статус; используется формулировка `View source on GitHub`.
-- На ширине до 560 px screenshot-контейнеры кадрируют изображения, сохраняя читаемый масштаб и не создавая overflow страницы.
+- На всех ширинах screenshots масштабируются пропорционально исходному размеру без crop, фиксированной высоты и horizontal overflow.
