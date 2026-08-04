@@ -415,6 +415,24 @@ def main() -> int:
                 )
     compare_shortcuts(canonical_shortcuts(errors), docs_shortcuts(docs_source, errors), errors)
 
+    quake_guide = section_between(docs_source, '<section id="quake-mode">', "</section>")
+    if quake_guide is None:
+        errors.append("site/docs/index.html: missing Quake Mode guide")
+    else:
+        require_markers(
+            quake_guide,
+            "Quake Mode guide",
+            (
+                "<kbd>Cmd+Opt+P</kbd>",
+                "between Normal and Quake presentations",
+                "same panes and live processes",
+                "no shell is restarted",
+                "<kbd>F12</kbd>",
+                "globally shows or hides it",
+            ),
+            errors,
+        )
+
     validate_bundled_example(
         docs_source,
         "claude-settings.example.json",

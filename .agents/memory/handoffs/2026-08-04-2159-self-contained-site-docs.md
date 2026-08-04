@@ -7,7 +7,7 @@
 ## Выполнено
 
 - В `site/docs/index.html` добавлены самодостаточные правила настройки сочетаний и полное руководство по интеграциям Pi, Claude Code и Codex.
-- Существующие полные таблицы сочетаний сохранены.
+- Существующие полные таблицы сочетаний сохранены; Quake Mode явно описывает `Cmd+Opt+P` для Normal ↔ Quake и отдельный `F12` для show/hide.
 - В `scripts/check-site.py` добавлены exact shortcut-map comparison, exact bundled JSON comparison, полный agent/helper contract check и запрет ссылок Docs на repository Markdown, включая `www.github.com`.
 - `site/assets/styles.css` уже содержал незакоммиченные стили таблиц; дополнительных правок не потребовалось.
 
