@@ -2,7 +2,7 @@
 
 - **Дата:** 2026-08-04
 - **Ветка:** master
-- **Статус дерева:** есть незакоммиченные изменения
+- **Статус дерева:** clean после evidence commit
 
 ## Выполнено
 
@@ -11,6 +11,7 @@
 - Добавлены light/dark homepage-секции, адаптивное кадрирование скриншотов, контрастный focus и mobile navigation overrides.
 - После quality review исправлены селекторы `.js .home-page` для mobile menu, восстановлен flex-layout CTA и включены работающие `object-fit`/`object-position` screenshot crops.
 - Docs, Releases, Privacy и `site/assets/site.js` не изменялись.
+- Редизайн опубликован commit `a5e43dc`; Pages run `30934679259` завершился успешно.
 
 ## Проверки
 
@@ -19,15 +20,15 @@
 - `make site-check` — PASS, 4 HTML pages.
 - `git diff --check` — PASS.
 - Local HTTP smoke — PASS для `/`, `/docs/`, `/releases/`, `/privacy/`, CSS, JS и трёх screenshot assets.
+- Public verification — PASS: четыре страницы отвечают HTTP 200; `workspace.png`, `broadcast.png`, `quake.png` совпадают с repository files по SHA-256.
 
 ## Незавершённое
 
-- В окружении нет headless-браузера, поэтому browser visual smoke не выполнен.
-- Три предоставленных файла в `site/assets/screenshots/` остаются untracked; их содержимое не изменялось.
+- В окружении нет headless-браузера, поэтому optional browser visual smoke не выполнен; automated и public checks завершены.
 
 ## Следующий шаг
 
-1. Просмотреть `/` вручную при ширинах 1440, 760 и 320 px, затем добавить site-файлы и предоставленные скриншоты в следующий пользовательский commit.
+1. Обязательных действий нет. При необходимости отдельно выполнить manual visual smoke на 1440, 760 и 320 px.
 
 ## Важный контекст
 
