@@ -10,16 +10,18 @@
 - Fake CSS terminal и связанный декоративный UI удалены из `site/assets/styles.css`.
 - Добавлены light/dark homepage-секции, адаптивное кадрирование скриншотов, контрастный focus и mobile navigation overrides.
 - После quality review исправлены селекторы `.js .home-page` для mobile menu и восстановлен flex-layout CTA. После public feedback fixed-height screenshot crops удалены: все изображения сохраняют intrinsic aspect ratio.
-- Docs, Releases, Privacy и `site/assets/site.js` не изменялись.
-- Редизайн опубликован commit `a5e43dc`; Pages run `30934679259` завершился успешно.
+- Docs, Releases и Privacy переведены на общий `.content-page`: та же светлая native macOS typography, header, mobile menu, buttons и footer; page-specific docs/release/privacy layouts адаптированы без изменения содержания.
+- `site/assets/site.js` не изменялся.
+- Screenshot-led главная опубликована commit `a5e43dc`; последующие visual fixes и единая secondary-page system публикуются отдельными commits.
 
 ## Проверки
 
 - Spec review — PASS.
-- Code-quality re-review — APPROVED.
+- Code-quality re-review главной — APPROVED.
+- Quality review secondary pages — APPROVED.
 - `make site-check` — PASS, 4 HTML pages.
 - `git diff --check` — PASS.
-- Local HTTP smoke — PASS для `/`, `/docs/`, `/releases/`, `/privacy/`, CSS, JS и трёх screenshot assets.
+- Local HTTP smoke — PASS для `/`, `/docs/`, `/releases/`, `/privacy/`, CSS, JS и трёх screenshot assets; secondary pages подтверждены с `body.content-page`.
 - Public verification — PASS: четыре страницы отвечают HTTP 200; `workspace.png`, `broadcast.png`, `quake.png` совпадают с repository files по SHA-256.
 
 ## Незавершённое
