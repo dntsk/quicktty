@@ -1,14 +1,18 @@
 {
+  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.16.0/schema.json",
   "permissionGate": {
     "autoDenyPatterns": [
       {
         "pattern": "gh release upload",
-        "description": "Published release assets are immutable; create the verified draft with both assets instead."
+        "description": "Published release assets are immutable; create the verified draft with both assets instead.",
+        "regex": true
       },
       {
         "pattern": "gh release delete-asset",
-        "description": "Published release assets are immutable."
+        "description": "Published release assets are immutable.",
+        "regex": true
       }
     ]
-  }
+  },
+  "version": "0.13.0-20260619"
 }

@@ -1,0 +1,14 @@
+{
+  "permissionGate": {
+    "autoDenyPatterns": [
+      {
+        "pattern": "gh release upload",
+        "description": "Published release assets are immutable; create the verified draft with both assets instead."
+      },
+      {
+        "pattern": "gh release delete-asset",
+        "description": "Published release assets are immutable."
+      }
+    ]
+  }
+}
