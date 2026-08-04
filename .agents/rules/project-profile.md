@@ -57,7 +57,7 @@ Ghostty предоставляет PTY/process lifecycle, VT/xterm emulation, te
 
 - Основной артефакт: DMG для arm64.
 - Release build должен быть подписан и notarized.
-- `docs/releasing.md` — обязательный runbook; определяет порядок release commit, signing, notarization, draft publication, appcast и публичной проверки обновления. После каждого beta application release `make beta-feed` обязан атомарно обновить generated `docs/appcasts/beta.xml` в отдельном post-release commit.
+- `.agents/rules/releasing.md` и `docs/releasing.md` — обязательные release rules и полный runbook; они определяют порядок release commit, signing, notarization, draft publication, appcast и публичной проверки обновления. Beta channel является надмножеством stable; после каждого более нового stable или beta application release `make beta-feed` обязан атомарно обновить generated `docs/appcasts/beta.xml` в отдельном post-release commit.
 - `.agents/scripts/pre-deploy-check.sh` проверяет чистое дерево, соответствие upstream и запускает `make check`.
 - Agent scripts не выполняют release, signing, notarization или публикацию.
 - Sandbox/App Store не являются целью MVP.

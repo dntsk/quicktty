@@ -51,7 +51,7 @@ make check
 
 ## Подписанный DMG и нотарификация
 
-Обязательная процедура release, включая appcast и проверку обновления, — [docs/releasing.md](docs/releasing.md). Beta channel читает tracked [`docs/appcasts/beta.xml`](docs/appcasts/beta.xml); после каждого beta application release его обновляют только командой `make beta-feed` и отдельным post-release commit.
+Обязательная процедура release, включая appcast и проверку обновления, — [docs/releasing.md](docs/releasing.md). Beta channel является надмножеством stable и читает tracked [`docs/appcasts/beta.xml`](docs/appcasts/beta.xml): после каждого более нового stable или beta application release exact final appcast продвигают только командой `make beta-feed` и отдельным post-release commit.
 
 Подписанный release предназначен для macOS 15+ на Apple Silicon. Bundle identifier — `com.dntsk.QuickTTY`. Текущий ярлык выпуска — `0.1.2`; в метаданных Apple ему соответствуют `CFBundleShortVersionString = 0.1.2` и `CFBundleVersion = 9`.
 

@@ -1,15 +1,18 @@
 # Release procedure
 
-Этот документ обязателен для любого QuickTTY release. Если команда, script или привычка противоречат ему, релиз останавливается до исправления pipeline. Нельзя обещать готовый release до прохождения раздела «Публичная проверка».
+Этот документ обязателен для любого QuickTTY release и выполняется вместе с краткими agent-facing правилами `.agents/rules/releasing.md`. Перед началом выпуска оба документа нужно прочитать полностью. Если команда, script или привычка противоречат им, релиз останавливается до исправления pipeline. Нельзя обещать готовый release до прохождения публичной проверки, продвижения beta feed и применимых update smoke tests.
 
 ## Инварианты
 
 - Публикуется только notarized arm64 DMG.
 - Release tag указывает на exact commit, из которого собран DMG.
+- `CFBundleVersion` монотонно растёт через общую последовательность stable и beta releases. Beta и stable одного marketing version различаются build number, и более новый release всегда имеет больший build.
 - Каждый application GitHub Release содержит ровно два assets: `QuickTTY-<version>-arm64.dmg` и `appcast.xml`. Stable release становится `latest`; prerelease никогда не становится `latest`. Единственное исключение — описанный ниже immutable legacy bootstrap beta release с одним `appcast.xml` asset.
 - `appcast.xml` создаётся из финального stapled DMG. Его `enclosure/@length` равен фактическому размеру опубликованного DMG; enclosure URL — абсолютный `https://github.com/dntsk/quicktty/releases/download/v<version>/…` того же release.
 - `https://github.com/dntsk/quicktty/releases/latest/download/appcast.xml` должен быть доступен после публикации и вести к текущему stable release.
-- Beta channel читает только `https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml`; tracked `docs/appcasts/beta.xml` создаётся из final stapled DMG и никогда не редактируется вручную.
+- Stable channel получает только stable releases через GitHub `latest` и никогда не получает prerelease.
+- Beta channel является надмножеством stable: он получает самый новый публичный build независимо от того, stable это или beta. Он читает только `https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml`.
+- После каждого публично проверенного application release — stable или beta — exact final appcast более нового build обязательно продвигается в tracked `docs/appcasts/beta.xml` командой `make beta-feed`. Файл никогда не редактируется вручную.
 - Keychain profile для notarization: `QuickTTY`. Никогда не угадывать и не подменять его другим именем.
 - После publication tag и assets immutable: не заменять, не удалять и не загружать assets вручную в опубликованный release.
 - GitHub Release title и release notes пишутся только на английском.
@@ -105,12 +108,12 @@ grep 'enclosure' "$APPCAST"
 
 До завершения всех применимых пунктов release считается незавершённым.
 
-## 6. Beta appcast в репозитории
+## 6. Продвижение beta channel
 
-### Обычный beta application release
+Beta channel — это поток «самый новый stable или beta build», а не prerelease-only поток. Поэтому этот раздел обязателен после **каждого** application release, включая stable.
 
-1. Обычный beta prerelease создаётся по разделам 1–5 и содержит ровно final DMG и final `appcast.xml` конкретного `v<version>` tag.
-2. Только после publication и анонимной проверки этого prerelease запустите из clean tree:
+1. Release должен быть опубликован и анонимно проверен по разделам 1–5. Его build обязан быть больше build, который сейчас указан в `docs/appcasts/beta.xml`.
+2. Из clean tree запустите:
 
    ```sh
    make beta-feed
@@ -119,8 +122,14 @@ grep 'enclosure' "$APPCAST"
    ```
 
    Команда принимает только `.build/Release/appcast/appcast.xml`, который проходит проверку против final DMG, и атомарно копирует exact bytes в tracked `docs/appcasts/beta.xml`. Она не выполняет GitHub, Git write, signing или notarization operations.
-3. Проверьте raw URL без GitHub credentials: скачанный XML обязан byte-for-byte совпасть с local final appcast; его absolute enclosure обязан скачать final public DMG с теми же size и SHA-256.
-4. Создайте отдельный post-release commit только для `docs/appcasts/beta.xml` и push его в `master`. Не редактируйте XML вручную, не создавайте его из pre-staple DMG и не публикуйте feed до public DMG.
+3. Создайте отдельный post-release commit **только** для `docs/appcasts/beta.xml` и push его в `master`. Не смешивайте этот generated feed с release evidence или документацией.
+4. Проверьте raw URL без GitHub credentials: скачанный XML обязан byte-for-byte совпасть с local final appcast; его absolute enclosure обязан скачать final public DMG с теми же size и SHA-256.
+5. Выполните channel smoke matrix:
+   - после stable release предыдущий stable build через stable channel получает новый stable build;
+   - после stable release предыдущий beta build, оставаясь на beta channel, тоже получает новый stable build;
+   - после beta release предыдущий beta build получает новый beta build;
+   - stable channel никогда не предлагает beta prerelease.
+6. Следующий beta release с большим build снова продвигается тем же `make beta-feed`, поэтому пользователь, перешедший с beta на stable build, остаётся подписанным на будущие beta updates.
 
 ### Immutable legacy bootstrap
 
@@ -130,11 +139,12 @@ grep 'enclosure' "$APPCAST"
 
 ## 7. Evidence и запреты
 
-После успешной публичной проверки записать tag, release commit, notarization submission ID, artifact path, size, SHA-256, public URLs и gates в `.agents/memory/tasks-completed.md` и handoff. Не записывать Apple ID, passwords, tokens, private keys или другие secrets.
+После успешной публичной проверки, продвижения beta channel и всех применимых update smoke tests записать tag, release commit, beta-feed commit, notarization submission ID, artifact path, size, SHA-256, public URLs и gates в `.agents/memory/tasks-completed.md` и handoff. Не записывать Apple ID, passwords, tokens, private keys или другие secrets.
 
 Запрещено:
 
 - публиковать stable release без `appcast.xml`;
+- оставлять `docs/appcasts/beta.xml` на старом build после публикации более нового stable или beta application release;
 - менять опубликованный release вручную через `gh release upload`;
 - менять или перемещать published tag;
 - генерировать appcast из DMG до stapling;

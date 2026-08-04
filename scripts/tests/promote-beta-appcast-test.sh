@@ -30,6 +30,7 @@ makefile=$repo_root/Makefile
 runbook=$repo_root/docs/releasing.md
 agents=$repo_root/AGENTS.md
 project_profile=$repo_root/.agents/rules/project-profile.md
+release_rules=$repo_root/.agents/rules/releasing.md
 readme=$repo_root/README.md
 
 [ -f "$promotion_script" ] || fail "beta appcast promotion script is missing: $promotion_script"
@@ -38,6 +39,7 @@ readme=$repo_root/README.md
 [ -f "$runbook" ] || fail "release runbook is missing: $runbook"
 [ -f "$agents" ] || fail "agent instructions are missing: $agents"
 [ -f "$project_profile" ] || fail "project profile is missing: $project_profile"
+[ -f "$release_rules" ] || fail "agent release rules are missing: $release_rules"
 [ -f "$readme" ] || fail "README is missing: $readme"
 sh -n "$promotion_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$promotion_script" >/dev/null \
@@ -46,8 +48,8 @@ grep -F -x 'beta-feed:' "$makefile" >/dev/null \
     || fail 'Makefile is missing beta-feed target'
 grep -F -x 'beta-feed-contract:' "$makefile" >/dev/null \
     || fail 'Makefile is missing beta-feed-contract target'
-grep -F 'Beta appcast в репозитории' "$runbook" >/dev/null \
-    || fail 'release runbook does not define the repository beta appcast'
+grep -F 'Продвижение beta channel' "$runbook" >/dev/null \
+    || fail 'release runbook does not define beta channel promotion'
 grep -F 'https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml' "$runbook" >/dev/null \
     || fail 'release runbook does not define the public beta appcast URL'
 grep -F 'make beta-feed' "$runbook" >/dev/null \
@@ -60,6 +62,12 @@ grep -F 'docs/appcasts/beta.xml' "$project_profile" >/dev/null \
     || fail 'project profile does not require beta appcast promotion'
 grep -F 'docs/appcasts/beta.xml' "$readme" >/dev/null \
     || fail 'README does not document beta appcast promotion'
+for policy_file in "$runbook" "$agents" "$project_profile" "$release_rules" "$readme"; do
+    grep -F 'надмножеством' "$policy_file" >/dev/null \
+        || fail "release policy does not define beta as a superset of stable: $policy_file"
+done
+grep -F 'previous beta → new stable' "$release_rules" >/dev/null \
+    || fail 'agent release rules do not require beta-to-stable update smoke'
 
 TMPDIR=${TMPDIR:-/tmp}
 tmp_base=$(CDPATH= cd -P "$TMPDIR" && pwd -P) || fail "could not resolve temporary directory base: $TMPDIR"
