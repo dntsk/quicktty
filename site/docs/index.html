@@ -104,12 +104,138 @@ quicktty-restore-workspaces = true</code></pre>
 
           <section id="keyboard-shortcuts">
             <h2>Keyboard Shortcuts</h2>
+            <div class="primary-shortcut">
+              <div>
+                <p class="primary-shortcut-label">Primary shortcut</p>
+                <h3>Toggle Normal ↔ Quake presentation</h3>
+                <p>Switches the same live workspace between presentations without restarting shells. This is different from global <kbd>F12</kbd>, which shows or hides Quake.</p>
+              </div>
+              <div class="primary-shortcut-command">
+                <kbd>Cmd+Opt+P</kbd>
+                <code>toggle-presentation</code>
+              </div>
+            </div>
+
+            <h3>Application/global</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Application and global default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Toggle Normal ↔ Quake</td><td><kbd>Cmd+Opt+P</kbd></td><td><code>toggle-presentation</code></td></tr>
+                  <tr><td>Show/hide Quake globally</td><td><kbd>F12</kbd></td><td><code>quicktty-global-toggle</code><span class="action-id-note">Config key, outside local action registry</span></td></tr>
+                  <tr><td>Open configuration</td><td><kbd>Cmd+Comma</kbd></td><td><code>open-config</code></td></tr>
+                  <tr><td>Quit QuickTTY</td><td><kbd>Cmd+Q</kbd></td><td><code>quit</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Tabs/panes</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Tab and pane default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>New tab</td><td><kbd>Cmd+T</kbd></td><td><code>new-tab</code></td></tr>
+                  <tr><td>Close pane</td><td><kbd>Cmd+W</kbd></td><td><code>close-pane</code></td></tr>
+                  <tr><td>Close tab</td><td><kbd>Cmd+Opt+W</kbd></td><td><code>close-tab</code></td></tr>
+                  <tr><td>Split right</td><td><kbd>Cmd+D</kbd></td><td><code>split-right</code></td></tr>
+                  <tr><td>Split down</td><td><kbd>Cmd+Shift+D</kbd></td><td><code>split-down</code></td></tr>
+                  <tr><td>Previous pane</td><td><kbd>Cmd+Left-Bracket</kbd></td><td><code>previous-pane</code></td></tr>
+                  <tr><td>Next pane</td><td><kbd>Cmd+Right-Bracket</kbd></td><td><code>next-pane</code></td></tr>
+                  <tr><td>Focus left</td><td><kbd>Cmd+Shift+Left</kbd></td><td><code>focus-left</code></td></tr>
+                  <tr><td>Focus right</td><td><kbd>Cmd+Shift+Right</kbd></td><td><code>focus-right</code></td></tr>
+                  <tr><td>Focus up</td><td><kbd>Cmd+Shift+Up</kbd></td><td><code>focus-up</code></td></tr>
+                  <tr><td>Focus down</td><td><kbd>Cmd+Shift+Down</kbd></td><td><code>focus-down</code></td></tr>
+                  <tr><td>Select tab 1</td><td><kbd>Cmd+1</kbd></td><td><code>select-tab-1</code></td></tr>
+                  <tr><td>Select tab 2</td><td><kbd>Cmd+2</kbd></td><td><code>select-tab-2</code></td></tr>
+                  <tr><td>Select tab 3</td><td><kbd>Cmd+3</kbd></td><td><code>select-tab-3</code></td></tr>
+                  <tr><td>Select tab 4</td><td><kbd>Cmd+4</kbd></td><td><code>select-tab-4</code></td></tr>
+                  <tr><td>Select tab 5</td><td><kbd>Cmd+5</kbd></td><td><code>select-tab-5</code></td></tr>
+                  <tr><td>Select tab 6</td><td><kbd>Cmd+6</kbd></td><td><code>select-tab-6</code></td></tr>
+                  <tr><td>Select tab 7</td><td><kbd>Cmd+7</kbd></td><td><code>select-tab-7</code></td></tr>
+                  <tr><td>Select tab 8</td><td><kbd>Cmd+8</kbd></td><td><code>select-tab-8</code></td></tr>
+                  <tr><td>Select tab 9</td><td><kbd>Cmd+9</kbd></td><td><code>select-tab-9</code></td></tr>
+                  <tr><td>Toggle broadcast</td><td><kbd>Cmd+B</kbd></td><td><code>toggle-broadcast</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Workspaces</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Workspace default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Select workspace 1</td><td><kbd>Cmd+Opt+1</kbd></td><td><code>select-workspace-1</code></td></tr>
+                  <tr><td>Select workspace 2</td><td><kbd>Cmd+Opt+2</kbd></td><td><code>select-workspace-2</code></td></tr>
+                  <tr><td>Select workspace 3</td><td><kbd>Cmd+Opt+3</kbd></td><td><code>select-workspace-3</code></td></tr>
+                  <tr><td>Select workspace 4</td><td><kbd>Cmd+Opt+4</kbd></td><td><code>select-workspace-4</code></td></tr>
+                  <tr><td>Select workspace 5</td><td><kbd>Cmd+Opt+5</kbd></td><td><code>select-workspace-5</code></td></tr>
+                  <tr><td>Select workspace 6</td><td><kbd>Cmd+Opt+6</kbd></td><td><code>select-workspace-6</code></td></tr>
+                  <tr><td>Select workspace 7</td><td><kbd>Cmd+Opt+7</kbd></td><td><code>select-workspace-7</code></td></tr>
+                  <tr><td>Select workspace 8</td><td><kbd>Cmd+Opt+8</kbd></td><td><code>select-workspace-8</code></td></tr>
+                  <tr><td>Select workspace 9</td><td><kbd>Cmd+Opt+9</kbd></td><td><code>select-workspace-9</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Search/terminal</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Search and terminal default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Find</td><td><kbd>Cmd+F</kbd></td><td><code>find</code></td></tr>
+                  <tr><td>Find next</td><td><kbd>Cmd+G</kbd></td><td><code>find-next</code></td></tr>
+                  <tr><td>Find previous</td><td><kbd>Cmd+Shift+G</kbd></td><td><code>find-previous</code></td></tr>
+                  <tr><td>Copy</td><td><kbd>Cmd+C</kbd></td><td><code>copy</code></td></tr>
+                  <tr><td>Paste</td><td><kbd>Cmd+V</kbd></td><td><code>paste</code></td></tr>
+                  <tr><td>Paste selection</td><td><kbd>Cmd+Shift+V</kbd></td><td><code>paste-selection</code></td></tr>
+                  <tr><td>Select all</td><td><kbd>Cmd+A</kbd></td><td><code>select-all</code></td></tr>
+                  <tr><td>Clear screen</td><td><kbd>Cmd+K</kbd></td><td><code>clear-screen</code></td></tr>
+                  <tr><td>Increase font size</td><td><kbd>Cmd+Equal</kbd></td><td><code>font-increase</code></td></tr>
+                  <tr><td>Decrease font size</td><td><kbd>Cmd+Minus</kbd></td><td><code>font-decrease</code></td></tr>
+                  <tr><td>Reset font size</td><td><kbd>Cmd+0</kbd></td><td><code>font-reset</code></td></tr>
+                  <tr><td>Scroll to top</td><td><kbd>Cmd+Home</kbd></td><td><code>scroll-top</code></td></tr>
+                  <tr><td>Scroll to bottom</td><td><kbd>Cmd+End</kbd></td><td><code>scroll-bottom</code></td></tr>
+                  <tr><td>Scroll page up</td><td><kbd>Cmd+Page-Up</kbd></td><td><code>scroll-page-up</code></td></tr>
+                  <tr><td>Scroll page down</td><td><kbd>Cmd+Page-Down</kbd></td><td><code>scroll-page-down</code></td></tr>
+                  <tr><td>Scroll to selection</td><td><kbd>Cmd+J</kbd></td><td><code>scroll-to-selection</code></td></tr>
+                  <tr><td>Extend selection left</td><td><kbd>Shift+Left</kbd></td><td><code>selection-left</code></td></tr>
+                  <tr><td>Extend selection right</td><td><kbd>Shift+Right</kbd></td><td><code>selection-right</code></td></tr>
+                  <tr><td>Extend selection up</td><td><kbd>Shift+Up</kbd></td><td><code>selection-up</code></td></tr>
+                  <tr><td>Extend selection down</td><td><kbd>Shift+Down</kbd></td><td><code>selection-down</code></td></tr>
+                  <tr><td>Extend selection page up</td><td><kbd>Shift+Page-Up</kbd></td><td><code>selection-page-up</code></td></tr>
+                  <tr><td>Extend selection page down</td><td><kbd>Shift+Page-Down</kbd></td><td><code>selection-page-down</code></td></tr>
+                  <tr><td>Extend selection to home</td><td><kbd>Shift+Home</kbd></td><td><code>selection-home</code></td></tr>
+                  <tr><td>Extend selection to end</td><td><kbd>Shift+End</kbd></td><td><code>selection-end</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>No default shortcut</h3>
+            <p>These typed actions are available for customization but are unassigned by default.</p>
+            <div class="shortcut-table-wrap" role="region" aria-label="Actions with no default shortcut" tabindex="0">
+              <table class="shortcut-table shortcut-table-compact">
+                <thead><tr><th scope="col">Action</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>New workspace</td><td><code>new-workspace</code></td></tr>
+                  <tr><td>Rename workspace</td><td><code>rename-workspace</code></td></tr>
+                  <tr><td>Delete workspace</td><td><code>delete-workspace</code></td></tr>
+                  <tr><td>Copy URL</td><td><code>copy-url</code></td></tr>
+                  <tr><td>Reset terminal</td><td><code>reset-terminal</code></td></tr>
+                  <tr><td>Previous prompt</td><td><code>previous-prompt</code></td></tr>
+                  <tr><td>Next prompt</td><td><code>next-prompt</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Customize shortcuts</h3>
             <p>Local commands use repeatable assignments. An action receives a chord or the literal value <code>disabled</code>:</p>
             <pre><code>quicktty-shortcut = action-id=cmd+key
 quicktty-shortcut = action-id=disabled</code></pre>
             <p>A chord has optional modifiers and exactly one key separated by <code>+</code>. Modifiers are <code>cmd</code>, <code>opt</code>, <code>ctrl</code>, and <code>shift</code>; canonical order is <code>cmd+opt+ctrl+shift+key</code>. Supported keys include letters, digits, F1–F20, arrows, navigation and named punctuation such as <code>left-bracket</code>, <code>minus</code>, and <code>slash</code>. A single key such as <code>f12</code> is valid.</p>
-            <p>The last valid owner of a chord wins. The separately registered global Quake chord takes priority over a conflicting local command. Invalid known assignments preserve that action’s last active value during hot reload.</p>
-            <p>Read the <a href="https://github.com/dntsk/quicktty/blob/master/QuickTTY/Resources/configuration-reference.md">full shortcut registry, grammar, defaults, and conflict rules</a> in the first-party configuration reference.</p>
+            <h4>Assignment and conflict behavior</h4>
+            <p>Parsing starts from the built-in defaults and processes repeated <code>quicktty-shortcut</code> lines from top to bottom. For each action, the last valid assignment wins; <code>disabled</code> is a valid assignment.</p>
+            <p>An unknown action or malformed assignment reports a diagnostic without blocking other valid lines. During hot reload, an invalid assignment for a known action preserves that action’s last active value. Deleting every assignment for an action restores its built-in default.</p>
+            <p>If two local actions use the same chord, the last valid owner wins and the previous owner becomes disabled. The separately registered global Quake chord takes priority over any conflicting local action.</p>
           </section>
 
           <section id="tabs-splits-workspaces">
@@ -145,12 +271,188 @@ quicktty-shortcut = action-id=disabled</code></pre>
 
           <section id="coding-agent-integrations">
             <h2>Coding Agent Integrations</h2>
-            <p>QuickTTY displays standard terminal progress sequences, OSC <code>9;4</code>, as transient tab and workspace status. It does not infer agent identity from terminal output, titles, prompts, or process trees.</p>
+            <p>QuickTTY shows standard OSC <code>9;4</code> progress as tab and workspace status. It does not infer agent identity from output, titles, prompts, or process trees.</p>
+            <p>Setup is manual: QuickTTY never installs hooks or changes agent configuration. Bundled integration files are located at:</p>
+            <pre><code>/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/</code></pre>
+            <div class="note"><strong>Custom installation path</strong>If QuickTTY is installed elsewhere, replace <code>/Applications/QuickTTY.app</code> in the commands below. Always merge these examples into your existing configuration; never replace the whole configuration file.</div>
+
+            <h3>Pi 0.82</h3>
+            <p>Open <code>/settings</code> and enable <strong>Terminal progress</strong> (<code>terminal.showTerminalProgress</code>). It is off by default. No helper, hooks, or extensions are required.</p>
+            <p>Pi emits OSC <code>9;4</code> directly: <strong>working</strong> at <code>agent_start</code>, keepalive updates while working, and <strong>completed</strong> at <code>agent_end</code>.</p>
+
+            <h3>Claude Code 2.1.141+</h3>
+            <p>Claude Code command hooks have no controlling TTY. In <code>claude</code> mode, the helper emits one JSON object containing the universal <code>terminalSequence</code> field and writes nothing else to stdout.</p>
+            <h4>Configuration</h4>
+            <p>Merge the top-level <code>hooks</code> object from the bundled <code>claude-settings.example.json</code> into your existing Claude Code settings:</p>
+            <pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude failed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+            <h4>Event mapping</h4>
             <ul>
-              <li><strong>Pi:</strong> enable <strong>Terminal progress</strong> in <code>/settings</code>; no helper is needed.</li>
-              <li><strong>Claude Code and Codex:</strong> manually merge the bundled helper examples from <code>QuickTTY.app/Contents/Resources/AgentIntegrations</code> into the agent configuration.</li>
+              <li><code>UserPromptSubmit</code> → working.</li>
+              <li><code>PermissionRequest</code> → waiting.</li>
+              <li><code>Notification</code> matching <code>permission_prompt|idle_prompt|agent_needs_input</code> → waiting.</li>
+              <li><code>PostToolUse</code> and <code>PostToolUseFailure</code> → working.</li>
+              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
+              <li><code>StopFailure</code> → failed.</li>
             </ul>
-            <p>QuickTTY does not install or alter agent hooks automatically. Follow the <a href="https://github.com/dntsk/quicktty/blob/master/docs/agent-integrations.md">full coding-agent integration guide</a> for supported lifecycle events and exact helper behavior.</p>
+            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
+
+            <h3>Codex</h3>
+            <p>Codex keeps its controlling TTY. In <code>codex</code> mode, the helper writes OSC directly to <code>/dev/tty</code> and writes exactly <code>{}</code> to stdout. If <code>/dev/tty</code> is unavailable, it still writes <code>{}</code> and exits successfully.</p>
+            <h4>Configuration</h4>
+            <p>Merge the top-level <code>hooks</code> object from the bundled <code>codex-hooks.example.json</code> into your existing <code>hooks.json</code>:</p>
+            <pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+            <h4>Event mapping</h4>
+            <ul>
+              <li><code>UserPromptSubmit</code> → working.</li>
+              <li><code>PermissionRequest</code> → waiting.</li>
+              <li><code>PostToolUse</code> → working.</li>
+              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
+            </ul>
+            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
+
+            <h3>Helper contract</h3>
+            <p>The bundled helper supports exactly these invocation forms:</p>
+            <pre><code>quicktty-progress claude working|waiting|failed|completed
+quicktty-progress codex working|waiting|failed|completed</code></pre>
+            <p>States map to OSC <code>9;4</code> values as follows: <code>working</code> → <code>3</code>, <code>waiting</code> → <code>4</code>, <code>failed</code> → <code>2</code>, and <code>completed</code> → <code>0</code>.</p>
+            <p>An unknown mode, unknown state, or extra argument returns nonzero. The helper adds no new dependencies.</p>
           </section>
 
           <section id="troubleshooting">

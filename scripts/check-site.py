@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -18,6 +19,206 @@ EXPECTED_PAGES = {
 }
 LATEST_RELEASE_URL = "https://github.com/dntsk/quicktty/releases/latest"
 EXTERNAL_SCHEMES = {"http", "https", "mailto", "tel"}
+CONFIGURATION_REFERENCE = ROOT / "QuickTTY" / "Resources" / "configuration-reference.md"
+AGENT_INTEGRATIONS = ROOT / "QuickTTY" / "Resources" / "AgentIntegrations"
+
+
+def section_between(source: str, start_marker: str, end_marker: str) -> str | None:
+    start = source.find(start_marker)
+    if start == -1:
+        return None
+    end = source.find(end_marker, start + len(start_marker))
+    if end == -1:
+        return None
+    return source[start:end]
+
+
+def div_block(source: str, marker: str) -> tuple[str, int, int] | None:
+    start = source.find(marker)
+    if start == -1:
+        return None
+
+    depth = 0
+    for match in re.finditer(r"</?div\b[^>]*>", source[start:], flags=re.IGNORECASE):
+        if match.group(0).startswith("</"):
+            depth -= 1
+            if depth == 0:
+                end = start + match.end()
+                return source[start:end], start, end
+        else:
+            depth += 1
+    return None
+
+
+def canonical_shortcuts(errors: list[str]) -> dict[str, str | None]:
+    source = CONFIGURATION_REFERENCE.read_text(encoding="utf-8")
+    section = section_between(
+        source,
+        "## Registry действий и значения по умолчанию",
+        "## Последовательное применение и конфликты",
+    )
+    if section is None:
+        errors.append(
+            "QuickTTY/Resources/configuration-reference.md: missing canonical shortcut registry section"
+        )
+        return {}
+
+    shortcuts: dict[str, str | None] = {}
+    row_pattern = re.compile(
+        r"^\|\s*`(?P<action>[^`]+)`\s*\|\s*`(?P<default>[^`]+)`\s*\|",
+        flags=re.MULTILINE,
+    )
+    for match in row_pattern.finditer(section):
+        action = match.group("action").strip()
+        default = match.group("default").strip().casefold()
+        if action in shortcuts:
+            errors.append(
+                "QuickTTY/Resources/configuration-reference.md: "
+                f"duplicate canonical shortcut action: {action}"
+            )
+        shortcuts[action] = None if default == "disabled" else default
+
+    if not shortcuts:
+        errors.append(
+            "QuickTTY/Resources/configuration-reference.md: canonical shortcut registry has no rows"
+        )
+    shortcuts["quicktty-global-toggle"] = "f12"
+    return shortcuts
+
+
+def docs_shortcuts(source: str, errors: list[str]) -> dict[str, str | None]:
+    section = section_between(source, '<section id="keyboard-shortcuts">', "</section>")
+    if section is None:
+        errors.append("site/docs/index.html: missing keyboard shortcuts section")
+        return {}
+
+    table_pattern = re.compile(
+        r'<table class="(?P<classes>[^"]*\bshortcut-table\b[^"]*)">(?P<body>.*?)</table>',
+        flags=re.DOTALL,
+    )
+    tables = list(table_pattern.finditer(section))
+    if not tables:
+        errors.append("site/docs/index.html: missing shortcut category tables")
+
+    primary = div_block(section, '<div class="primary-shortcut">')
+    if primary is None:
+        errors.append("site/docs/index.html: missing or malformed .primary-shortcut block")
+    else:
+        primary_source, primary_start, primary_end = primary
+        for marker in ("Cmd+Opt+P", "toggle-presentation"):
+            if marker not in primary_source:
+                errors.append(
+                    f"site/docs/index.html: .primary-shortcut block is missing {marker}"
+                )
+        if tables and (primary_start >= tables[0].start() or primary_end > tables[0].start()):
+            errors.append(
+                "site/docs/index.html: .primary-shortcut block must appear before shortcut category tables"
+            )
+
+    shortcuts: dict[str, str | None] = {}
+    assigned_pattern = re.compile(
+        r"<tr><td>[^<]+</td><td><kbd>(?P<chord>[^<]+)</kbd></td>"
+        r"<td><code>(?P<action>[^<]+)</code>(?:(?!</td>).)*</td></tr>"
+    )
+    unassigned_pattern = re.compile(
+        r"<tr><td>[^<]+</td><td><code>(?P<action>[^<]+)</code></td></tr>"
+    )
+    for table in tables:
+        classes = table.group("classes").split()
+        body_match = re.search(r"<tbody>(.*?)</tbody>", table.group("body"), flags=re.DOTALL)
+        if body_match is None:
+            errors.append("site/docs/index.html: shortcut table is missing tbody")
+            continue
+        rows = re.findall(r"<tr>.*?</tr>", body_match.group(1), flags=re.DOTALL)
+        pattern = unassigned_pattern if "shortcut-table-compact" in classes else assigned_pattern
+        for row in rows:
+            normalized_row = row.strip()
+            match = pattern.fullmatch(normalized_row)
+            if match is None:
+                display_row = re.sub(r"\s+", " ", normalized_row)
+                errors.append(
+                    f"site/docs/index.html: malformed shortcut table row: {display_row}"
+                )
+                continue
+            action = unescape(match.group("action")).strip()
+            default = None
+            if pattern is assigned_pattern:
+                default = unescape(match.group("chord")).strip().casefold()
+            if action in shortcuts:
+                errors.append(f"site/docs/index.html: duplicate shortcut action: {action}")
+            shortcuts[action] = default
+    return shortcuts
+
+
+def compare_shortcuts(
+    canonical: dict[str, str | None], documented: dict[str, str | None], errors: list[str]
+) -> None:
+    for action in sorted(canonical.keys() | documented.keys()):
+        if action not in documented:
+            expected = canonical[action] if canonical[action] is not None else "no default"
+            errors.append(
+                f"site/docs/index.html: missing shortcut action {action!r} (expected {expected})"
+            )
+        elif action not in canonical:
+            actual = documented[action] if documented[action] is not None else "no default"
+            errors.append(
+                f"site/docs/index.html: extra shortcut action {action!r} (documented {actual})"
+            )
+        elif documented[action] != canonical[action]:
+            expected = canonical[action] if canonical[action] is not None else "no default"
+            actual = documented[action] if documented[action] is not None else "no default"
+            errors.append(
+                f"site/docs/index.html: shortcut mismatch for {action!r}: "
+                f"expected {expected}, documented {actual}"
+            )
+
+
+def validate_bundled_example(
+    docs_source: str, marker: str, bundled_path: Path, errors: list[str]
+) -> None:
+    marker_index = docs_source.find(marker)
+    label = bundled_path.relative_to(ROOT)
+    if marker_index == -1:
+        errors.append(f"site/docs/index.html: missing bundled example marker {marker}")
+        return
+
+    match = re.search(r"<pre><code>(.*?)</code></pre>", docs_source[marker_index:], flags=re.DOTALL)
+    if match is None:
+        errors.append(f"site/docs/index.html: missing code block after {marker}")
+        return
+
+    documented = unescape(match.group(1)) + "\n"
+    bundled = bundled_path.read_text(encoding="utf-8")
+    if documented != bundled:
+        errors.append(f"site/docs/index.html: embedded {marker} does not match {label}")
+
+
+def require_markers(
+    source: str, label: str, markers: tuple[str, ...], errors: list[str]
+) -> None:
+    for marker in markers:
+        if marker not in source:
+            errors.append(f"site/docs/index.html: {label} is missing required marker: {marker}")
+
+
+def validate_helper_invocations(docs_source: str, errors: list[str]) -> None:
+    marker = "supports exactly these invocation forms:"
+    marker_index = docs_source.find(marker)
+    if marker_index == -1:
+        errors.append("site/docs/index.html: missing helper invocation forms marker")
+        return
+
+    match = re.search(r"<pre><code>(.*?)</code></pre>", docs_source[marker_index:], flags=re.DOTALL)
+    if match is None:
+        errors.append("site/docs/index.html: missing helper invocation forms code block")
+        return
+
+    expected = (
+        "quicktty-progress claude working|waiting|failed|completed\n"
+        "quicktty-progress codex working|waiting|failed|completed"
+    )
+    if unescape(match.group(1)) != expected:
+        errors.append("site/docs/index.html: helper invocation forms do not match the contract")
 
 
 class PageParser(HTMLParser):
@@ -192,6 +393,115 @@ def main() -> int:
     )
     if versioned_dmg_url.search(home_source):
         errors.append("site/index.html: contains a version-pinned DMG URL")
+
+    docs_path = (SITE / "docs" / "index.html").resolve()
+    docs_source = page_sources.get(docs_path, "")
+    docs_parser = parsed_pages.get(docs_path)
+    if docs_parser is not None:
+        for attribute, reference in docs_parser.references:
+            parsed_reference = urlsplit(reference)
+            hostname = (parsed_reference.hostname or "").lower().removeprefix("www.")
+            if (
+                hostname == "github.com"
+                and re.match(
+                    r"^/dntsk/quicktty/(?:blob|tree)/.*\.md$",
+                    parsed_reference.path,
+                    flags=re.IGNORECASE,
+                )
+            ):
+                errors.append(
+                    "site/docs/index.html: repository Markdown link is not self-contained: "
+                    f"{reference}"
+                )
+    compare_shortcuts(canonical_shortcuts(errors), docs_shortcuts(docs_source, errors), errors)
+
+    validate_bundled_example(
+        docs_source,
+        "claude-settings.example.json",
+        AGENT_INTEGRATIONS / "claude-settings.example.json",
+        errors,
+    )
+    validate_bundled_example(
+        docs_source,
+        "codex-hooks.example.json",
+        AGENT_INTEGRATIONS / "codex-hooks.example.json",
+        errors,
+    )
+
+    pi_guide = section_between(docs_source, "<h3>Pi 0.82</h3>", "<h3>Claude Code")
+    if pi_guide is None:
+        errors.append("site/docs/index.html: missing Pi agent guide")
+    else:
+        require_markers(
+            pi_guide,
+            "Pi agent guide",
+            (
+                "<code>/settings</code>",
+                "Terminal progress",
+                "<code>terminal.showTerminalProgress</code>",
+                "off by default",
+                "No helper, hooks, or extensions",
+                "<code>agent_start</code>",
+                "keepalive",
+                "<code>agent_end</code>",
+            ),
+            errors,
+        )
+
+    claude_guide = section_between(docs_source, "<h3>Claude Code", "<h3>Codex")
+    if claude_guide is None:
+        errors.append("site/docs/index.html: missing Claude Code agent guide")
+    else:
+        require_markers(
+            claude_guide,
+            "Claude Code agent guide",
+            (
+                "no controlling TTY",
+                "universal <code>terminalSequence</code> field",
+                "writes nothing else to stdout",
+                "no stdin, prompt, transcript, or environment secrets",
+            ),
+            errors,
+        )
+
+    codex_guide = section_between(docs_source, "<h3>Codex", "<h3>Helper contract")
+    if codex_guide is None:
+        errors.append("site/docs/index.html: missing Codex agent guide")
+    else:
+        require_markers(
+            codex_guide,
+            "Codex agent guide",
+            (
+                "writes OSC directly to <code>/dev/tty</code>",
+                "writes exactly <code>{}</code> to stdout",
+                "If <code>/dev/tty</code> is unavailable",
+                "exits successfully",
+                "no stdin, prompt, transcript, or environment secrets",
+            ),
+            errors,
+        )
+
+    helper_contract = section_between(docs_source, "<h3>Helper contract</h3>", "</section>")
+    if helper_contract is None:
+        errors.append("site/docs/index.html: missing helper contract section")
+    else:
+        validate_helper_invocations(helper_contract, errors)
+        require_markers(
+            helper_contract,
+            "helper contract",
+            (
+                "<code>working</code> → <code>3</code>",
+                "<code>waiting</code> → <code>4</code>",
+                "<code>failed</code> → <code>2</code>",
+                "<code>completed</code> → <code>0</code>",
+                "unknown mode",
+                "unknown state",
+                "extra argument",
+                "returns nonzero",
+                "no new dependencies",
+            ),
+            errors,
+        )
 
     releases_source = page_sources.get((SITE / "releases" / "index.html").resolve(), "")
     if "0.1.2" not in releases_source or not re.search(r"\bbuild\s+9\b", releases_source, re.IGNORECASE):

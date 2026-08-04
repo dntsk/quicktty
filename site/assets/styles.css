@@ -855,6 +855,14 @@
     letter-spacing: -0.01em;
   }
 
+  .content-page .docs-content h4 {
+    margin: 26px 0 10px;
+    color: #475154;
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
   .content-page .docs-content p,
   .content-page .docs-content li {
     color: var(--content-muted);
@@ -923,6 +931,150 @@
     color: inherit;
     font-size: inherit;
     overflow-wrap: normal;
+  }
+
+  .content-page .docs-content .primary-shortcut {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 28px;
+    align-items: center;
+    margin-bottom: 38px;
+    padding: 24px 26px;
+    border: 1px solid #283337;
+    border-left: 4px solid #34b8cf;
+    border-radius: 12px;
+    background: #12191c;
+    box-shadow: 0 12px 34px rgba(18, 23, 25, 0.12);
+  }
+
+  .content-page .docs-content .primary-shortcut-label {
+    margin-bottom: 7px;
+    color: #75d9e9;
+    font-size: 0.66rem;
+    font-weight: 720;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .content-page .docs-content .primary-shortcut h3 {
+    margin: 0 0 8px;
+    color: #f3f6f7;
+    font-size: 1.18rem;
+    letter-spacing: -0.02em;
+  }
+
+  .content-page .docs-content .primary-shortcut p:last-child {
+    max-width: 510px;
+    color: #aebabc;
+    font-size: 0.88rem;
+    line-height: 1.58;
+  }
+
+  .content-page .docs-content .primary-shortcut-command {
+    display: grid;
+    gap: 9px;
+    justify-items: end;
+  }
+
+  .content-page .docs-content kbd {
+    display: inline-block;
+    padding: 0.28em 0.55em;
+    border: 1px solid #b7bfbe;
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    background: #fff;
+    color: #20282a;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 650;
+    line-height: 1.25;
+    white-space: nowrap;
+  }
+
+  .content-page .docs-content .primary-shortcut kbd {
+    padding: 0.52em 0.72em;
+    border-color: #75d9e9;
+    background: #eafcff;
+    color: #075e6d;
+    font-size: 0.95rem;
+  }
+
+  .content-page .docs-content .primary-shortcut code {
+    max-width: 100%;
+    background: #263236;
+    color: #8ee3f0;
+    font-size: 0.72rem;
+    text-align: right;
+  }
+
+  .content-page .docs-content .shortcut-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    margin: 12px 0 38px;
+    overflow-x: auto;
+    border: 1px solid #cbd0cf;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.48);
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .content-page .docs-content .shortcut-table {
+    width: 100%;
+    min-width: 620px;
+    border-collapse: collapse;
+    color: #30383a;
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+
+  .content-page .docs-content .shortcut-table-compact {
+    min-width: 420px;
+  }
+
+  .content-page .docs-content .shortcut-table th {
+    padding: 11px 15px;
+    border-bottom: 1px solid #bfc6c4;
+    background: #dfe4e2;
+    color: #4d5759;
+    font-size: 0.64rem;
+    font-weight: 720;
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .content-page .docs-content .shortcut-table td {
+    padding: 12px 15px;
+    border-bottom: 1px solid #d7dcda;
+    vertical-align: middle;
+  }
+
+  .content-page .docs-content .shortcut-table tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .content-page .docs-content .shortcut-table tbody tr:nth-child(even) {
+    background: rgba(225, 230, 228, 0.48);
+  }
+
+  .content-page .docs-content .shortcut-table td:first-child {
+    color: #252d2f;
+    font-weight: 600;
+  }
+
+  .content-page .docs-content .shortcut-table code {
+    color: #086b7d;
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+
+  .content-page .docs-content .action-id-note {
+    display: block;
+    margin-top: 5px;
+    color: var(--content-dim);
+    font-size: 0.68rem;
+    line-height: 1.4;
   }
 
   .content-page .note {
@@ -1447,6 +1599,29 @@
     .content-page .docs-content pre,
     .content-page .channel-copy pre {
       padding: 15px 16px;
+    }
+
+    .content-page .docs-content .primary-shortcut {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+      padding: 20px;
+    }
+
+    .content-page .docs-content .primary-shortcut-command {
+      justify-items: start;
+    }
+
+    .content-page .docs-content .primary-shortcut code {
+      text-align: left;
+    }
+
+    .content-page .docs-content .shortcut-table {
+      font-size: 0.8rem;
+    }
+
+    .content-page .docs-content .shortcut-table th,
+    .content-page .docs-content .shortcut-table td {
+      padding-inline: 12px;
     }
 
     .content-page .release-actions .button,
