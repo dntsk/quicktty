@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="QuickTTY is a native terminal workspace for macOS with tabs, splits, workspaces, Quake mode, broadcast input, and Ghostty at its core.">
-    <meta name="theme-color" content="#080b0d">
+    <meta name="description" content="QuickTTY is a native terminal workspace for macOS with tabs, splits, named workspaces, Quake mode, broadcast input, search, and coding-agent progress.">
+    <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/">
     <link rel="icon" href="/assets/app-icon.png">
     <link rel="stylesheet" href="/assets/styles.css">
@@ -33,134 +33,105 @@
     </header>
 
     <main id="main-content">
-      <section class="hero shell" id="product" aria-labelledby="hero-title">
-        <div class="hero-copy reveal">
-          <p class="eyebrow"><span>Native / focused / fast</span></p>
-          <h1 id="hero-title">A native terminal workspace for macOS.</h1>
-          <p class="hero-deck">Keep shells, coding agents, and long-running tasks arranged in one deliberate workspace—then call the same live sessions down from anywhere.</p>
+      <section class="product-hero" id="product" aria-labelledby="hero-title">
+        <div class="product-shell hero-intro reveal">
+          <p class="product-label">QuickTTY for macOS</p>
+          <h1 id="hero-title">Native terminal workspace for macOS.</h1>
+          <p class="hero-summary">For developers managing shells, coding agents, logs, tests, and long-running tasks—all in one physical window.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/dntsk/quicktty/releases/latest">Download latest stable <span aria-hidden="true">↘</span></a>
-            <a class="text-link" href="https://github.com/dntsk/quicktty">View source on GitHub <span aria-hidden="true">↗</span></a>
+            <a class="button button-primary" href="https://github.com/dntsk/quicktty/releases/latest">Download latest stable <span aria-hidden="true">↓</span></a>
+            <a class="button home-secondary" href="https://github.com/dntsk/quicktty">View source on GitHub <span aria-hidden="true">↗</span></a>
           </div>
           <p class="compatibility">macOS 15+ <span>·</span> Apple Silicon <span>·</span> Signed &amp; notarized</p>
         </div>
 
-        <div class="terminal-tableau reveal" role="img" aria-label="QuickTTY workspace with tabs and four terminal panes">
-          <div class="tableau-topline">
-            <div class="workspace-switcher"><span class="signal-dot"></span> WORKSPACE <strong>SHIP / 03</strong></div>
-            <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+        <figure class="product-shell product-figure reveal">
+          <div class="screenshot-window hero-screenshot">
+            <img src="/assets/screenshots/workspace.png" width="2640" height="1580" fetchpriority="high" alt="QuickTTY normal window with tabs, a named workspace selector, and four split terminal panes showing shell status, release checks, logs, and coding-agent progress">
           </div>
-          <div class="tableau-tabs">
-            <span class="tab active"><b>01</b> quicktty</span>
-            <span class="tab"><b>02</b> release-check</span>
-            <span class="tab broadcast-tab"><b>03</b> fleet <i>BROADCAST</i></span>
-            <span class="tableau-clock">14:32:08</span>
-          </div>
-          <div class="pane-grid">
-            <div class="terminal-pane pane-primary">
-              <p><span class="prompt">➜</span> <span class="path">~/quicktty</span> git status --short</p>
-              <p class="cyan">M&nbsp; QuickTTY/WindowCoordinator.swift</p>
-              <p class="muted">?? site/</p>
-              <p><span class="prompt">➜</span> <span class="path">~/quicktty</span> <span class="cursor">&nbsp;</span></p>
-              <span class="pane-label">EDITOR · FOCUSED</span>
-            </div>
-            <div class="terminal-pane">
-              <p><span class="amber">●</span> agent / implementation</p>
-              <p class="muted">Analyzing split lifecycle…</p>
-              <div class="progress-line"><i></i><span>working</span></div>
-              <span class="pane-label">AGENT · OSC 9;4</span>
-            </div>
-            <div class="terminal-pane">
-              <p><span class="prompt">$</span> make site-check</p>
-              <p class="green">site-check: PASS</p>
-              <p class="muted">4 HTML pages · 0 broken refs</p>
-              <span class="pane-label">CHECKS</span>
-            </div>
-            <div class="terminal-pane pane-log">
-              <p class="muted">14:31:57 renderer ready</p>
-              <p class="muted">14:31:58 workspace restored</p>
-              <p><span class="cyan">14:32:04</span> waiting for input</p>
-              <span class="pane-label">RUNTIME</span>
-            </div>
-          </div>
-          <div class="tableau-status">
-            <span><i class="status-live"></i> 4 PANES LIVE</span>
-            <span>FOCUS 01</span>
-            <span class="status-broadcast">⌘B BROADCAST OFF</span>
-          </div>
-          <div class="quake-strip"><span>F12</span> Quake mode <i></i> same sessions, one keystroke away</div>
-        </div>
+          <figcaption class="screenshot-caption">
+            <strong>Tabs, splits, and named workspaces.</strong>
+            <span>Arrange each project once. Background shells and long-running tasks stay live when you switch context.</span>
+          </figcaption>
+        </figure>
       </section>
 
-      <section class="manifesto shell reveal" aria-labelledby="workspace-heading">
-        <div class="section-index">01 / STRUCTURE</div>
-        <div class="manifesto-copy">
-          <p class="kicker">One window. More room to think.</p>
-          <h2 id="workspace-heading">Workspaces hold the context.<br>Splits hold the work.</h2>
-          <p>Name the project, divide each tab into the panes it needs, and move between workspaces without stopping anything underneath. QuickTTY keeps one physical window and one active workspace; hidden sessions keep running.</p>
-        </div>
-        <dl class="feature-ledger">
-          <div><dt>Tabs</dt><dd>Group related terminal sessions</dd></div>
-          <div><dt>Binary splits</dt><dd>Resize, equalize, and navigate by direction</dd></div>
-          <div><dt>Workspaces</dt><dd>Named contexts with live background processes</dd></div>
-        </dl>
-      </section>
-
-      <section class="quake-feature full-bleed reveal" aria-labelledby="quake-heading">
-        <div class="quake-rule"><span>GLOBAL ACCESS</span><i></i><span>F12 DEFAULT</span></div>
-        <div class="shell quake-layout">
+      <section class="feature-section feature-dark" aria-labelledby="quake-heading">
+        <div class="product-shell feature-heading reveal">
           <div>
-            <p class="eyebrow">Normal ↔ Quake</p>
-            <h2 id="quake-heading">Drop into the same terminal. Not another terminal.</h2>
+            <p class="product-label">Quake mode</p>
+            <h2 id="quake-heading">Bring the same live sessions down from the top.</h2>
           </div>
-          <p>Quake mode slides the existing workspace from the top of the current display. Toggle back to a normal macOS window without restarting a shell, rebuilding a split, or losing your place.</p>
+          <p>Use the global shortcut to show QuickTTY on the current display. Switch between normal and Quake mode without restarting a shell or rebuilding your split layout.</p>
+        </div>
+        <figure class="product-shell product-figure reveal">
+          <div class="screenshot-window quake-screenshot">
+            <img src="/assets/screenshots/quake.png" width="2892" height="1150" loading="lazy" alt="QuickTTY in Quake mode dropped down from the top of the screen with the existing tabs and split terminal sessions still running">
+          </div>
+          <figcaption class="screenshot-caption dark-caption">
+            <strong>One window, two presentations.</strong>
+            <span>Normal and Quake modes are mutually exclusive views of the same workspace.</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="feature-section feature-light" aria-labelledby="broadcast-heading">
+        <div class="product-shell split-feature">
+          <div class="feature-copy reveal">
+            <p class="product-label">Broadcast input</p>
+            <h2 id="broadcast-heading">Run the same input across every pane in the tab.</h2>
+            <p>Broadcast routes one keyboard event—or one confirmed paste—to every pane in the active tab. The orange tab indicator makes the active state clear.</p>
+            <p class="feature-note">Mouse, scroll, resize, and interface commands stay local. Broadcast turns off when you leave the tab or workspace.</p>
+          </div>
+          <figure class="product-figure reveal">
+            <div class="screenshot-window broadcast-screenshot">
+              <img src="/assets/screenshots/broadcast.png" width="2640" height="1580" loading="lazy" alt="QuickTTY workspace with four terminal panes and broadcast input active, shown by an orange indicator on the active Workspace tab">
+            </div>
+            <figcaption class="screenshot-caption compact-caption">
+              <strong>Broadcast is visible while it is active.</strong>
+              <span>Input reaches the current tab only.</span>
+            </figcaption>
+          </figure>
         </div>
       </section>
 
-      <section class="broadcast-feature shell reveal" aria-labelledby="broadcast-heading">
-        <div class="broadcast-copy">
-          <p class="section-index amber-text">02 / MULTIPLY</p>
-          <h2 id="broadcast-heading">One input.<br>Every pane in the tab.</h2>
-          <p>Broadcast sends the original keyboard event or confirmed paste to every pane in the active tab. Each terminal interprets the event in its own keyboard mode.</p>
-          <p class="fine-print">Mouse, scroll, resize, and interface commands stay local. Broadcast turns off when you leave the tab or workspace.</p>
-        </div>
-        <div class="broadcast-diagram" aria-label="One input routed to four terminal panes">
-          <div class="input-node"><span>⌘B</span><b>INPUT</b></div>
-          <div class="route-lines" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-          <div class="target-nodes"><span>01 <b>PTY</b></span><span>02 <b>PTY</b></span><span>03 <b>PTY</b></span><span>04 <b>PTY</b></span></div>
-        </div>
-      </section>
-
-      <section class="details-section shell reveal" aria-labelledby="details-heading">
-        <div class="section-index">03 / SIGNAL</div>
-        <h2 id="details-heading">The terminal stays the center.</h2>
-        <div class="detail-rows">
-          <article>
-            <span class="detail-number">A</span>
-            <div><h3>Search &amp; shortcuts</h3><p>Native terminal search, directional pane focus, and a typed shortcut grammar you can reload without restarting live sessions.</p></div>
-            <code>cmd+shift+right</code>
-          </article>
-          <article>
-            <span class="detail-number">B</span>
-            <div><h3>Coding-agent progress</h3><p>Standard OSC 9;4 progress becomes quiet workspace and tab status. Pi works natively; Claude Code and Codex use manually installed hooks.</p></div>
-            <code>working → waiting</code>
-          </article>
-          <article>
-            <span class="detail-number">C</span>
-            <div><h3>Ghostty engine</h3><p>Full libghostty powers the PTY, terminal emulation, Metal rendering, scrollback, fonts, palettes, and themes beneath a native AppKit workspace.</p></div>
-            <code>libghostty / pinned</code>
-          </article>
+      <section class="feature-section signal-section" aria-labelledby="signal-heading">
+        <div class="product-shell signal-layout">
+          <div class="signal-copy reveal">
+            <p class="product-label">Find work. Follow progress.</p>
+            <h2 id="signal-heading">Terminal state stays visible.</h2>
+            <div class="signal-list">
+              <article>
+                <h3>Native search</h3>
+                <p>Find text in the active terminal, move through matches, and see the current result count in a native overlay.</p>
+              </article>
+              <article>
+                <h3>Coding-agent progress</h3>
+                <p>OSC 9;4 progress appears in tabs and workspaces, so you can see when an agent is working or waiting.</p>
+              </article>
+            </div>
+          </div>
+          <figure class="product-figure reveal">
+            <div class="screenshot-window signal-screenshot">
+              <img src="/assets/screenshots/workspace.png" width="2640" height="1580" loading="lazy" alt="QuickTTY workspace showing coding-agent progress alongside live logs, release checks, and terminal sessions">
+            </div>
+            <figcaption class="screenshot-caption dark-caption compact-caption">
+              <strong>Progress across tabs and workspaces.</strong>
+              <span>Standard OSC 9;4 signals, shown without parsing terminal output.</span>
+            </figcaption>
+          </figure>
         </div>
       </section>
 
-      <section class="final-cta shell reveal" aria-labelledby="download-heading">
+      <section class="home-download product-shell reveal" aria-labelledby="download-heading">
         <div>
-          <p class="eyebrow">QuickTTY for macOS</p>
-          <h2 id="download-heading">Build a workspace that stays ready.</h2>
+          <p class="product-label">QuickTTY for macOS</p>
+          <h2 id="download-heading">Keep every active task in view.</h2>
+          <p>Native AppKit workspace. Full libghostty terminal engine.</p>
         </div>
-        <div class="final-actions">
-          <a class="button button-primary" href="https://github.com/dntsk/quicktty/releases/latest">Download latest stable <span aria-hidden="true">↘</span></a>
-          <p>macOS 15+ · Apple Silicon</p>
+        <div class="download-actions">
+          <a class="button button-primary" href="https://github.com/dntsk/quicktty/releases/latest">Download latest stable <span aria-hidden="true">↓</span></a>
+          <p>macOS 15+ · Apple Silicon · Signed &amp; notarized</p>
         </div>
       </section>
     </main>
