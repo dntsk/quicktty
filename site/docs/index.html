@@ -241,11 +241,11 @@ quicktty-shortcut = action-id=disabled</code></pre>
           <section id="tabs-splits-workspaces">
             <h2>Tabs, Splits &amp; Workspaces</h2>
             <h3>Tabs</h3>
-            <p>Create a tab with <code>cmd+t</code>, select tabs 1–9 with <code>cmd+1</code> through <code>cmd+9</code>, and close the active pane with <code>cmd+w</code>. Closing the last pane also closes its tab.</p>
+            <p>Create a tab with <kbd>Cmd+T</kbd>, select tabs 1–9 with <kbd>Cmd+1</kbd> through <kbd>Cmd+9</kbd>, and close the active pane with <kbd>Cmd+W</kbd>. Closing the last pane also closes its tab.</p>
             <h3>Splits</h3>
-            <p>Split right with <code>cmd+d</code> or down with <code>cmd+shift+d</code>. Move between panes using previous/next or directional focus commands. Splits form a resizable binary tree inside each tab.</p>
+            <p>Split right with <kbd>Cmd+D</kbd> or down with <kbd>Cmd+Shift+D</kbd>. Move between panes using previous/next or directional focus commands. Splits form a resizable binary tree inside each tab.</p>
             <h3>Workspaces</h3>
-            <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <code>cmd+opt+1</code> through <code>cmd+opt+9</code>.</p>
+            <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <kbd>Cmd+Opt+1</kbd> through <kbd>Cmd+Opt+9</kbd>.</p>
             <p>QuickTTY can restore workspace descriptions, tabs, split layout, current working directories, and focus after restart. It starts new processes; it does not preserve live processes across application termination.</p>
           </section>
 
@@ -259,14 +259,14 @@ quicktty-shortcut = action-id=disabled</code></pre>
 
           <section id="broadcast-input">
             <h2>Broadcast Input</h2>
-            <p>Toggle broadcast for the active tab with <code>cmd+b</code>. The tab and workspace chrome show when it is active.</p>
+            <p>Toggle broadcast for the active tab with <kbd>Cmd+B</kbd>. The tab and workspace chrome show when it is active.</p>
             <p>QuickTTY routes the original logical keyboard event to every pane in that tab, allowing each terminal to encode it for its own keyboard mode. Paste asks for confirmation once and then targets those panes. Mouse events, scrolling, resizing, and interface commands are never broadcast.</p>
             <p>Broadcast automatically turns off when you change tab or workspace, restore the app, or encounter a target surface error.</p>
           </section>
 
           <section id="search">
             <h2>Search</h2>
-            <p>Start native terminal search with <code>cmd+f</code>. Use <code>cmd+g</code> for the next result and <code>cmd+shift+g</code> for the previous result. The overlay reports the current selection and total match count from Ghostty runtime callbacks.</p>
+            <p>Start native terminal search with <kbd>Cmd+F</kbd>. Use <kbd>Cmd+G</kbd> for the next result and <kbd>Cmd+Shift+G</kbd> for the previous result. The overlay reports the current selection and total match count from Ghostty runtime callbacks.</p>
             <p>Search is scoped to its terminal surface. Escape always closes search, regardless of whether the query is empty. Closing the pane clears its search state.</p>
           </section>
 
