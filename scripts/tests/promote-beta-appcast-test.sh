@@ -62,10 +62,12 @@ grep -F 'docs/appcasts/beta.xml' "$project_profile" >/dev/null \
     || fail 'project profile does not require beta appcast promotion'
 grep -F 'docs/appcasts/beta.xml' "$readme" >/dev/null \
     || fail 'README does not document beta appcast promotion'
-for policy_file in "$runbook" "$agents" "$project_profile" "$release_rules" "$readme"; do
+for policy_file in "$runbook" "$agents" "$project_profile" "$release_rules"; do
     grep -F 'надмножеством' "$policy_file" >/dev/null \
         || fail "release policy does not define beta as a superset of stable: $policy_file"
 done
+grep -F 'superset of stable' "$readme" >/dev/null \
+    || fail 'README does not define beta as a superset of stable'
 grep -F 'previous beta → new stable' "$release_rules" >/dev/null \
     || fail 'agent release rules do not require beta-to-stable update smoke'
 

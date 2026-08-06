@@ -1,103 +1,112 @@
+<div align="center">
+  <a href="https://quicktty.app">
+    <img src="site/assets/app-icon.png" width="112" height="112" alt="QuickTTY app icon">
+  </a>
+
 # QuickTTY
 
-QuickTTY — минимальный AppKit-каркас нативного терминала для macOS.
+**A native terminal workspace for macOS.**
 
-## Требования
+Keep shells, coding agents, logs, and long-running tasks organized in one window with tabs, splits, named workspaces, and Quake mode.
 
-- macOS 15 или новее на Apple Silicon;
-- полная версия Xcode, а не только Command Line Tools;
-- XcodeGen 2.45.4 или новее;
-- Apple Swift Format, доступный как `swift format`;
-- Zig строго версии 0.15.2 для закреплённой ревизии Ghostty.
+[Website](https://quicktty.app) · [Download](https://github.com/dntsk/quicktty/releases/latest) · [Documentation](https://quicktty.app/docs/) · [Releases](https://github.com/dntsk/quicktty/releases)
 
-Если `DEVELOPER_DIR` не задан, команды сборки используют `/Applications/Xcode.app/Contents/Developer`, не изменяя системный `xcode-select`. Уже заданное значение `DEVELOPER_DIR` сохраняется. В Xcode 26 Metal Toolchain может потребовать отдельной установки командой `xcodebuild -downloadComponent MetalToolchain`; `make doctor` проверяет его наличие.
+[![Latest release](https://img.shields.io/github/v/release/dntsk/quicktty?display_name=tag&sort=semver)](https://github.com/dntsk/quicktty/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-1f6feb.svg)](LICENSE)
+![macOS 15+](https://img.shields.io/badge/macOS-15%2B-111111.svg?logo=apple)
+![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-f5a623.svg)
 
-После клонирования инициализируйте submodule:
+</div>
+
+![QuickTTY showing a named workspace with tabs and four split terminal panes](site/assets/screenshots/workspace.png)
+
+## One window for every active task
+
+QuickTTY is a native AppKit terminal powered by the full [`libghostty`](https://github.com/ghostty-org/ghostty) engine. It is designed for developers who need several live shells without turning terminal management into another project.
+
+- **Tabs and binary splits** — arrange interactive shells, logs, tests, and agents side by side.
+- **Named workspaces** — switch projects while background processes keep running.
+- **Normal and Quake modes** — move the same live workspace between a standard window and a drop-down presentation without restarting shells.
+- **Broadcast input** — send keyboard input or a confirmed paste to every pane in the active tab.
+- **Native search** — search the active terminal with match navigation and result counts.
+- **Coding-agent progress** — surface OSC `9;4` progress from Pi, Claude Code, Codex, and compatible tools across tabs and workspaces.
+- **Ghostty configuration and themes** — use the terminal engine's rendering, shell integration, fonts, palettes, and themes.
+
+## Install
+
+QuickTTY requires **macOS 15 or newer** on an **Apple Silicon Mac**.
+
+1. [Download the latest stable DMG](https://github.com/dntsk/quicktty/releases/latest).
+2. Open the DMG and move QuickTTY to Applications.
+3. Launch QuickTTY. Stable builds are signed with Developer ID and notarized by Apple.
+
+QuickTTY can check for stable updates in the app. An opt-in beta channel is also available; see the [release channels](https://quicktty.app/releases/) page for details.
+
+## Documentation
+
+The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, search, workspaces, and coding-agent integrations.
+
+QuickTTY reads its user configuration from:
+
+```text
+~/.config/quicktty/config
+```
+
+Open it from **QuickTTY → Open Configuration…**. Valid changes reload without recreating terminal sessions. QuickTTY owns application shortcuts; supported local bindings use repeated `quicktty-shortcut` entries rather than Ghostty `keybind` entries.
+
+## Build from source
+
+### Requirements
+
+- macOS 15 or newer on Apple Silicon
+- Full Xcode installation
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.4 or newer
+- Apple Swift Format, available as `swift format`
+- Zig exactly 0.15.2 for the pinned Ghostty revision
+
+Clone the repository with its submodules, verify the toolchain, and build:
+
+```sh
+git clone --recurse-submodules https://github.com/dntsk/quicktty.git
+cd quicktty
+make doctor
+make build
+```
+
+If the repository was cloned without submodules:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-## Актуальные пути
-
-- Исходники: `QuickTTY/`.
-- Тесты: `QuickTTYTests/`.
-- Генерируемый Xcode-проект: `QuickTTY.xcodeproj`.
-- Пользовательский config: `~/.config/quicktty/config`.
-- Автоматически сохраняемое состояние: `~/Library/Application Support/QuickTTY/state.json`.
-
-## Конфигурация
-
-QuickTTY читает `~/.config/quicktty/config`. Локальные сочетания задаются повторяемыми строками `quicktty-shortcut = action-id=cmd+key`; значение `disabled` снимает назначение. Полная grammar, registry действий и defaults доступны в приложении через `Help → Configuration Reference` и в `QuickTTY/Resources/configuration-reference.md`.
-
-Ghostty `keybind` в пользовательском config не применяется: QuickTTY владеет управляющими сочетаниями, а неназначенные события передаются терминалу как обычный input.
-
-## Интеграции с coding agents
-
-QuickTTY понимает terminal progress sequences OSC `9;4`. Для Pi достаточно включить встроенный параметр Terminal progress; для Claude Code и Codex в app bundle лежат helper и примеры hooks, которые нужно вручную объединить с существующей конфигурацией. Приложение не устанавливает и не изменяет hooks автоматически. Подробности: [docs/agent-integrations.md](docs/agent-integrations.md).
-
-## Команды
+Common development commands:
 
 ```sh
-make doctor
-make ghostty
-make generate
-make format
-make lint
-make build
-make test
-make check
+make generate  # Generate the Xcode project
+make format    # Format Swift sources
+make lint      # Run static and contract checks
+make build     # Build the Debug app
+make test      # Run the test suite
+make check     # Run the complete local verification
 ```
 
-## Подписанный DMG и нотарификация
+Generated Xcode projects, Ghostty XCFrameworks, and DerivedData are not committed.
 
-Обязательная процедура release, включая appcast и проверку обновления, — [docs/releasing.md](docs/releasing.md). Beta channel является надмножеством stable и читает tracked [`docs/appcasts/beta.xml`](docs/appcasts/beta.xml): после каждого более нового stable или beta application release exact final appcast продвигают только командой `make beta-feed` и отдельным post-release commit.
+## Contributing
 
-Подписанный release предназначен для macOS 15+ на Apple Silicon. Bundle identifier — `com.dntsk.QuickTTY`. Текущий ярлык выпуска — `0.1.2`; в метаданных Apple ему соответствуют `CFBundleShortVersionString = 0.1.2` и `CFBundleVersion = 9`.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Larger feature proposals should start with an issue so they can be checked against QuickTTY's intentionally focused product scope.
 
-Перед выпуском нужны полная Xcode в `DEVELOPER_DIR` (по умолчанию `/Applications/Xcode.app/Contents/Developer`), сертификат Developer ID Application вашей команды и заранее сохранённый профиль Keychain `QuickTTY`.
+- [Report a bug](https://github.com/dntsk/quicktty/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/dntsk/quicktty/issues/new?template=feature_request.yml)
+- [Security policy](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
-1. В Xcode откройте Accounts и создайте сертификат **Developer ID Application** для своей команды.
-2. На [account.apple.com](https://account.apple.com) создайте пароль для конкретного приложения (app-specific password).
-3. Сохраните учётные данные в Keychain:
+Release signing, notarization, and appcast maintenance follow the repository's [release runbook](docs/releasing.md). Third-party attribution is recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-```sh
-DEVELOPER_DIR=... xcrun notarytool store-credentials QuickTTY --apple-id "YOUR_APPLE_ID" --team-id YOUR_TEAM_ID
-```
+### Release maintainer note
 
-`notarytool` безопасно запросит app-specific password. Никогда не передавайте пароль в командной строке и не добавляйте его в репозиторий. Профиль также можно создать с ключом App Store Connect API.
+The beta channel is a superset of stable. After every newer stable or beta application release, promote the exact final appcast to [`docs/appcasts/beta.xml`](docs/appcasts/beta.xml) with `make beta-feed` in a separate post-release commit. Follow the release runbook rather than editing the feed manually.
 
-Репозиторий не хранит Apple ID, пароли, API-ключи или private keys; команды принимают только имя профиля Keychain.
+## License
 
-Создать подписанный archive и DMG:
-
-```sh
-DEVELOPMENT_TEAM=YOUR_TEAM_ID \
-  CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
-  make release
-```
-
-Отправить уже созданный точный DMG на нотарификацию:
-
-```sh
-DEVELOPMENT_TEAM=YOUR_TEAM_ID \
-  CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
-  DMG=.build/Release/QuickTTY-0.1.2-arm64.dmg \
-  NOTARY_PROFILE=QuickTTY \
-  make notarize
-```
-
-Выполнить оба этапа последовательно:
-
-```sh
-DEVELOPMENT_TEAM=YOUR_TEAM_ID \
-  CODE_SIGN_IDENTITY='Developer ID Application: Your Name (YOUR_TEAM_ID)' \
-  NOTARY_PROFILE=QuickTTY \
-  make signed-release
-```
-
-`make release` создаёт `.build/Release/QuickTTY.xcarchive` и `.build/Release/QuickTTY-0.1.2-arm64.dmg`. После stapling `make signed-release` создаёт `.build/Release/appcast/appcast.xml` из финального DMG с абсолютным GitHub Release URL. `make signed-alpha` сохранён как совместимый alias. Перед отправкой `make notarize` требует чистое дерево и проверяет строгую подпись DMG, указанные Developer ID identity и Team ID, а также надёжную метку времени. Если предзагрузочные проверки выводят хеш, он относится к DMG до отправки. Финальные размер и SHA-256 печатаются только после статуса `Accepted`, stapler, повторной проверки подписи и проверки Gatekeeper. JSON-ответ Apple сохраняется как `.build/Release/QuickTTY-0.1.2-arm64.dmg.notary-result.json`; финальный вывод содержит путь к DMG, submission ID, SHA-256 и путь к доказательству. Статус нотарификации этого репозитория не подразумевается этой документацией: команду нужно выполнить для конкретного DMG.
-
-`make doctor` проверяет инструменты, а `make ghostty` собирает закреплённый Ghostty в `Vendor/ghostty/macos/GhosttyKit.xcframework`. Повторные команды `make` используют кэшированный XCFramework, пока не изменились pin, toolchain или build script; reuse требует корректного generated stamp с текущим cache key и SHA-256 финального fat archive, единственного архива и репрезентативных символов. Перед rebuild удаляется только stamp текущего ключа, а новый двухстрочный stamp атомарно публикуется после замены и проверки архива. Изменённый, staged либо содержащий неигнорируемые untracked-файлы submodule отклоняется. Для закреплённого Ghostty v1.3.1 build script обходит дефект выравнивания текущего Apple `libtool`: после upstream-сборки он находит единственный native `libghostty.a` и соответствующий Zig cache manifest, затем детерминированно полностью перепаковывает все перечисленные в manifest dependency archives через MRI-режим `zig ar`. Подмена выполняется только для сгенерированного `libghostty-fat.a` после проверки C API и репрезентативных символов bundled-зависимостей; checksum и те же символы проверяются при reuse кэша. Workaround не изменяет upstream source и pin и не очищает `.zig-cache`. Это генерируемый static XCFramework: Xcode-проект линкует его, но не встраивает отдельной копией. `Carbon.framework` и C++ runtime (`-lstdc++`) подключены так же, как в закреплённом upstream macOS app. `make generate` автоматически проверяет эту сборку перед XcodeGen.
-
-Сгенерированные Xcode-проекты, XCFramework и DerivedData не хранятся в Git.
+QuickTTY is available under the [MIT License](LICENSE).

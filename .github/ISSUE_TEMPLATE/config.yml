@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: QuickTTY documentation
+    url: https://quicktty.app/docs/
+    about: Read installation, configuration, shortcuts, and integration guides.
+  - name: Download QuickTTY
+    url: https://github.com/dntsk/quicktty/releases/latest
+    about: Get the latest signed and notarized stable release.
+  - name: Security policy
+    url: https://github.com/dntsk/quicktty/blob/master/SECURITY.md
+    about: Read this before reporting a potential vulnerability.

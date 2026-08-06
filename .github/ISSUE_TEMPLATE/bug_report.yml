@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a reproducible problem in QuickTTY
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve QuickTTY. Search existing issues before submitting a report, and do not include credentials, private terminal contents, or other sensitive data.
+
+  - type: input
+    id: quicktty-version
+    attributes:
+      label: QuickTTY version
+      description: Find this in QuickTTY → About QuickTTY or the release name.
+      placeholder: "0.1.2 (build 9)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "15.6"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation
+      options:
+        - Stable DMG
+        - Beta DMG
+        - Built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable sequence that demonstrates the problem.
+      placeholder: |
+        1. Open…
+        2. Run…
+        3. Observe…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Relevant configuration
+      description: Include only settings needed to reproduce the problem. Remove private paths, hostnames, commands, and secrets.
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or diagnostics
+      description: Paste only non-sensitive output that helps explain the problem.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed credentials, private terminal contents, and other sensitive information.
+          required: true
+        - label: I can reproduce this on macOS 15 or newer on Apple Silicon.
+          required: true

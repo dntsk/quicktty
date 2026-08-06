@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose an improvement that fits QuickTTY's focused product scope
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        QuickTTY intentionally focuses on one native macOS window with tabs, splits, named workspaces, and mutually exclusive normal and Quake presentations. Describe the problem before proposing an implementation.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is difficult today, and who encounters it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Give a concrete example of how you would use this improvement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-visible result. Implementation details are optional.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What existing workflow, configuration, or external tool have you tried?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and documentation for this request.
+          required: true
+        - label: This request describes one focused user problem.
+          required: true
