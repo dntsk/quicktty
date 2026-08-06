@@ -11,7 +11,7 @@ Keep shells, coding agents, logs, and long-running tasks organized in one window
 
 [Website](https://quicktty.app) · [Download](https://github.com/dntsk/quicktty/releases/latest) · [Documentation](https://quicktty.app/docs/) · [Releases](https://github.com/dntsk/quicktty/releases)
 
-[![Latest release](https://img.shields.io/github/v/release/dntsk/quicktty?display_name=tag&sort=semver)](https://github.com/dntsk/quicktty/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/dntsk/quicktty?display_name=tag)](https://github.com/dntsk/quicktty/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1f6feb.svg)](LICENSE)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-111111.svg?logo=apple)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-f5a623.svg)
