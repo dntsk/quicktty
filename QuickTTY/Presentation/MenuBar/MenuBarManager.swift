@@ -20,10 +20,10 @@ final class MenuBarManager {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            let image = NSImage(named: NSImage.applicationIconName)
+            let image = NSImage(named: "MenuBarIcon")
             image?.isTemplate = true
-            image?.size = NSSize(width: 18, height: 18)
             button.image = image
+            button.imageScaling = .scaleProportionallyDown
             button.target = self
             button.action = #selector(statusItemClicked)
         }
