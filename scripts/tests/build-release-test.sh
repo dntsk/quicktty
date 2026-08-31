@@ -85,15 +85,32 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
-cli_phase_gate_line=$(grep -nF -x '          if [ "$ACTION" != install ]; then' "$project_spec" \
+cli_phase_branch_line=$(grep -nF -x '          if [ "$ACTION" = install ]; then' "$project_spec" \
     | /usr/bin/cut -d: -f1)
-cli_phase_copy_line=$(grep -nF -x '            "$SRCROOT/scripts/copy-cli-helper.sh" \' "$project_spec" \
+cli_phase_install_source_line=$(grep -nF -x \
+    '            cli_helper_source="$UNINSTALLED_PRODUCTS_DIR/$PLATFORM_NAME/quicktty"' \
+    "$project_spec" | /usr/bin/cut -d: -f1)
+cli_phase_else_line=$(grep -nF -x '          else' "$project_spec" | /usr/bin/cut -d: -f1)
+cli_phase_build_source_line=$(grep -nF -x \
+    '            cli_helper_source="$BUILT_PRODUCTS_DIR/quicktty"' "$project_spec" \
     | /usr/bin/cut -d: -f1)
 cli_phase_end_line=$(grep -nF -x '          fi' "$project_spec" | /usr/bin/cut -d: -f1)
-[ -n "$cli_phase_gate_line" ] && [ -n "$cli_phase_copy_line" ] && [ -n "$cli_phase_end_line" ] \
-    && [ "$cli_phase_gate_line" -lt "$cli_phase_copy_line" ] \
-    && [ "$cli_phase_copy_line" -lt "$cli_phase_end_line" ] \
-    || fail 'CLI helper post-build phase must copy only when ACTION is not install'
+cli_phase_copy_line=$(grep -nF -x '          "$SRCROOT/scripts/copy-cli-helper.sh" \' "$project_spec" \
+    | /usr/bin/cut -d: -f1)
+cli_phase_copy_source_line=$(grep -nF -x '            "$cli_helper_source" \' "$project_spec" \
+    | /usr/bin/cut -d: -f1)
+cli_phase_copy_destination_line=$(grep -nF -x \
+    '            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"' "$project_spec" \
+    | /usr/bin/cut -d: -f1)
+[ -n "$cli_phase_branch_line" ] \
+    && [ "$cli_phase_install_source_line" -eq $((cli_phase_branch_line + 1)) ] \
+    && [ "$cli_phase_else_line" -eq $((cli_phase_branch_line + 2)) ] \
+    && [ "$cli_phase_build_source_line" -eq $((cli_phase_branch_line + 3)) ] \
+    && [ "$cli_phase_end_line" -eq $((cli_phase_branch_line + 4)) ] \
+    && [ "$cli_phase_copy_line" -eq $((cli_phase_branch_line + 5)) ] \
+    && [ "$cli_phase_copy_source_line" -eq $((cli_phase_branch_line + 6)) ] \
+    && [ "$cli_phase_copy_destination_line" -eq $((cli_phase_branch_line + 7)) ] \
+    || fail 'CLI helper post-build phase must select the exact Xcode source for each ACTION and copy once'
 grep -F -x 'CLI_HELPER_IDENTIFIER=com.dntsk.QuickTTY.cli' "$build_script" >/dev/null \
     || fail 'release build script does not use the exact CLI helper identifier'
 helper_identifier_line=$(grep -nF -x '    --identifier "$CLI_HELPER_IDENTIFIER" \' "$build_script" \

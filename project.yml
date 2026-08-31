@@ -53,11 +53,14 @@ targets:
     postBuildScripts:
       - name: Copy QuickTTY CLI Helper
         script: |
-          if [ "$ACTION" != install ]; then
-            "$SRCROOT/scripts/copy-cli-helper.sh" \
-              "$BUILT_PRODUCTS_DIR/quicktty" \
-              "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"
+          if [ "$ACTION" = install ]; then
+            cli_helper_source="$UNINSTALLED_PRODUCTS_DIR/$PLATFORM_NAME/quicktty"
+          else
+            cli_helper_source="$BUILT_PRODUCTS_DIR/quicktty"
           fi
+          "$SRCROOT/scripts/copy-cli-helper.sh" \
+            "$cli_helper_source" \
+            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"
         basedOnDependencyAnalysis: false
       - name: Copy Ghostty Runtime Resources
         script: |
