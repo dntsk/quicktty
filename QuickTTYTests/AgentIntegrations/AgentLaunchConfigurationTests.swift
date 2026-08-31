@@ -217,7 +217,9 @@ struct AgentLaunchConfigurationTests {
     @Test
     func launchPayloadRemainsOutsidePersistedApplicationState() throws {
         let state = ApplicationState()
-        let stateBeforeLaunch = try JSONEncoder().encode(state)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let stateBeforeLaunch = try encoder.encode(state)
         let invocation = try ExecutableInvocation(
             executablePath: "/bin/agent",
             arguments: ["sensitive-runtime-argument"],
@@ -229,7 +231,7 @@ struct AgentLaunchConfigurationTests {
             bundledHelperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty"
         )
 
-        let stateAfterLaunch = try JSONEncoder().encode(state)
+        let stateAfterLaunch = try encoder.encode(state)
         #expect(stateAfterLaunch == stateBeforeLaunch)
         #expect(!stateAfterLaunch.contains(Data("QUICKTTY_LAUNCH_PAYLOAD".utf8)))
         #expect(!stateAfterLaunch.contains(Data("sensitive-runtime-argument".utf8)))
