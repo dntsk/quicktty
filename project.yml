@@ -53,14 +53,18 @@ targets:
     postBuildScripts:
       - name: Copy QuickTTY CLI Helper
         script: |
+          destination="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"
           if [ "$ACTION" = install ]; then
-            cli_helper_source="$UNINSTALLED_PRODUCTS_DIR/$PLATFORM_NAME/quicktty"
+            source="$UNINSTALLED_PRODUCTS_DIR/$PLATFORM_NAME/quicktty"
           else
-            cli_helper_source="$BUILT_PRODUCTS_DIR/quicktty"
+            source="$BUILT_PRODUCTS_DIR/quicktty"
           fi
           "$SRCROOT/scripts/copy-cli-helper.sh" \
-            "$cli_helper_source" \
-            "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"
+            "$source" \
+            "$destination"
+          if [ "$ACTION" = install ]; then
+            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp --options runtime --identifier com.dntsk.QuickTTY.cli "$destination"
+          fi
         basedOnDependencyAnalysis: false
       - name: Copy Ghostty Runtime Resources
         script: |
