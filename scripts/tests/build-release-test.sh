@@ -138,13 +138,17 @@ invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_
 printf '%s\n' "$invalid_force_output" \
     | grep -F -x 'error: QUICKTTY_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >/dev/null \
     || fail "unexpected invalid force-rebuild failure: $invalid_force_output"
-ghostty_cache_cleanup_line=$(grep -nF -x 'remove_forced_zig_cache' "$ghostty_build_script" \
+ghostty_cache_reuse_exit_line=$(grep -nF -x '    exit 0' "$ghostty_build_script" \
+    | /usr/bin/cut -d: -f1)
+ghostty_cache_cleanup_line=$(grep -nF -x 'remove_zig_cache_before_rebuild' "$ghostty_build_script" \
     | /usr/bin/cut -d: -f1)
 ghostty_zig_build_line=$(grep -nF -x '    zig build "$@"' "$ghostty_build_script" \
     | /usr/bin/cut -d: -f1)
-[ -n "$ghostty_cache_cleanup_line" ] && [ -n "$ghostty_zig_build_line" ] \
+[ -n "$ghostty_cache_reuse_exit_line" ] && [ -n "$ghostty_cache_cleanup_line" ] \
+    && [ -n "$ghostty_zig_build_line" ] \
+    && [ "$ghostty_cache_reuse_exit_line" -lt "$ghostty_cache_cleanup_line" ] \
     && [ "$ghostty_cache_cleanup_line" -lt "$ghostty_zig_build_line" ] \
-    || fail 'forced Ghostty Zig cache cleanup must run before zig build'
+    || fail 'Ghostty Zig cache cleanup must run after successful cache reuse exits and before a real zig build'
 
 # These calls stop before tool discovery or any build/signing operation.
 DEVELOPMENT_TEAM=N8FS9YUZQA
@@ -215,7 +219,7 @@ export TMPDIR
 
 ghostty_cleanup_function_fixture=$tmp_root/build-ghostty-cleanup-function.sh
 /usr/bin/awk '
-    /^remove_forced_zig_cache\(\) \{/ { capture = 1 }
+    /^remove_zig_cache_before_rebuild\(\) \{/ { capture = 1 }
     capture {
         print
         if ($0 == "}") exit
@@ -225,27 +229,31 @@ ghostty_cleanup_function_fixture=$tmp_root/build-ghostty-cleanup-function.sh
 ghostty_cleanup_fixture=$tmp_root/ghostty-cache-cleanup
 zig_cache_dir=$ghostty_cleanup_fixture/.zig-cache
 mkdir -p "$zig_cache_dir"
-printf 'preserve on normal rebuild\n' >"$zig_cache_dir/preserved"
-QUICKTTY_FORCE_GHOSTTY_REBUILD=0
-normal_cleanup_output=$(remove_forced_zig_cache 2>&1)
-assert_equals "$normal_cleanup_output" ''
-[ -f "$zig_cache_dir/preserved" ] || fail 'normal Ghostty rebuild removed the Zig cache'
-QUICKTTY_FORCE_GHOSTTY_REBUILD=1
-forced_cleanup_output=$(remove_forced_zig_cache 2>&1)
-assert_equals "$forced_cleanup_output" \
-    "Removing generated Ghostty Zig cache directory for forced rebuild: $zig_cache_dir"
+printf 'stale build artifact\n' >"$zig_cache_dir/stale"
+cleanup_output=$(remove_zig_cache_before_rebuild 2>&1)
+assert_equals "$cleanup_output" \
+    "Removing generated Ghostty Zig cache directory before rebuild: $zig_cache_dir"
 assert_missing "$zig_cache_dir"
 mkdir -p "$ghostty_cleanup_fixture/symlink-target"
 ln -s "$ghostty_cleanup_fixture/symlink-target" "$zig_cache_dir"
-if (remove_forced_zig_cache) >"$tmp_root/command-output" 2>&1; then
-    fail 'forced Ghostty Zig cache cleanup accepted a symlink'
+if (remove_zig_cache_before_rebuild) >"$tmp_root/command-output" 2>&1; then
+    fail 'Ghostty Zig cache cleanup accepted a symlink'
 fi
 grep -F -x \
     "error: refusing to remove generated Ghostty Zig cache directory symlink: $zig_cache_dir" \
     "$tmp_root/command-output" >/dev/null \
-    || fail 'forced Ghostty Zig cache cleanup produced an unexpected symlink error'
-[ -L "$zig_cache_dir" ] || fail 'forced Ghostty Zig cache cleanup removed a symlink'
-QUICKTTY_FORCE_GHOSTTY_REBUILD=0
+    || fail 'Ghostty Zig cache cleanup produced an unexpected symlink error'
+[ -L "$zig_cache_dir" ] || fail 'Ghostty Zig cache cleanup removed a symlink'
+rm "$zig_cache_dir"
+printf 'unexpected file\n' >"$zig_cache_dir"
+if (remove_zig_cache_before_rebuild) >"$tmp_root/command-output" 2>&1; then
+    fail 'Ghostty Zig cache cleanup accepted a non-directory path'
+fi
+grep -F -x \
+    "error: generated Ghostty Zig cache path is not a directory: $zig_cache_dir" \
+    "$tmp_root/command-output" >/dev/null \
+    || fail 'Ghostty Zig cache cleanup produced an unexpected non-directory error'
+[ -f "$zig_cache_dir" ] || fail 'Ghostty Zig cache cleanup removed a non-directory path'
 
 malicious_bin=$tmp_root/malicious-bin
 malicious_marker=$tmp_root/malicious-command-ran

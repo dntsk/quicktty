@@ -24,15 +24,14 @@ fail() {
     exit 1
 }
 
-remove_forced_zig_cache() {
-    [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 1 ] || return 0
+remove_zig_cache_before_rebuild() {
     [ ! -L "$zig_cache_dir" ] \
         || fail "refusing to remove generated Ghostty Zig cache directory symlink: $zig_cache_dir"
     if [ -e "$zig_cache_dir" ] && [ ! -d "$zig_cache_dir" ]; then
         fail "generated Ghostty Zig cache path is not a directory: $zig_cache_dir"
     fi
 
-    printf 'Removing generated Ghostty Zig cache directory for forced rebuild: %s\n' \
+    printf 'Removing generated Ghostty Zig cache directory before rebuild: %s\n' \
         "$zig_cache_dir" >&2
     rm -rf "$zig_cache_dir" || fail "could not remove generated Ghostty Zig cache directory: $zig_cache_dir"
 }
@@ -270,7 +269,7 @@ else
         "$cache_validation_error" "$stamp_path" >&2
 fi
 rm -f "$stamp_path"
-remove_forced_zig_cache
+remove_zig_cache_before_rebuild
 
 (
     cd "$ghostty_dir"
