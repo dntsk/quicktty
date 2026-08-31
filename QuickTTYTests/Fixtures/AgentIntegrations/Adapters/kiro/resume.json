@@ -1,0 +1,9 @@
+{
+  "id": "kiro",
+  "sessionID": "session-kiro-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "incompatibleLifecycleGenerations"
+}

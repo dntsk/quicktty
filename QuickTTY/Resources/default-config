@@ -17,4 +17,5 @@ quicktty-quake-animation-duration = 0.18
 quicktty-quake-padding = 0
 quicktty-hide-on-focus-loss = true
 quicktty-restore-workspaces = true
+quicktty-restore-agent-sessions = true
 quicktty-config-editor = nano

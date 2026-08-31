@@ -21,6 +21,11 @@ LATEST_RELEASE_URL = "https://github.com/dntsk/quicktty/releases/latest"
 EXTERNAL_SCHEMES = {"http", "https", "mailto", "tel"}
 CONFIGURATION_REFERENCE = ROOT / "QuickTTY" / "Resources" / "configuration-reference.md"
 AGENT_INTEGRATIONS = ROOT / "QuickTTY" / "Resources" / "AgentIntegrations"
+AGENT_ADAPTER_IDS = (
+    "claude", "codex", "grok", "pi", "omp", "campfire", "amp", "cursor",
+    "gemini", "kiro", "antigravity", "opencode", "rovo-dev", "hermes",
+    "copilot", "codebuddy", "droid", "qoder", "kimi", "ollama",
+)
 
 
 def section_between(source: str, start_marker: str, end_marker: str) -> str | None:
@@ -54,8 +59,8 @@ def canonical_shortcuts(errors: list[str]) -> dict[str, str | None]:
     source = CONFIGURATION_REFERENCE.read_text(encoding="utf-8")
     section = section_between(
         source,
-        "## Registry действий и значения по умолчанию",
-        "## Последовательное применение и конфликты",
+        "## Action registry and defaults",
+        "## Sequential application and conflicts",
     )
     if section is None:
         errors.append(
@@ -446,7 +451,44 @@ def main() -> int:
         errors,
     )
 
-    pi_guide = section_between(docs_source, "<h3>Pi 0.82</h3>", "<h3>Claude Code")
+    agent_guide = section_between(
+        docs_source, '<section id="coding-agent-integrations">', "</section>"
+    )
+    if agent_guide is None:
+        errors.append("site/docs/index.html: missing coding agent integrations guide")
+    else:
+        require_markers(
+            agent_guide,
+            "coding agent integrations guide",
+            (
+                "quicktty-restore-agent-sessions",
+                "explicit confirmation",
+                "literal <code>yes</code>",
+                "no arbitrary command",
+                "fresh shell",
+                "Retry",
+                "Forget",
+                "no silent configuration writes",
+                "Pi <code>0.83.0</code>",
+                "Only Pi <code>0.83.0</code>",
+                "11 native, 3 wrapper, and 6 blocked",
+                "QUICKTTY_PANE_ID",
+                "QUICKTTY_AGENT_SOCKET",
+                "QUICKTTY_INSTANCE_ID",
+                "QUICKTTY_PANE_TOKEN",
+                "QUICKTTY_AGENT_HELPER",
+            ),
+            errors,
+        )
+        documented_agent_ids = tuple(
+            re.findall(r'<tr data-agent-id="([a-z0-9-]+)">', agent_guide)
+        )
+        if documented_agent_ids != AGENT_ADAPTER_IDS:
+            errors.append(
+                "site/docs/index.html: agent registry must match the exact ordered 20 IDs"
+            )
+
+    pi_guide = section_between(docs_source, "<h3>Pi 0.83.0</h3>", "<h3>Claude Code")
     if pi_guide is None:
         errors.append("site/docs/index.html: missing Pi agent guide")
     else:
@@ -462,6 +504,7 @@ def main() -> int:
                 "<code>agent_start</code>",
                 "keepalive",
                 "<code>agent_end</code>",
+                "0.83.0",
             ),
             errors,
         )

@@ -23,6 +23,27 @@ struct SurfaceErrorPlaceholder: NSViewRepresentable {
 }
 
 @MainActor
+struct AgentResumeErrorPlaceholder: NSViewRepresentable {
+    let presentation: AgentResumePresentation
+    let palette: GhosttyChromePalette
+    let onRetry: @MainActor () -> Void
+    let onForget: @MainActor () -> Void
+
+    func makeNSView(context _: Context) -> SurfaceErrorPlaceholderView {
+        SurfaceErrorPlaceholderView()
+    }
+
+    func updateNSView(_ view: SurfaceErrorPlaceholderView, context _: Context) {
+        view.apply(
+            agentResumePresentation: presentation,
+            palette: palette,
+            onRetry: onRetry,
+            onForget: onForget
+        )
+    }
+}
+
+@MainActor
 final class SurfaceErrorPlaceholderView: NSView {
     private enum Metrics {
         static let contentPadding: CGFloat = 20
@@ -35,13 +56,15 @@ final class SurfaceErrorPlaceholderView: NSView {
     private let titleLabel = NSTextField(labelWithString: "Terminal unavailable")
     private let messageLabel = NSTextField(labelWithString: "")
     private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
-    private let closeButton = NSButton(title: "Close Pane", target: nil, action: nil)
-    private lazy var buttonStack = NSStackView(views: [retryButton, closeButton])
+    private let secondaryButton = NSButton(title: "Close Pane", target: nil, action: nil)
+    private lazy var buttonStack = NSStackView(views: [retryButton, secondaryButton])
     private lazy var contentStack = NSStackView(views: [titleLabel, messageLabel, buttonStack])
+    private var buttonWidthConstraint: NSLayoutConstraint?
+    private var buttonHeightConstraint: NSLayoutConstraint?
     private var contentWidthConstraint: NSLayoutConstraint?
     private var contentHeightConstraint: NSLayoutConstraint?
     private var onRetry: (@MainActor () -> Void)?
-    private var onClosePane: (@MainActor () -> Void)?
+    private var onSecondaryAction: (@MainActor () -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -58,20 +81,23 @@ final class SurfaceErrorPlaceholderView: NSView {
         retryButton.setAccessibilityLabel("Retry")
         retryButton.target = self
         retryButton.action = #selector(retry)
-        closeButton.bezelStyle = .rounded
-        closeButton.setAccessibilityLabel("Close Pane")
-        closeButton.target = self
-        closeButton.action = #selector(closePane)
+        secondaryButton.bezelStyle = .rounded
+        secondaryButton.setAccessibilityLabel("Close Pane")
+        secondaryButton.target = self
+        secondaryButton.action = #selector(performSecondaryAction)
 
         buttonStack.orientation = .horizontal
         buttonStack.alignment = .centerY
         buttonStack.spacing = 8
-        NSLayoutConstraint.activate([
-            buttonStack.widthAnchor.constraint(equalToConstant: buttonStack.fittingSize.width),
-            buttonStack.heightAnchor.constraint(
-                equalToConstant: max(retryButton.fittingSize.height, closeButton.fittingSize.height)
-            ),
-        ])
+        let buttonWidthConstraint = buttonStack.widthAnchor.constraint(
+            equalToConstant: naturalButtonSize.width
+        )
+        let buttonHeightConstraint = buttonStack.heightAnchor.constraint(
+            equalToConstant: naturalButtonSize.height
+        )
+        self.buttonWidthConstraint = buttonWidthConstraint
+        self.buttonHeightConstraint = buttonHeightConstraint
+        NSLayoutConstraint.activate([buttonWidthConstraint, buttonHeightConstraint])
 
         contentStack.orientation = .vertical
         contentStack.alignment = .centerX
@@ -128,16 +154,76 @@ final class SurfaceErrorPlaceholderView: NSView {
         onRetry: @escaping @MainActor () -> Void,
         onClosePane: @escaping @MainActor () -> Void
     ) {
-        messageLabel.stringValue = presentation.message
+        applyContent(
+            title: "Terminal unavailable",
+            message: presentation.message,
+            retryTitle: "Retry",
+            secondaryTitle: "Close Pane",
+            accessibilityLabel: "Terminal unavailable",
+            accessibilityValue: presentation.message,
+            palette: palette,
+            onRetry: onRetry,
+            onSecondaryAction: onClosePane
+        )
+    }
+
+    func apply(
+        agentResumePresentation presentation: AgentResumePresentation,
+        palette: GhosttyChromePalette,
+        onRetry: @escaping @MainActor () -> Void,
+        onForget: @escaping @MainActor () -> Void
+    ) {
+        applyContent(
+            title: presentation.title,
+            message: presentation.message,
+            retryTitle: presentation.canRetry ? "Retry Resume" : nil,
+            secondaryTitle: "Forget Agent Session",
+            accessibilityLabel: presentation.accessibilityLabel,
+            accessibilityValue: presentation.accessibilityValue,
+            palette: palette,
+            onRetry: onRetry,
+            onSecondaryAction: onForget
+        )
+    }
+
+    private func applyContent(
+        title: String,
+        message: String,
+        retryTitle: String?,
+        secondaryTitle: String,
+        accessibilityLabel: String,
+        accessibilityValue: String,
+        palette: GhosttyChromePalette,
+        onRetry: @escaping @MainActor () -> Void,
+        onSecondaryAction: @escaping @MainActor () -> Void
+    ) {
+        titleLabel.stringValue = title
+        messageLabel.stringValue = message
+        retryButton.title = retryTitle ?? ""
+        retryButton.isHidden = retryTitle == nil
+        secondaryButton.title = secondaryTitle
+        let buttonSize = naturalButtonSize
+        contentWidthConstraint?.constant = ceil(
+            max(titleLabel.fittingSize.width, buttonSize.width)
+        )
+        buttonWidthConstraint?.constant = buttonSize.width
+        buttonHeightConstraint?.constant = buttonSize.height
+        contentHeightConstraint?.constant = naturalContentHeight
+        retryButton.setAccessibilityLabel(retryTitle)
+        secondaryButton.setAccessibilityLabel(secondaryTitle)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(accessibilityLabel)
+        setAccessibilityValue(accessibilityValue)
         needsLayout = true
         self.onRetry = onRetry
-        self.onClosePane = onClosePane
+        self.onSecondaryAction = onSecondaryAction
 
         let foreground = NSColor(ghosttyRGB: palette.foreground)
         titleLabel.textColor = foreground
         messageLabel.textColor = foreground
         retryButton.contentTintColor = foreground
-        closeButton.contentTintColor = foreground
+        secondaryButton.contentTintColor = foreground
         layer?.backgroundColor = NSColor(ghosttyRGB: palette.background).cgColor
     }
 
@@ -185,6 +271,16 @@ final class SurfaceErrorPlaceholderView: NSView {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
+    private var naturalButtonSize: NSSize {
+        let retrySize = retryButton.isHidden ? .zero : retryButton.fittingSize
+        let secondarySize = secondaryButton.fittingSize
+        return NSSize(
+            width: retrySize.width + secondarySize.width
+                + (retryButton.isHidden ? 0 : buttonStack.spacing),
+            height: max(retrySize.height, secondarySize.height)
+        )
+    }
+
     private var naturalContentHeight: CGFloat {
         ceil(
             titleLabel.fittingSize.height + messageLabel.fittingSize.height
@@ -198,7 +294,7 @@ final class SurfaceErrorPlaceholderView: NSView {
     }
 
     @objc
-    private func closePane() {
-        onClosePane?()
+    private func performSecondaryAction() {
+        onSecondaryAction?()
     }
 }

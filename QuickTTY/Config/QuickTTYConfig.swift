@@ -13,6 +13,7 @@ struct QuickTTYConfig: Equatable, Sendable {
         case updateChannel = "quicktty-update-channel"
         case hideOnFocusLoss = "quicktty-hide-on-focus-loss"
         case restoreWorkspaces = "quicktty-restore-workspaces"
+        case restoreAgentSessions = "quicktty-restore-agent-sessions"
         case configEditor = "quicktty-config-editor"
     }
 
@@ -26,5 +27,10 @@ struct QuickTTYConfig: Equatable, Sendable {
     var updateChannel = UpdateChannel.stable
     var hideOnFocusLoss = true
     var restoreWorkspaces = true
+    var restoreAgentSessions = true
     var configEditor = "nano"
+
+    var shouldRestoreAgentSessions: Bool {
+        restoreWorkspaces && restoreAgentSessions
+    }
 }

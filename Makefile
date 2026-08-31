@@ -26,12 +26,12 @@ PROJECT := QuickTTY.xcodeproj
 SCHEME := QuickTTY
 DERIVED_DATA := .build/DerivedData
 DESTINATION := platform=macOS,arch=arm64
-SWIFT_SOURCES := QuickTTY QuickTTYTests
+SWIFT_SOURCES := QuickTTY Shared QuickTTYCLI QuickTTYTests
 
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-integrations-contract site-check lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -78,10 +78,22 @@ callback-contract:
 agent-integrations-contract:
 	./scripts/tests/agent-integrations-test.sh
 
+cli-helper-contract:
+	./scripts/tests/copy-cli-helper-test.sh
+
+agent-launch-contract:
+	./scripts/tests/agent-launch-helper-test.sh
+
+agent-wrapper-contract:
+	./scripts/tests/agent-wrapper-helper-test.sh
+
+agent-session-installer-contract:
+	./scripts/tests/agent-session-installer-test.sh
+
 site-check:
 	/usr/bin/python3 scripts/check-site.py
 
-lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract site-check
+lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check
 	swift format lint --recursive $(SWIFT_SOURCES)
 
 build: generate
@@ -90,4 +102,4 @@ build: generate
 test: generate
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) test
 
-check: ghostty-resources-test lint build test
+check: ghostty-resources-test cli-helper-contract agent-launch-contract agent-wrapper-contract lint build test

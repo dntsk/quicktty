@@ -11,8 +11,12 @@ RELEASE_BETA_APPCAST_RELATIVE_PATH=docs/appcasts/beta.xml
 RELEASE_BETA_APPCAST_RAW_URL=https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml
 RELEASE_GITHUB_RELEASE_DOWNLOAD_BASE=https://github.com/dntsk/quicktty/releases/download
 RELEASE_FIND_PATH=/usr/bin/find
+RELEASE_MKTEMP_PATH=/usr/bin/mktemp
+RELEASE_CHMOD_PATH=/bin/chmod
 RELEASE_MKDIR_PATH=/bin/mkdir
 RELEASE_RM_PATH=/bin/rm
+RELEASE_NESTED_CODE_LIST=
+RELEASE_NESTED_CODE_TMPDIR=
 
 release_fail() {
     printf 'error: %s\n' "$1" >&2
@@ -89,6 +93,34 @@ release_validate_identity() {
     esac
 }
 
+release_signature_has_exact_line() {
+    release_signature_data=$1
+    release_expected_line=$2
+
+    while IFS= read -r release_signature_line || [ -n "$release_signature_line" ]; do
+        [ "$release_signature_line" = "$release_expected_line" ] && return 0
+    done <<EOF
+$release_signature_data
+EOF
+
+    return 1
+}
+
+release_signature_has_nonempty_prefix() {
+    release_signature_data=$1
+    release_expected_prefix=$2
+
+    while IFS= read -r release_signature_line || [ -n "$release_signature_line" ]; do
+        case "$release_signature_line" in
+            "$release_expected_prefix"?*) return 0 ;;
+        esac
+    done <<EOF
+$release_signature_data
+EOF
+
+    return 1
+}
+
 release_signature_has_hardened_runtime() {
     release_signature_data=$1
 
@@ -126,6 +158,55 @@ $release_signature_data
 EOF
 
     return 1
+}
+
+release_verify_signature_metadata() {
+    release_signed_path=$1
+    release_expected_identifier=$2
+    release_require_runtime=$3
+    release_codesign_path=$4
+    release_expected_identity=$5
+    release_expected_team=$6
+
+    release_signature_data=$("$release_codesign_path" -d -vvv "$release_signed_path" 2>&1) \
+        || release_fail "could not display code-signature metadata: $release_signed_path"
+    release_signature_has_exact_line "$release_signature_data" "Authority=$release_expected_identity" \
+        || release_fail "signature authority does not match CODE_SIGN_IDENTITY: $release_signed_path"
+    release_signature_has_exact_line "$release_signature_data" "TeamIdentifier=$release_expected_team" \
+        || release_fail "signature team does not match DEVELOPMENT_TEAM: $release_signed_path"
+    release_signature_has_nonempty_prefix "$release_signature_data" 'Timestamp=' \
+        || release_fail "signature has no secure timestamp: $release_signed_path"
+
+    if [ -n "$release_expected_identifier" ]; then
+        release_signature_has_exact_line "$release_signature_data" "Identifier=$release_expected_identifier" \
+            || release_fail "signature identifier does not match bundle identifier: $release_signed_path"
+    fi
+
+    if [ "$release_require_runtime" = yes ]; then
+        release_signature_has_hardened_runtime "$release_signature_data" \
+            || release_fail "hardened runtime flag is missing: $release_signed_path"
+    fi
+}
+
+release_require_path_without_control_characters() {
+    release_checked_path=$1
+    release_checked_description=$2
+
+    if LC_ALL=C printf '%s' "$release_checked_path" | /usr/bin/grep -q '[[:cntrl:]]'; then
+        release_fail "$release_checked_description contains control characters"
+    fi
+}
+
+release_require_real_directory() {
+    release_real_directory_path=$1
+    release_real_directory_description=$2
+
+    release_require_path_without_control_characters \
+        "$release_real_directory_path" "$release_real_directory_description path"
+    [ -d "$release_real_directory_path" ] \
+        || release_fail "$release_real_directory_description is not a directory: $release_real_directory_path"
+    [ ! -L "$release_real_directory_path" ] \
+        || release_fail "$release_real_directory_description must not be a symlink: $release_real_directory_path"
 }
 
 release_source_tree_state() {
@@ -245,6 +326,243 @@ release_require_empty_or_absent_directory() {
     fi
 }
 
+release_verify_cli_helper_layout() {
+    release_helper_app_bundle=$1
+    release_helpers_directory=$release_helper_app_bundle/Contents/Helpers
+    release_cli_helper=$release_helpers_directory/quicktty
+
+    [ -d "$release_helpers_directory" ] \
+        || release_fail "CLI helper directory is missing: $release_helpers_directory"
+    [ ! -L "$release_helpers_directory" ] \
+        || release_fail "CLI helper directory must not be a symlink: $release_helpers_directory"
+    [ -f "$release_cli_helper" ] \
+        || release_fail "CLI helper is missing or not a regular file: $release_cli_helper"
+    [ ! -L "$release_cli_helper" ] \
+        || release_fail "CLI helper must not be a symlink: $release_cli_helper"
+    [ -x "$release_cli_helper" ] \
+        || release_fail "CLI helper is not executable: $release_cli_helper"
+
+    release_helper_entry_count=0
+    for release_helper_entry in "$release_helpers_directory"/* "$release_helpers_directory"/.*; do
+        case "$release_helper_entry" in
+            "$release_helpers_directory/." | "$release_helpers_directory/..") continue ;;
+        esac
+        [ -e "$release_helper_entry" ] || [ -L "$release_helper_entry" ] || continue
+        [ "$release_helper_entry" = "$release_cli_helper" ] \
+            || release_fail "unexpected entry in Contents/Helpers: $release_helper_entry"
+        release_helper_entry_count=$((release_helper_entry_count + 1))
+    done
+    [ "$release_helper_entry_count" -eq 1 ] \
+        || release_fail "Contents/Helpers must contain exactly one CLI helper: $release_helpers_directory"
+}
+
+release_verify_cli_helper_artifact() {
+    release_helper_app_bundle=$1
+    release_helper_file_path=$2
+    release_helper_lipo_path=$3
+    release_helper_stat_path=$4
+    release_cli_helper=$release_helper_app_bundle/Contents/Helpers/quicktty
+
+    release_verify_cli_helper_layout "$release_helper_app_bundle"
+
+    release_helper_mode=$("$release_helper_stat_path" -f '%Lp' "$release_cli_helper") \
+        || release_fail "could not determine CLI helper mode: $release_cli_helper"
+    [ "$release_helper_mode" = 755 ] \
+        || release_fail "CLI helper mode must be 0755; found: $release_helper_mode"
+
+    release_helper_description=$("$release_helper_file_path" -b "$release_cli_helper") \
+        || release_fail "could not inspect CLI helper file type: $release_cli_helper"
+    case "$release_helper_description" in
+        'Mach-O 64-bit executable arm64'*) ;;
+        *) release_fail "CLI helper must be an arm64 Mach-O executable: $release_cli_helper" ;;
+    esac
+
+    release_helper_architectures=$("$release_helper_lipo_path" -archs "$release_cli_helper") \
+        || release_fail "could not determine CLI helper architectures: $release_cli_helper"
+    [ "$release_helper_architectures" = arm64 ] \
+        || release_fail "CLI helper must contain arm64 only; found: $release_helper_architectures"
+}
+
+release_verify_frameworks_layout() {
+    release_frameworks_app_bundle=$1
+    release_frameworks_directory=$release_frameworks_app_bundle/Contents/Frameworks
+    release_sparkle_framework=$release_frameworks_directory/Sparkle.framework
+
+    release_require_path_without_control_characters \
+        "$release_frameworks_app_bundle" 'app bundle path'
+    if [ ! -e "$release_frameworks_directory" ] && [ ! -L "$release_frameworks_directory" ]; then
+        return 0
+    fi
+
+    release_require_real_directory "$release_frameworks_directory" 'app Frameworks directory'
+    for release_frameworks_entry in \
+        "$release_frameworks_directory"/* \
+        "$release_frameworks_directory"/.[!.]* \
+        "$release_frameworks_directory"/..?*
+    do
+        [ -e "$release_frameworks_entry" ] || [ -L "$release_frameworks_entry" ] || continue
+        release_require_path_without_control_characters \
+            "$release_frameworks_entry" 'Frameworks entry path'
+        case "$release_frameworks_entry" in
+            "$release_sparkle_framework")
+                release_require_real_directory "$release_frameworks_entry" 'Sparkle framework'
+                ;;
+            *)
+                release_fail "unexpected entry in Contents/Frameworks: $release_frameworks_entry"
+                ;;
+        esac
+    done
+}
+
+release_verify_sparkle_signing_layout() {
+    release_sparkle_app_bundle=$1
+    release_sparkle_frameworks=$release_sparkle_app_bundle/Contents/Frameworks
+    release_sparkle_framework=$release_sparkle_frameworks/Sparkle.framework
+    release_sparkle_versions=$release_sparkle_framework/Versions
+    release_sparkle_version=$release_sparkle_versions/B
+    release_sparkle_xpc_services=$release_sparkle_version/XPCServices
+
+    release_verify_frameworks_layout "$release_sparkle_app_bundle"
+    release_require_real_directory "$release_sparkle_framework" 'Sparkle framework'
+    release_require_real_directory "$release_sparkle_versions" 'Sparkle Versions directory'
+    release_require_real_directory "$release_sparkle_version" 'Sparkle version directory'
+    release_require_real_directory "$release_sparkle_xpc_services" 'Sparkle XPCServices directory'
+    release_require_real_directory \
+        "$release_sparkle_xpc_services/Installer.xpc" 'Sparkle Installer XPC bundle'
+    release_require_real_directory \
+        "$release_sparkle_xpc_services/Downloader.xpc" 'Sparkle Downloader XPC bundle'
+    release_require_real_directory "$release_sparkle_version/Updater.app" 'Sparkle Updater app bundle'
+
+    for release_sparkle_executable in \
+        "$release_sparkle_version/Autoupdate" \
+        "$release_sparkle_version/Sparkle" \
+        "$release_sparkle_xpc_services/Installer.xpc/Contents/MacOS/Installer" \
+        "$release_sparkle_xpc_services/Downloader.xpc/Contents/MacOS/Downloader" \
+        "$release_sparkle_version/Updater.app/Contents/MacOS/Updater"
+    do
+        release_require_path_without_control_characters \
+            "$release_sparkle_executable" 'Sparkle executable path'
+        [ -f "$release_sparkle_executable" ] && [ ! -L "$release_sparkle_executable" ] \
+            && [ -x "$release_sparkle_executable" ] \
+            || release_fail "Sparkle executable is unsafe: $release_sparkle_executable"
+    done
+}
+
+release_cleanup_nested_code_list() {
+    [ -n "$RELEASE_NESTED_CODE_LIST" ] || return 0
+    case "$RELEASE_NESTED_CODE_LIST" in
+        "$RELEASE_NESTED_CODE_TMPDIR"/quicktty-nested-code.*) ;;
+        *)
+            printf 'error: refusing to remove unexpected nested code list: %s\n' \
+                "$RELEASE_NESTED_CODE_LIST" >&2
+            return 1
+            ;;
+    esac
+
+    if [ -e "$RELEASE_NESTED_CODE_LIST" ] || [ -L "$RELEASE_NESTED_CODE_LIST" ]; then
+        "$RELEASE_RM_PATH" -f -- "$RELEASE_NESTED_CODE_LIST" || return 1
+    fi
+    RELEASE_NESTED_CODE_LIST=
+    RELEASE_NESTED_CODE_TMPDIR=
+}
+
+release_create_nested_code_list() {
+    release_nested_tmpdir_input=${TMPDIR:-/tmp}
+    release_require_path_without_control_characters "$release_nested_tmpdir_input" 'TMPDIR path'
+    case "$release_nested_tmpdir_input" in
+        /*) ;;
+        *) release_fail "TMPDIR must be absolute: $release_nested_tmpdir_input" ;;
+    esac
+    [ -d "$release_nested_tmpdir_input" ] \
+        || release_fail "TMPDIR is not a directory: $release_nested_tmpdir_input"
+    RELEASE_NESTED_CODE_TMPDIR=$(CDPATH= cd -P "$release_nested_tmpdir_input" && pwd -P) \
+        || release_fail "could not resolve TMPDIR: $release_nested_tmpdir_input"
+    [ "$RELEASE_NESTED_CODE_TMPDIR" != / ] \
+        || release_fail 'TMPDIR must not resolve to /'
+
+    RELEASE_NESTED_CODE_LIST=$(umask 077 && \
+        "$RELEASE_MKTEMP_PATH" "$RELEASE_NESTED_CODE_TMPDIR/quicktty-nested-code.XXXXXX") \
+        || release_fail "could not create nested code list under TMPDIR: $RELEASE_NESTED_CODE_TMPDIR"
+    case "$RELEASE_NESTED_CODE_LIST" in
+        "$RELEASE_NESTED_CODE_TMPDIR"/quicktty-nested-code.*) ;;
+        *)
+            release_cleanup_nested_code_list
+            release_fail 'nested code list has an unexpected path'
+            ;;
+    esac
+    "$RELEASE_CHMOD_PATH" 600 "$RELEASE_NESTED_CODE_LIST" || {
+        release_cleanup_nested_code_list
+        release_fail 'could not secure nested code list'
+    }
+}
+
+release_verify_nested_code_recursively() {
+    release_nested_app_bundle=$1
+    release_nested_codesign_path=$2
+    release_nested_file_path=$3
+    release_nested_expected_identity=$4
+    release_nested_expected_team=$5
+    release_nested_frameworks=$release_nested_app_bundle/Contents/Frameworks
+    release_nested_sparkle=$release_nested_frameworks/Sparkle.framework/Versions/B
+
+    release_verify_sparkle_signing_layout "$release_nested_app_bundle"
+    release_create_nested_code_list
+    if ! "$RELEASE_FIND_PATH" "$release_nested_frameworks" -type f -print0 \
+        >"$RELEASE_NESTED_CODE_LIST"
+    then
+        release_cleanup_nested_code_list
+        release_fail "could not enumerate nested code: $release_nested_app_bundle"
+    fi
+
+    release_nested_verification_status=0
+    while IFS= read -r -d '' release_nested_candidate; do
+        (
+            release_require_path_without_control_characters \
+                "$release_nested_candidate" 'nested code candidate path'
+            release_nested_description=$("$release_nested_file_path" -b "$release_nested_candidate") \
+                || release_fail "could not inspect nested code candidate: $release_nested_candidate"
+            case "$release_nested_description" in
+                *Mach-O*) ;;
+                *) exit 0 ;;
+            esac
+            [ -f "$release_nested_candidate" ] && [ ! -L "$release_nested_candidate" ] \
+                && [ -x "$release_nested_candidate" ] \
+                || release_fail "nested Mach-O candidate is unsafe: $release_nested_candidate"
+
+            release_nested_identifier=
+            case "$release_nested_candidate" in
+                "$release_nested_sparkle/Sparkle")
+                    release_nested_identifier=org.sparkle-project.Sparkle
+                    ;;
+                "$release_nested_sparkle/Updater.app/Contents/MacOS/Updater")
+                    release_nested_identifier=org.sparkle-project.Sparkle.Updater
+                    ;;
+                "$release_nested_sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer")
+                    release_nested_identifier=org.sparkle-project.InstallerLauncher
+                    ;;
+                "$release_nested_sparkle/XPCServices/Downloader.xpc/Contents/MacOS/Downloader")
+                    release_nested_identifier=org.sparkle-project.DownloaderService
+                    ;;
+            esac
+
+            "$release_nested_codesign_path" --verify --strict --verbose=4 "$release_nested_candidate" \
+                || release_fail "nested code did not pass strict verification: $release_nested_candidate"
+            release_verify_signature_metadata \
+                "$release_nested_candidate" "$release_nested_identifier" yes \
+                "$release_nested_codesign_path" "$release_nested_expected_identity" \
+                "$release_nested_expected_team"
+        ) || {
+            release_nested_verification_status=$?
+            break
+        }
+    done <"$RELEASE_NESTED_CODE_LIST"
+
+    release_cleanup_nested_code_list \
+        || release_fail 'could not remove nested code list'
+    [ "$release_nested_verification_status" -eq 0 ] \
+        || release_fail "nested code did not pass recursive verification: $release_nested_app_bundle"
+}
+
 release_verify_app_code_layout() {
     release_app_bundle=$1
     release_product_name=$2
@@ -281,6 +599,8 @@ release_verify_app_code_layout() {
     [ "$release_macos_entry_count" -eq 1 ] \
         || release_fail "Contents/MacOS must contain exactly one main executable: $release_macos_dir"
 
+    release_verify_frameworks_layout "$release_app_bundle"
+
     for release_nested_code_dir in \
         "$release_contents_dir/Frameworks" \
         "$release_contents_dir/PlugIns" \
@@ -297,17 +617,9 @@ release_verify_app_code_layout() {
     do
         case "$release_nested_code_dir" in
             */Frameworks)
-                for frameworks_entry in "$release_nested_code_dir"/*; do
-                    [ -e "$frameworks_entry" ] || [ -L "$frameworks_entry" ] || continue
-                    case "$frameworks_entry" in
-                        */Sparkle.framework) ;;
-                        */Sparkle.framework/*) ;;
-                        */Sparkle.framework/Contents/*) ;;
-                        *)
-                            release_fail "unexpected nested code directory contents: $release_nested_code_dir"
-                            ;;
-                    esac
-                done
+                ;;
+            */Helpers)
+                release_verify_cli_helper_layout "$release_app_bundle"
                 ;;
             *)
                 release_require_empty_or_absent_directory "$release_nested_code_dir"
@@ -317,6 +629,7 @@ release_verify_app_code_layout() {
 
     release_nested_file_descriptions=$("$RELEASE_FIND_PATH" "$release_contents_dir" -type f \
         ! -path "$release_main_executable" \
+        ! -path "$release_contents_dir/Helpers/quicktty" \
         ! -path "$release_contents_dir/Frameworks/Sparkle.framework/*" \
         -exec "$release_file_path" -b {} \;) \
         || release_fail "could not inspect app files for nested Mach-O code: $release_app_bundle"

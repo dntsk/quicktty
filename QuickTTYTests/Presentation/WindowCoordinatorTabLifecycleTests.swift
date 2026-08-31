@@ -4,9 +4,294 @@ import Testing
 
 @testable import QuickTTY
 
-@Suite(.serialized)
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct WindowCoordinatorTabLifecycleTests {
+    @Test
+    func agentIdentityEnvironmentIsInjectedForStartupNewTabAndSplitAndRevokedOnClose()
+        throws
+    {
+        let instanceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let tokens = CoordinatorAgentTokenSequence([
+            Array(repeating: 0x11, count: 32),
+            Array(repeating: 0x22, count: 32),
+            Array(repeating: 0x33, count: 32),
+        ])
+        let controller = try AgentSessionController(
+            socketPath: "/tmp/quicktty-test/agent.sock",
+            helperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            instanceID: instanceID,
+            tokenGenerator: tokens.next,
+            onAction: { _ in false }
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                command: "exec /bin/cat",
+                environment: [
+                    "BASE_VALUE": "preserved",
+                    "QUICKTTY_PANE_ID": "collision",
+                    "QUICKTTY_AGENT_SOCKET": "collision",
+                    "QUICKTTY_INSTANCE_ID": "collision",
+                    "QUICKTTY_PANE_TOKEN": "collision",
+                    "QUICKTTY_AGENT_HELPER": "collision",
+                ]
+            ),
+            agentSessionController: controller
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+        let startupSurface = try #require(coordinator.activeSurfaceForTesting)
+        let startupEnvironment = try #require(
+            bridge.surfaceConfigurationForTesting(id: startupSurface.paneID)?.environment
+        )
+        expectAgentEnvironment(
+            startupEnvironment,
+            paneID: startupSurface.paneID,
+            instanceID: instanceID,
+            token: String(repeating: "11", count: 32)
+        )
+        #expect(startupEnvironment["BASE_VALUE"] == "preserved")
+
+        coordinator.createNewTab()
+        let newTabSurface = try #require(coordinator.activeSurfaceForTesting)
+        let newTabEnvironment = try #require(
+            bridge.surfaceConfigurationForTesting(id: newTabSurface.paneID)?.environment
+        )
+        expectAgentEnvironment(
+            newTabEnvironment,
+            paneID: newTabSurface.paneID,
+            instanceID: instanceID,
+            token: String(repeating: "22", count: 32)
+        )
+
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let splitSurface = try #require(coordinator.activeSurfaceForTesting)
+        let splitEnvironment = try #require(
+            bridge.surfaceConfigurationForTesting(id: splitSurface.paneID)?.environment
+        )
+        expectAgentEnvironment(
+            splitEnvironment,
+            paneID: splitSurface.paneID,
+            instanceID: instanceID,
+            token: String(repeating: "33", count: 32)
+        )
+        #expect(
+            Set(
+                [
+                    startupEnvironment["QUICKTTY_PANE_TOKEN"],
+                    newTabEnvironment["QUICKTTY_PANE_TOKEN"],
+                    splitEnvironment["QUICKTTY_PANE_TOKEN"],
+                ].compactMap { $0 }
+            ).count == 3
+        )
+
+        coordinator.surfaceDidRequestCloseForTesting(id: splitSurface.paneID, processAlive: false)
+
+        #expect(controller.environment(for: splitSurface.paneID) == nil)
+        #expect(controller.environment(for: startupSurface.paneID) != nil)
+    }
+
+    @Test
+    func activeSameSessionRegistrationIsAnExactNoOp() throws {
+        let paneID = PaneID()
+        let originalBinding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude-code"),
+            sessionID: "session-1",
+            workingDirectory: "/tmp/original",
+            registeredAt: Date(timeIntervalSince1970: 2_000),
+            launchMetadata: ["source": "original"],
+            restoreState: .active
+        )
+        let tab = TerminalTab(
+            title: "Agent",
+            pane: TerminalPaneDescriptor(
+                id: paneID,
+                cwd: "/tmp",
+                agentResumeBinding: originalBinding
+            )
+        )
+        let workspace = Workspace(name: "Agent", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) }
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let commitCount = persistence.snapshots.count
+        let staleBinding = try AgentResumeBinding(
+            adapterID: originalBinding.adapterID,
+            sessionID: originalBinding.sessionID,
+            workingDirectory: "/tmp/stale",
+            registeredAt: Date(timeIntervalSince1970: 1_000),
+            launchMetadata: ["source": "stale"],
+            restoreState: .active
+        )
+
+        let accepted = coordinator.handleAgentSessionLifecycleAction(
+            .register(paneID: paneID, binding: staleBinding)
+        )
+
+        #expect(accepted)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tab.id)?
+                .paneDescriptor(for: paneID)?.agentResumeBinding == originalBinding
+        )
+        #expect(persistence.snapshots.count == commitCount)
+    }
+
+    @Test
+    func restoredSurfaceRetryRetainsPaneIdentityRotatesTokenAndRevokesFailedAttempt() throws {
+        let paneID = PaneID(rawValue: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!)
+        let tab = TerminalTab(
+            title: "Restored",
+            pane: TerminalPaneDescriptor(
+                id: paneID,
+                cwd: "/tmp/restored",
+                startupCommand: .custom("printf should-not-run")
+            )
+        )
+        let workspace = Workspace(name: "Restored", tabs: [tab], activeTabID: tab.id)
+        let store = try WorkspaceStore(workspaces: [workspace], activeWorkspaceID: workspace.id)
+        let tokens = CoordinatorAgentTokenSequence([
+            Array(repeating: 0x44, count: 32),
+            Array(repeating: 0x55, count: 32),
+        ])
+        let controller = try AgentSessionController(
+            socketPath: "/tmp/quicktty-test/agent.sock",
+            helperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            tokenGenerator: tokens.next,
+            onAction: { _ in false }
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        bridge.failSurfaceCreationForTesting(id: paneID)
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            agentSessionController: controller,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+
+        #expect(controller.environment(for: paneID) == nil)
+        #expect(coordinator.workspaceStoreForTesting.tab(id: tab.id)?.root.leaves == [paneID])
+
+        coordinator.retryUnavailablePaneForTesting(paneID)
+
+        let environment = try #require(
+            bridge.surfaceConfigurationForTesting(id: paneID)?.environment
+        )
+        #expect(environment["QUICKTTY_PANE_ID"] == paneID.rawValue.uuidString)
+        #expect(environment["QUICKTTY_PANE_TOKEN"] == String(repeating: "55", count: 32))
+        #expect(coordinator.surfaceForTesting(id: paneID)?.paneID == paneID)
+        #expect(
+            coordinator.workspaceStoreForTesting.tab(id: tab.id)?
+                .paneDescriptor(for: paneID)?.startupCommand
+                == .custom("printf should-not-run")
+        )
+    }
+
+    @Test
+    func restoredMultiWorkspaceSurfacesReceiveDistinctAgentEnvironments() throws {
+        let firstPaneID = PaneID()
+        let secondPaneID = PaneID()
+        let firstTab = TerminalTab(
+            title: "First",
+            pane: TerminalPaneDescriptor(id: firstPaneID, cwd: "/tmp/first")
+        )
+        let secondTab = TerminalTab(
+            title: "Second",
+            pane: TerminalPaneDescriptor(id: secondPaneID, cwd: "/tmp/second")
+        )
+        let firstWorkspace = Workspace(
+            name: "First",
+            tabs: [firstTab],
+            activeTabID: firstTab.id
+        )
+        let secondWorkspace = Workspace(
+            name: "Second",
+            tabs: [secondTab],
+            activeTabID: secondTab.id
+        )
+        let store = try WorkspaceStore(
+            workspaces: [firstWorkspace, secondWorkspace],
+            activeWorkspaceID: secondWorkspace.id
+        )
+        let instanceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let controller = try AgentSessionController(
+            socketPath: "/tmp/quicktty-test/agent.sock",
+            helperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            instanceID: instanceID,
+            tokenGenerator: CoordinatorAgentTokenSequence([
+                Array(repeating: 0x66, count: 32),
+                Array(repeating: 0x77, count: 32),
+            ]).next,
+            onAction: { _ in false }
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            agentSessionController: controller,
+            initialWorkspaceStore: store
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+
+        expectAgentEnvironment(
+            try #require(
+                bridge.surfaceConfigurationForTesting(id: firstPaneID)?.environment
+            ),
+            paneID: firstPaneID,
+            instanceID: instanceID,
+            token: String(repeating: "66", count: 32)
+        )
+        expectAgentEnvironment(
+            try #require(
+                bridge.surfaceConfigurationForTesting(id: secondPaneID)?.environment
+            ),
+            paneID: secondPaneID,
+            instanceID: instanceID,
+            token: String(repeating: "77", count: 32)
+        )
+        #expect(Set(coordinator.surfaceIDsForTesting) == [firstPaneID, secondPaneID])
+    }
+
+    @Test
+    func existingCoordinatorWithoutAgentControllerPreservesSurfaceEnvironment() throws {
+        let environment = ["CUSTOM": "value", "QUICKTTY_PANE_TOKEN": "caller-owned"]
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                command: "exec /bin/cat",
+                environment: environment
+            )
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+
+        try coordinator.start()
+        let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
+
+        #expect(bridge.surfaceConfigurationForTesting(id: paneID)?.environment == environment)
+    }
+
     @Test
     func activePaneProgressRefreshesStatusInPlaceWithoutStructuralSideEffects() throws {
         let bridge = try GhosttyBridge()
@@ -4982,6 +5267,30 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.activeSurfaceForTesting?.paneID == backgroundPaneID)
     }
 
+    private func expectAgentEnvironment(
+        _ environment: [String: String],
+        paneID: PaneID,
+        instanceID: UUID,
+        token: String
+    ) {
+        let reservedKeys: Set<String> = [
+            "QUICKTTY_PANE_ID",
+            "QUICKTTY_AGENT_SOCKET",
+            "QUICKTTY_INSTANCE_ID",
+            "QUICKTTY_PANE_TOKEN",
+            "QUICKTTY_AGENT_HELPER",
+        ]
+        #expect(Set(environment.keys.filter { reservedKeys.contains($0) }) == reservedKeys)
+        #expect(environment["QUICKTTY_PANE_ID"] == paneID.rawValue.uuidString)
+        #expect(environment["QUICKTTY_AGENT_SOCKET"] == "/tmp/quicktty-test/agent.sock")
+        #expect(environment["QUICKTTY_INSTANCE_ID"] == instanceID.uuidString)
+        #expect(environment["QUICKTTY_PANE_TOKEN"] == token)
+        #expect(
+            environment["QUICKTTY_AGENT_HELPER"]
+                == "/Applications/QuickTTY.app/Contents/Helpers/quicktty"
+        )
+    }
+
     private func restoredWorkspaceStore(isBroadcasting: Bool = false) throws -> WorkspaceStore {
         let backgroundFirstPaneID = PaneID()
         let backgroundSecondPaneID = PaneID()
@@ -5184,6 +5493,19 @@ private func effectMatchesStatus(
         return true
     case (.waiting, _), (.failed, _), (.completed, _), (.cleared, _):
         return false
+    }
+}
+
+@MainActor
+private final class CoordinatorAgentTokenSequence {
+    private var values: [[UInt8]]
+
+    init(_ values: [[UInt8]]) {
+        self.values = values
+    }
+
+    func next() -> [UInt8] {
+        values.removeFirst()
     }
 }
 

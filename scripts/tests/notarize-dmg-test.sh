@@ -531,4 +531,36 @@ case "$malicious_output_contents" in
 esac
 assert_missing "$malicious_marker"
 
+extracted_app=$tmp_root/extracted/QuickTTY.app
+extracted_helpers=$extracted_app/Contents/Helpers
+extracted_helper=$extracted_helpers/quicktty
+reset_extracted_app_fixture() {
+    /bin/rm -rf "$extracted_app"
+    /bin/mkdir -p "$extracted_helpers"
+    printf 'fixture arm64 executable\n' >"$extracted_helper"
+    /bin/chmod 755 "$extracted_helper"
+}
+expect_extracted_app_failure() {
+    if (release_verify_cli_helper_layout "$extracted_app") >/dev/null 2>&1; then
+        fail 'expected extracted app helper verification to fail'
+    fi
+}
+
+reset_extracted_app_fixture
+release_verify_cli_helper_layout "$extracted_app"
+[ -f "$extracted_helper" ] && [ ! -L "$extracted_helper" ] \
+    || fail 'extracted app CLI helper is not a regular file'
+[ "$(/usr/bin/stat -f '%Lp' "$extracted_helper")" = 755 ] \
+    || fail 'extracted app CLI helper mode is not 0755'
+[ "$(/usr/bin/find "$extracted_helpers" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 1 ] \
+    || fail 'extracted app Helpers does not contain exactly one entry'
+
+reset_extracted_app_fixture
+printf 'unexpected\n' >"$extracted_helpers/extra"
+expect_extracted_app_failure
+reset_extracted_app_fixture
+/bin/rm "$extracted_helper"
+/bin/ln -s /usr/bin/true "$extracted_helper"
+expect_extracted_app_failure
+
 printf 'QuickTTY notarization DMG contract tests passed.\n'

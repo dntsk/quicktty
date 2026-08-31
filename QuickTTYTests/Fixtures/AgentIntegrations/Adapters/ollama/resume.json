@@ -1,0 +1,9 @@
+{
+  "id": "ollama",
+  "sessionID": "session-ollama-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "missingPersistentSessionAPI"
+}

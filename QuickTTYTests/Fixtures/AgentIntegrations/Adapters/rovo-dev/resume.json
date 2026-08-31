@@ -1,0 +1,9 @@
+{
+  "id": "rovo-dev",
+  "sessionID": "session-rovo-dev-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "missingSessionIdentity"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "copilot",
+  "sessionID": "session-copilot-123",
+  "arguments": [
+    "--resume=session-copilot-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

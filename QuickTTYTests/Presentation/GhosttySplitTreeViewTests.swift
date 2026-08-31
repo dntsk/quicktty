@@ -5,7 +5,7 @@ import Testing
 
 @testable import QuickTTY
 
-@Suite(.serialized)
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct GhosttySplitTreeViewTests {
     @Test
@@ -754,6 +754,114 @@ struct GhosttySplitTreeViewTests {
 
         #expect(controller.splitHostingControllerIdentifierForTesting == nil)
         #expect(controller.emptyWorkspaceLabelIsVisibleForTesting)
+    }
+
+    @Test
+    func agentResumePlaceholderUsesBoundedRedactedCopyAndRoutesRetryAndForget() async throws {
+        let controller = WorkspaceViewController()
+        let paneID = PaneID()
+        let presentation = AgentResumePresentation.failed(diagnosticCode: .immediateExit)
+        let sensitiveSentinels = [
+            "session-sensitive-123",
+            "/Users/private/project",
+            "--resume session-sensitive-123",
+            "/usr/local/bin/agent",
+            String(repeating: "ab", count: 32),
+        ]
+        var retriedPaneIDs: [PaneID] = []
+        var forgottenPaneIDs: [PaneID] = []
+        let window = mountWorkspace(controller)
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+
+        controller.displayTerminal(
+            root: .pane(paneID),
+            surfaces: [:],
+            failures: [:],
+            agentResumePresentations: [paneID: presentation],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in },
+            onRetryAgentResume: { retriedPaneIDs.append($0) },
+            onForgetAgentResume: { forgottenPaneIDs.append($0) }
+        )
+        await settleWorkspace(controller, in: window)
+
+        let splitHost = try #require(controller.splitHostingViewForTesting)
+        let views = mountedViews(in: splitHost)
+        let placeholder = try #require(
+            views.compactMap { $0 as? SurfaceErrorPlaceholderView }.first
+        )
+        let renderedText = mountedText(in: views)
+        let retryButton = try #require(button(titled: "Retry Resume", in: views))
+        let forgetButton = try #require(button(titled: "Forget Agent Session", in: views))
+        let accessibilityStrings = [
+            placeholder.accessibilityLabel() ?? "",
+            placeholder.accessibilityValue() as? String ?? "",
+            retryButton.accessibilityLabel() ?? "",
+            forgetButton.accessibilityLabel() ?? "",
+        ]
+
+        #expect(renderedText.contains(presentation.title))
+        #expect(renderedText.contains(presentation.message))
+        #expect(retryButton.accessibilityLabel() == "Retry Resume")
+        #expect(forgetButton.accessibilityLabel() == "Forget Agent Session")
+        #expect(
+            (Array(renderedText) + accessibilityStrings).allSatisfy {
+                $0.utf8.count <= AgentResumePresentation.maximumCopyBytes
+            }
+        )
+        for sentinel in sensitiveSentinels {
+            #expect(
+                (Array(renderedText) + accessibilityStrings).allSatisfy { !$0.contains(sentinel) })
+        }
+
+        retryButton.performClick(nil)
+        forgetButton.performClick(nil)
+        #expect(retriedPaneIDs == [paneID])
+        #expect(forgottenPaneIDs == [paneID])
+    }
+
+    @Test
+    func liveSurfaceTakesPriorityOverAgentResumePresentation() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
+        )
+        let controller = WorkspaceViewController()
+        let window = mountWorkspace(controller)
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+
+        controller.displayTerminal(
+            root: .pane(surface.paneID),
+            surfaces: [surface.paneID: surface],
+            failures: [:],
+            agentResumePresentations: [
+                surface.paneID: .failed(diagnosticCode: .immediateExit)
+            ],
+            palette: .fallback,
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in },
+            onRetryAgentResume: { _ in },
+            onForgetAgentResume: { _ in }
+        )
+        await settleWorkspace(controller, in: window)
+
+        let splitHost = try #require(controller.splitHostingViewForTesting)
+        let views = mountedViews(in: splitHost)
+        #expect(
+            views.compactMap { $0 as? GhosttySurfaceView }.map(ObjectIdentifier.init)
+                == [ObjectIdentifier(surface)]
+        )
+        #expect(!views.contains { $0 is SurfaceErrorPlaceholderView })
+        #expect(button(titled: "Retry Resume", in: views) == nil)
+        #expect(button(titled: "Forget Agent Session", in: views) == nil)
     }
 }
 

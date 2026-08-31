@@ -3,7 +3,7 @@ import Testing
 
 @testable import QuickTTY
 
-@Suite(.serialized)
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct WindowCoordinatorConfigurationTests {
     @Test

@@ -1,0 +1,9 @@
+{
+  "id": "codebuddy",
+  "sessionID": "session-codebuddy-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "betaLifecycleOnly"
+}

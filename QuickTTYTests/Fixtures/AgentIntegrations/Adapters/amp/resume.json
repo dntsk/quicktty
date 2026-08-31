@@ -1,0 +1,12 @@
+{
+  "id": "amp",
+  "sessionID": "session-amp-123",
+  "arguments": [
+    "threads",
+    "continue",
+    "session-amp-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

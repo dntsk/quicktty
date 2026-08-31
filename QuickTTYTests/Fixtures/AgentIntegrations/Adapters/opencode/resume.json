@@ -1,0 +1,11 @@
+{
+  "id": "opencode",
+  "sessionID": "session-opencode-123",
+  "arguments": [
+    "--session",
+    "session-opencode-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

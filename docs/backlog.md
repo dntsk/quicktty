@@ -18,7 +18,7 @@ Future behavior:
 
 **Status:** Завершено 2026-07-28.
 
-QuickTTY показывает NSSearchField-оверлей поверх активного терминала с инкрементальным поиском через встроенный search thread Ghostty. Cmd+F открывает поиск, Cmd+G/Cmd+Shift+G или ↑↓ навигируют, Esc очищает подсветку, Enter закрывает с сохранением подсветки. Поиск привязан к одной активной панели и закрывается при смене панели. Debounce 200ms, счётчик совпадений. Контракт зафиксирован в `docs/plans/2026-07-27-interactive-terminal-search-design.md`.
+QuickTTY показывает NSSearchField-оверлей поверх активного терминала с инкрементальным поиском через встроенный search thread Ghostty. Cmd+F открывает поиск, Cmd+G/Cmd+Shift+G или ↑↓ навигируют, Esc очищает подсветку, Enter закрывает с сохранением подсветки. Поиск привязан к одной активной панели и закрывается при смене панели. Debounce 200ms, счётчик совпадений. Контракт зафиксирован во внешнем agent vault: `agents/plans/2026-07-27-interactive-terminal-search-design.md`.
 
 ## Terminal viewport preservation on tab restore
 
@@ -30,16 +30,16 @@ QuickTTY показывает NSSearchField-оверлей поверх акти
 
 **Status:** Завершено 2026-07-23.
 
-Закреплённый Ghostty владеет detection/highlight и `Cmd+click`; QuickTTY принимает `open_url`, открывает schemes/file paths через `NSWorkspace` и применяет surface-local cursor shape через cursor rects. Preview UI и keyboard action `open-url` не добавлены. Контракт зафиксирован в `docs/plans/2026-07-23-url-hover-open-design.md`.
+Закреплённый Ghostty владеет detection/highlight и `Cmd+click`; QuickTTY принимает `open_url`, открывает schemes/file paths через `NSWorkspace` и применяет surface-local cursor shape через cursor rects. Preview UI и keyboard action `open-url` не добавлены. Контракт зафиксирован во внешнем agent vault: `agents/plans/2026-07-23-url-hover-open-design.md`.
 
 ## Dynamic tab titles and rename
 
 **Status:** Завершено 2026-07-23.
 
-QuickTTY отображает opaque live title активной pane, поддерживает отдельный persisted manual override и inline rename через double-click или `Rename Tab…`. Automatic titles остаются ephemeral. Контракт зафиксирован в `docs/plans/2026-07-23-dynamic-tab-titles-design.md`.
+QuickTTY отображает opaque live title активной pane, поддерживает отдельный persisted manual override и inline rename через double-click или `Rename Tab…`. Automatic titles остаются ephemeral. Контракт зафиксирован во внешнем agent vault: `agents/plans/2026-07-23-dynamic-tab-titles-design.md`.
 
 ## Terminal progress and agent integrations
 
 **Status:** Завершено 2026-07-24.
 
-QuickTTY принимает стандартный surface-scoped OSC 9;4 от любых terminal applications, показывает transient status в tab bar и Workspace selector и отправляет generic background notifications с exact pane navigation. Agent identity не определяется: Pi использует native Terminal progress, Claude Code и Codex — ручные lifecycle hook examples. Title и terminal output не анализируются, status не сохраняется. Контракт зафиксирован в `docs/plans/2026-07-24-terminal-progress-notifications-design.md`.
+QuickTTY принимает стандартный surface-scoped OSC 9;4 от любых terminal applications, показывает transient status в tab bar и Workspace selector и отправляет generic background notifications с exact pane navigation. Agent identity не определяется: Pi использует native Terminal progress, Claude Code и Codex — ручные lifecycle hook examples. Title и terminal output не анализируются, status не сохраняется. Контракт зафиксирован во внешнем agent vault: `agents/plans/2026-07-24-terminal-progress-notifications-design.md`.

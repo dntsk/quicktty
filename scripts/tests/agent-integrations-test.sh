@@ -13,6 +13,7 @@ assert_file_equals() {
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P) || fail 'could not resolve test directory'
 repo_root=$(CDPATH= cd -P "$script_dir/../.." && pwd -P) || fail 'could not resolve repository root'
 resource_dir=$repo_root/QuickTTY/Resources/AgentIntegrations
+session_resource_dir=$repo_root/QuickTTY/Resources/AgentSessionIntegrations
 helper=$resource_dir/quicktty-progress
 claude_example=$resource_dir/claude-settings.example.json
 codex_example=$resource_dir/codex-hooks.example.json
@@ -242,5 +243,27 @@ assert_file_equals "$tmp_root/codex-events-expected" "$tmp_root/codex-events"
     || fail 'project resources do not include AgentIntegrations explicitly'
 /usr/bin/grep -F -x '        type: folder' "$project_spec" >/dev/null \
     || fail 'AgentIntegrations is not configured as a folder resource'
+/usr/bin/grep -F -x '          - AgentSessionIntegrations' "$project_spec" >/dev/null \
+    || fail 'native lifecycle resources are not excluded from the flattened resource entry'
+/usr/bin/grep -F -x '      - path: QuickTTY/Resources/AgentSessionIntegrations' "$project_spec" >/dev/null \
+    || fail 'native lifecycle resources are not included explicitly'
+
+expected_native_ids='claude codex pi omp cursor gemini hermes copilot droid qoder kimi'
+expected_wrapper_ids='amp antigravity opencode'
+for adapter_id in $expected_native_ids $expected_wrapper_ids; do
+    manifest=$session_resource_dir/$adapter_id/integration.json
+    [ -f "$manifest" ] || fail "native lifecycle manifest is missing: $adapter_id"
+    "$python_path" -m json.tool "$manifest" >/dev/null
+    [ "$(/usr/bin/plutil -extract adapter raw -o - "$manifest")" = "$adapter_id" ] \
+        || fail "native lifecycle manifest has the wrong adapter: $adapter_id"
+done
+[ "$(/usr/bin/find "$session_resource_dir" -mindepth 1 -maxdepth 1 -type d | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 14 ] \
+    || fail 'agent lifecycle resource directory set is not exact'
+if LC_ALL=C /usr/bin/grep -R -n '[^ -~]' "$session_resource_dir" >/dev/null; then
+    fail 'agent lifecycle resources must contain English ASCII only'
+fi
+if LC_ALL=C /usr/bin/grep -R -Ei 'api[_-]?key|password|credential|bearer[[:space:]]|private[_-]?key' "$session_resource_dir" >/dev/null; then
+    fail 'agent lifecycle resources must not contain credentials'
+fi
 
 printf 'Agent integration contract tests passed.\n'

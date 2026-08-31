@@ -2133,16 +2133,20 @@ extension GhosttySurfaceView {
     ) {
         DispatchQueue.main.async { [weak self, weak searchState, weak hostingView] in
             guard let self, let searchState, let hostingView else { return }
-            guard self.canRequestInitialSearchFocus(
-                for: searchState,
-                hostingView: hostingView
-            ) else { return }
-            DispatchQueue.main.async { [weak self, weak searchState, weak hostingView] in
-                guard let self, let searchState, let hostingView else { return }
-                guard self.canRequestInitialSearchFocus(
+            guard
+                self.canRequestInitialSearchFocus(
                     for: searchState,
                     hostingView: hostingView
-                ) else { return }
+                )
+            else { return }
+            DispatchQueue.main.async { [weak self, weak searchState, weak hostingView] in
+                guard let self, let searchState, let hostingView else { return }
+                guard
+                    self.canRequestInitialSearchFocus(
+                        for: searchState,
+                        hostingView: hostingView
+                    )
+                else { return }
                 searchState.requestFocus()
             }
         }

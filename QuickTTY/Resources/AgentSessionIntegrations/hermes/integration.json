@@ -1,0 +1,1 @@
+{"adapter":"hermes","endEvents":["finalize"],"installer":"ownedFile","startEvents":["start","pre_llm"],"versionProbe":"unverified"}

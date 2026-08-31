@@ -1,86 +1,86 @@
-# Справочник конфигурации QuickTTY
+# QuickTTY Configuration Reference
 
-Пользовательский файл находится по адресу `~/.config/quicktty/config`. Строки без префикса `quicktty-` передаются Ghostty, кроме пользовательских `keybind`, описанных ниже. Изменения применяются без перезапуска terminal surfaces и shell-процессов; при ошибке продолжает действовать последняя валидная конфигурация.
+The user configuration file is `~/.config/quicktty/config`. Lines without the `quicktty-` prefix are passed to Ghostty, except user `keybind` entries described below. Valid changes apply without restarting terminal surfaces or shell processes. If reload fails, the last valid configuration remains active.
 
-## Параметры QuickTTY
+## QuickTTY options
 
 ### `quicktty-presentation-mode`
 
-Режим окна при запуске: `normal` или `quake`. Значение по умолчанию — `normal`.
+Startup window mode: `normal` or `quake`. Default: `normal`.
 
 ### `quicktty-global-toggle`
 
-Глобальная комбинация показа и скрытия Quake-окна. Использует полную грамматику сочетаний из раздела ниже, но регистрируется отдельно от локальных действий через Carbon. Значение по умолчанию — `f12`.
+Global shortcut that shows or hides the Quake window. It uses the shortcut grammar below but is registered separately through Carbon. Default: `f12`.
 
 ### `quicktty-shortcut`
 
-Повторяемая инструкция для локальных сочетаний:
+Repeatable local shortcut assignment:
 
 ```ini
 quicktty-shortcut = action-id=cmd+key
 quicktty-shortcut = action-id=disabled
 ```
 
-`action-id` берётся из полного registry ниже. `disabled` явно снимает сочетание с действия.
+Use an `action-id` from the complete registry below. `disabled` explicitly removes an assignment.
 
 ### `quicktty-quake-height`
 
-Доля высоты доступной области экрана. Допустимы доля `0...1` или проценты `1%...100%`. Значение по умолчанию — `75%`.
+Share of the screen's available height. Accepts a fraction from `0` through `1` or a percentage from `1%` through `100%`. Default: `75%`.
 
 ### `quicktty-quake-animation-duration`
 
-Длительность анимации в секундах, неотрицательное число. Значение по умолчанию — `0.18`.
+Nonnegative animation duration in seconds. Default: `0.18`.
 
 ### `quicktty-quake-padding`
 
-Внутренний отступ Quake-окна в points, неотрицательное число. Значение по умолчанию — `0`.
+Nonnegative Quake-window inset in points. Default: `0`.
 
 ### `quicktty-hide-on-focus-loss`
 
-Скрывать Quake-окно после потери фокуса: `true` или `false`. Значение по умолчанию — `true`.
+Whether the Quake window hides after losing focus: `true` or `false`. Default: `true`.
 
 ### `quicktty-quake-pin-to-screen`
 
-Закреплять Quake-окно за монитором, на котором оно было впервые показано: `true` или `false`. Значение по умолчанию — `false`. При `false` окно открывается на экране, где находится курсор мыши. При `true` окно всегда открывается на том же мониторе, даже если курсор переместился на другой.
+Whether Quake remains on the display where it was first shown: `true` or `false`. Default: `false`. When false, it opens on the display containing the pointer.
 
 ### `quicktty-restore-workspaces`
 
-Восстанавливать сохранённые рабочие пространства при следующем запуске: `true` или `false`. Значение по умолчанию — `true`. При `false` QuickTTY открывает новое рабочее пространство Default; восстановление рамки окна при этом сохраняется.
+Whether saved workspace descriptions are restored on the next launch: `true` or `false`. Default: `true`. When false, QuickTTY opens a new Default workspace while still restoring the normal window frame.
+
+### `quicktty-restore-agent-sessions`
+
+Whether eligible native coding-agent sessions are resumed when saved workspaces are restored: `true` or `false`. Default: `true`. The effective policy requires both this option and `quicktty-restore-workspaces` to be true.
+
+Restoration relaunches an agent by its opaque native session ID into the original pane. It is not a PTY or process checkpoint. Disabling it starts fresh shells while retaining saved bindings. QuickTTY does not persist arbitrary commands or environment variables, and it does not infer sessions from output, titles, processes, history, or agent stores. An unverified or invalid binding fails closed to a fresh shell or a pane-local Retry/Forget state.
 
 ### `quicktty-config-editor`
 
-Команда терминального редактора для конфигурации, включая аргументы, например `code --wait`. Значение по умолчанию — `nano`. Действие `open-config` открывает файл в новой вкладке терминала.
+Terminal editor command for the configuration, including arguments, for example `code --wait`. Default: `nano`. The `open-config` action opens it in a new terminal tab.
 
 ### `quicktty-update-channel`
 
-Канал обновлений: `stable` или `beta`. Значение по умолчанию — `stable`. Stable channel читает GitHub `latest` feed и не получает prerelease. `beta` читает versioned appcast из репозитория QuickTTY; этот feed является надмножеством stable и предлагает самый новый публичный stable или beta build через immutable GitHub Release assets.
+Update channel: `stable` or `beta`. Default: `stable`. Stable reads the GitHub latest feed and excludes prereleases. Beta reads QuickTTY's versioned appcast, which is a superset of stable.
 
-## Грамматика сочетаний
+## Shortcut grammar
 
-Сочетание состоит из необязательных модификаторов и ровно одной клавиши через `+`. Порядок модификаторов при чтении не важен; канонический порядок — `cmd+opt+ctrl+shift+key`. Повтор модификатора, пустой компонент, несколько клавиш, неизвестный token и буквальный знак пунктуации не допускаются. Сочетание без модификаторов допустимо, например `f12` или `space`.
+A shortcut contains optional modifiers and exactly one key separated by `+`. Modifier order is ignored while parsing; canonical order is `cmd+opt+ctrl+shift+key`. Duplicate modifiers, empty components, multiple keys, unknown tokens, and literal punctuation are invalid. A key without modifiers, such as `f12` or `space`, is valid.
 
-Модификаторы:
+Modifiers: `cmd`, `opt`, `ctrl`, `shift`.
 
-- `cmd`;
-- `opt`;
-- `ctrl`;
-- `shift`.
+Keys:
 
-Клавиши:
+- letters `a`…`z` and digits `0`…`9`;
+- function keys `f1`…`f20`;
+- arrows `left`, `right`, `up`, `down`;
+- navigation `home`, `end`, `page-up`, `page-down`;
+- special keys `tab`, `enter`, `escape`, `space`, `delete`, `forward-delete`;
+- punctuation names `grave`, `minus`, `equal`, `left-bracket`, `right-bracket`, `backslash`, `semicolon`, `quote`, `comma`, `period`, `slash`.
 
-- буквы `a`…`z`;
-- цифры `0`…`9`;
-- функциональные клавиши `f1`…`f20`;
-- стрелки `left`, `right`, `up`, `down`;
-- навигация `home`, `end`, `page-up`, `page-down`;
-- специальные клавиши `tab`, `enter`, `escape`, `space`, `delete`, `forward-delete`;
-- пунктуация `grave`, `minus`, `equal`, `left-bracket`, `right-bracket`, `backslash`, `semicolon`, `quote`, `comma`, `period`, `slash`.
+## Action registry and defaults
 
-## Registry действий и значения по умолчанию
+The global Quake toggle is outside the local registry; its default is `quicktty-global-toggle = f12`.
 
-Global Quake toggle не входит в локальный registry; его default — `quicktty-global-toggle = f12`.
-
-### Приложение
+### Application
 
 | Action ID | Default |
 |---|---|
@@ -88,7 +88,7 @@ Global Quake toggle не входит в локальный registry; его def
 | `open-config` | `cmd+comma` |
 | `toggle-presentation` | `cmd+opt+p` |
 
-### Вкладки и panes
+### Tabs and panes
 
 | Action ID | Default |
 |---|---|
@@ -164,59 +164,59 @@ Global Quake toggle не входит в локальный registry; его def
 | `selection-home` | `shift+home` | `adjust_selection:home` |
 | `selection-end` | `shift+end` | `adjust_selection:end` |
 
-Навигация по prompts остаётся typed и настраиваемой, но без встроенного chord, поскольку сочетания Cmd+Shift со стрелками зарезервированы для directional pane focus.
+Prompt navigation remains typed and configurable but has no default chord because Command-Shift-arrow shortcuts are reserved for directional pane focus.
 
-QuickTTY принимает только этот typed allowlist и не принимает произвольные строки Ghostty actions.
+QuickTTY accepts only this typed allowlist, not arbitrary Ghostty action strings.
 
-## Последовательное применение и конфликты
+## Sequential application and conflicts
 
-Parsing каждого config начинается со встроенных defaults и обрабатывает `quicktty-shortcut` сверху вниз.
+Each parse starts from built-in defaults and processes `quicktty-shortcut` entries from top to bottom.
 
-- Последняя валидная инструкция для action заменяет его предыдущее значение; `disabled` является валидным значением.
-- Unknown action, malformed instruction и invalid chord дают diagnostic, но не блокируют остальные валидные строки.
-- При hot reload невалидная строка известного action сохраняет последнее активное значение этого action; при первом запуске сохраняется default.
-- Если все строки action удалены из config, action возвращается к default.
-- Если chord уже принадлежит другому локальному action, последний валидный владелец получает chord, предыдущий становится `disabled`; diagnostic называет chord и оба action ID.
+- The last valid assignment for an action replaces its earlier value; `disabled` is valid.
+- An unknown action, malformed assignment, or invalid chord reports a diagnostic without blocking other valid lines.
+- During hot reload, an invalid line for a known action retains that action's last active value; on first launch it retains the default.
+- Removing every assignment for an action restores its default.
+- If two local actions claim one chord, the last valid owner receives it and the prior owner becomes disabled; the diagnostic names both actions.
 
-Глобальное сочетание имеет приоритет над локальным: конфликтующий local action становится `disabled`. В Quake-режиме замена Carbon registration транзакционна. Если новое глобальное сочетание не регистрируется, QuickTTY восстанавливает последнюю успешную registration, продолжает применять остальные config-изменения и резервирует восстановленное глобальное сочетание перед публикацией локальной карты. Конфликтующее с новым настроенным global сочетанием local action остаётся отключённым до следующего reload.
+The global shortcut has priority over local shortcuts. In Quake mode, Carbon registration replacement is transactional. If the new global chord cannot be registered, QuickTTY restores the last successful registration and continues applying other valid configuration changes.
 
-## Keyboard boundary Ghostty
+## Ghostty keyboard boundary
 
-Пользовательские top-level `keybind = ...` молча исключаются из generated effective config и не создают diagnostics. В конце effective config после остальных параметров и `include` QuickTTY всегда записывает:
+Top-level user `keybind = ...` entries are silently excluded from the generated effective configuration. QuickTTY always appends:
 
 ```ini
 keybind = clear
 ```
 
-Эта финальная строка очищает встроенные Ghostty bindings и bindings из include-файлов. Неназначенное QuickTTY keyboard event, включая обычный ввод, Ctrl-комбинации и IME, проходит в terminal input.
+This clears built-in and included Ghostty bindings. Unassigned QuickTTY keyboard events, ordinary input, Control combinations, and IME continue through the normal terminal input path.
 
-Terminal actions вызываются только через фиксированный typed allowlist. Если `copy`, `copy-url`, `clear-screen`, `scroll-to-selection` или одно из действий `selection-*` не может быть выполнено и Ghostty возвращает `false`, исходное событие не поглощается и продолжает normal terminal input path. `paste` и `paste-selection` используют broadcast только для panes активной вкладки; все остальные terminal actions выполняются только на focused pane. Hidden, inactive и закрытая surface не является shortcut target.
+Terminal actions use only the fixed typed allowlist. Non-performable copy, copy URL, clear screen, scroll-to-selection, and selection actions do not consume the original event. Paste and paste-selection use broadcast only for panes in the active tab; all other terminal actions target the focused pane.
 
-## Отложенные terminal actions
+## Deferred terminal actions
 
-Interactive Search уже использует нативный Ghostty contract: `start_search`, `end_search`, `search:<needle>`, `navigate_search:next` и `navigate_search:previous`, а состояние overlay обновляется runtime callbacks начала, завершения, общего числа и выбранного результата. Stateful actions read-only, secure input и mouse reporting не экспортируются до появления видимого состояния, checked menu state и корректного lifecycle cleanup.
+Interactive Search uses Ghostty's native `start_search`, `end_search`, `search:<needle>`, `navigate_search:next`, and `navigate_search:previous` contract. Read-only, secure-input, and mouse-reporting stateful actions remain deferred until they have visible state, checked menu state, and lifecycle cleanup.
 
-## Интеграции с coding agents
+## Coding-agent integrations
 
-QuickTTY отображает состояния coding agents из terminal progress sequences OSC `9;4`. Для Pi включите `/settings` → **Terminal progress**. Для Claude Code и Codex bundled helper и JSON-примеры находятся в `QuickTTY.app/Contents/Resources/AgentIntegrations`; их нужно вручную объединить с существующей конфигурацией. QuickTTY не устанавливает и не изменяет hooks автоматически. Полная инструкция: `docs/agent-integrations.md` в репозитории.
+QuickTTY displays OSC `9;4` progress and can optionally restore a version-verified native agent session. Session restoration requires the exact two-key policy above and never restores a PTY/process checkpoint or a persisted arbitrary command. The installer is explicit and never silently changes agent configuration. See `docs/agent-integrations.md` in the repository for the exact 20-entry registry, current Pi `0.83.0` verification boundary, CLI/UI workflow, fallback behavior, and progress setup.
 
-## Параметры Ghostty
+## Ghostty options
 
 ### `progress-style`
 
-Управляет badges terminal progress OSC `9;4`. Значение по умолчанию — `true`. При `false` QuickTTY сразу очищает текущие badges и игнорирует новые progress-события.
+Controls OSC `9;4` activity badges. Default: `true`. When false, QuickTTY clears current badges and ignores new progress events.
 
 ### `desktop-notifications`
 
-Управляет системными уведомлениями о terminal progress. Значение по умолчанию — `true`. При `false` badges продолжают обновляться, но новые системные уведомления не создаются.
+Controls system notifications for terminal progress. Default: `true`. When false, badges still update but new notifications are not created.
 
-Оба параметра применяются hot reload без перезапуска surfaces и shell-процессов. Только полностью валидная Ghostty-конфигурация становится активной; при ошибке сохраняются предыдущие значения параметров, badges и действующая конфигурация.
+Both options hot reload without restarting surfaces or shell processes. Only a fully valid Ghostty configuration becomes active.
 
 ### `copy-on-select`
 
-QuickTTY по умолчанию использует `copy-on-select = clipboard`, чтобы копирование по выделению помещало текст в обычный системный буфер обмена. Укажите `copy-on-select = false`, чтобы отключить это поведение; любое явное значение пользователя, включая `true` и `clipboard`, сохраняется без изменений.
+QuickTTY defaults to `copy-on-select = clipboard`, which copies selections to the standard system clipboard. Set `copy-on-select = false` to disable it; any explicit user value is preserved.
 
-## Пример
+## Example
 
 ```text
 theme = catppuccin-mocha
@@ -233,9 +233,10 @@ quicktty-quake-padding = 0
 quicktty-hide-on-focus-loss = true
 quicktty-quake-pin-to-screen = false
 quicktty-restore-workspaces = true
+quicktty-restore-agent-sessions = true
 quicktty-config-editor = nano
 
 copy-on-select = clipboard
 ```
 
-Файл `.ghostty-effective-config` создаётся QuickTTY рядом с пользовательским config. Его не следует редактировать вручную.
+QuickTTY creates `.ghostty-effective-config` next to the user configuration. Do not edit it manually.

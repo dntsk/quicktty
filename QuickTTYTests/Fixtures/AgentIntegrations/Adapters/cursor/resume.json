@@ -1,0 +1,11 @@
+{
+  "id": "cursor",
+  "sessionID": "session-cursor-123",
+  "arguments": [
+    "--resume",
+    "session-cursor-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

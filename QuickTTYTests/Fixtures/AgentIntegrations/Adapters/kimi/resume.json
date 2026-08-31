@@ -1,0 +1,11 @@
+{
+  "id": "kimi",
+  "sessionID": "session-kimi-123",
+  "arguments": [
+    "--session",
+    "session-kimi-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

@@ -1,0 +1,13 @@
+[
+  {"adapter":"claude","startEvents":["SessionStart"],"switchEvents":[],"endEvents":["SessionEnd"],"installerStrategy":"jsonHook"},
+  {"adapter":"codex","startEvents":["SessionStart"],"switchEvents":[],"endEvents":["SessionEnd"],"installerStrategy":"jsonHook"},
+  {"adapter":"pi","startEvents":["session_start"],"switchEvents":["session_switch"],"endEvents":["session_shutdown"],"installerStrategy":"ownedFile","physicalQuitReason":"quit"},
+  {"adapter":"omp","startEvents":["session_start"],"switchEvents":["session_switch"],"endEvents":["session_shutdown"],"installerStrategy":"ownedFile","physicalQuitReason":"quit"},
+  {"adapter":"cursor","startEvents":["session_start"],"switchEvents":[],"endEvents":["session_end"],"installerStrategy":"jsonHook"},
+  {"adapter":"gemini","startEvents":["SessionStart"],"switchEvents":[],"endEvents":["SessionEnd"],"installerStrategy":"jsonHook"},
+  {"adapter":"hermes","startEvents":["start","pre_llm"],"switchEvents":[],"endEvents":["finalize"],"installerStrategy":"ownedFile"},
+  {"adapter":"copilot","startEvents":["session_start"],"switchEvents":[],"endEvents":["session_end"],"installerStrategy":"jsonHook"},
+  {"adapter":"droid","startEvents":["session_start"],"switchEvents":[],"endEvents":["session_end"],"installerStrategy":"jsonHook"},
+  {"adapter":"qoder","startEvents":["session_start"],"switchEvents":[],"endEvents":["session_end"],"installerStrategy":"jsonHook"},
+  {"adapter":"kimi","startEvents":["SessionStart"],"switchEvents":[],"endEvents":["SessionEnd"],"installerStrategy":"markerBlock"}
+]

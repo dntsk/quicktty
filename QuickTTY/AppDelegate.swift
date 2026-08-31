@@ -20,19 +20,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configController: ConfigController?
     private var terminalNotificationClient: SystemTerminalNotificationClient?
     private var terminalNotificationController: TerminalNotificationController?
+    private var agentSocketServer: AgentSocketServer?
+    private var agentSessionController: AgentSessionController?
+    private var agentMessageRouter: AgentMessageRouter?
+    private var agentLifecycleActionRouter: AgentLifecycleActionRouter?
     private let shortcutController = ShortcutController()
     private var configurationDiagnosticsPresentation: ConfigDiagnosticPresentation?
     private var stateStore: StateStore?
     private var applicationState: ApplicationState?
+    private var startupTask: Task<Void, Never>?
     private var isTerminating = false
     private var updateManager: UpdateManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !ApplicationEnvironment.isRunningHostedTests else { return }
 
-        let applicationState = loadApplicationState()
+        let applicationState = Self.loadStateAndStartAgentSubsystem(
+            loadState: loadApplicationState,
+            startAgentSubsystem: startAgentSubsystem,
+            onAgentSubsystemFailure: { [weak self] error in
+                self?.logger.error(
+                    "Agent subsystem disabled: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        )
         self.applicationState = applicationState
+        let adapterIDs = Self.agentAdapterIDs(in: applicationState.workspaceStore)
+        let path = ProcessInfo.processInfo.environment["PATH"]
+        startupTask = Task { [weak self] in
+            await Self.runAgentRestoreCompatibilityPreflight(
+                adapterIDs: adapterIDs,
+                path: path
+            ) { [weak self] compatibility in
+                self?.completeLaunch(
+                    applicationState: applicationState,
+                    agentRestoreCompatibility: compatibility
+                )
+            }
+        }
+    }
 
+    private func completeLaunch(
+        applicationState: ApplicationState,
+        agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility]
+    ) {
         do {
             let ghosttyBridge = try GhosttyBridge()
             ghosttyBridge.setApplicationFocused(NSApp.isActive)
@@ -44,10 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 presentationMode: config.presentationMode,
                 normalWindowFrame: applicationState.normalWindowFrame,
                 quakeConfiguration: quakeConfiguration(for: config),
+                agentSessionController: agentSessionController,
                 initialWorkspaceStore: Self.initialWorkspaceStore(
                     applicationState: applicationState,
                     config: config
                 ),
+                agentRestoreCompatibility: agentRestoreCompatibility,
                 persistWorkspaceStore: { [weak self] workspaceStore in
                     self?.workspaceStoreDidChange(workspaceStore)
                 },
@@ -73,6 +106,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
             self.windowCoordinator = windowCoordinator
+            do {
+                let installers = try Self.makeProductionAgentIntegrationInstallers()
+                windowCoordinator.installAgentIntegrations(
+                    installer: .live(installers.agentIntegrationInstaller),
+                    launcherInstaller: .live(installers.commandLineLauncherInstaller)
+                )
+            } catch {
+                logger.error(
+                    "Agent integrations UI disabled: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+            agentLifecycleActionRouter?.install(windowCoordinator)
             let terminalNotificationClient = SystemTerminalNotificationClient()
             let terminalNotificationController = TerminalNotificationController(
                 client: terminalNotificationClient,
@@ -135,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             NSApp.activate(ignoringOtherApps: true)
         } catch {
+            freezeAgentLifecycleDelivery()
+            stopAgentSocketImmediately()
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = Self.startupErrorMessage
@@ -153,10 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        startupTask?.cancel()
+        startupTask = nil
         Self.performApplicationTermination(
-            stopConfiguration: {
-                self.configController?.stop()
-                self.isTerminating = true
+            freezeAgentLifecycleDelivery: {
+                self.freezeAgentLifecycleDelivery()
             },
             persistFinalState: {
                 guard let applicationState = self.applicationState, let stateStore = self.stateStore
@@ -178,13 +226,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     "Final state save failed: \(error.localizedDescription, privacy: .public)"
                 )
             },
+            stopAgentSocket: {
+                self.stopAgentSocketImmediately()
+            },
             prepareForTermination: {
+                self.configController?.stop()
+                self.isTerminating = true
                 self.terminalNotificationController?.shutdown()
                 self.terminalNotificationClient?.setDelegate(nil)
                 self.windowCoordinator?.prepareForApplicationTermination()
             },
             shutdownRuntime: { self.ghosttyBridge?.shutdown() }
         )
+    }
+
+    private func startAgentSubsystem() throws {
+        let helperURL = ApplicationEnvironment.bundledAgentHelperURL()
+        guard helperURL.isFileURL,
+            (helperURL.path as NSString).isAbsolutePath,
+            FileManager.default.isExecutableFile(atPath: helperURL.path)
+        else {
+            throw AgentSubsystemStartupError.helperUnavailable
+        }
+
+        let messageRouter = AgentMessageRouter()
+        let lifecycleActionRouter = AgentLifecycleActionRouter()
+        let server = AgentSocketServer(
+            credentialProvider: messageRouter.credential
+        ) { [messageRouter] message in
+            await messageRouter.route(message)
+        }
+        let controller = try Self.startAgentSubsystem(
+            server: server,
+            messageRouter: messageRouter,
+            lifecycleActionRouter: lifecycleActionRouter
+        ) { socketPath in
+            try AgentSessionController(
+                socketPath: socketPath,
+                helperPath: helperURL.path,
+                onAction: { [lifecycleActionRouter] action in
+                    lifecycleActionRouter.route(action)
+                }
+            )
+        }
+        agentSocketServer = server
+        agentSessionController = controller
+        agentMessageRouter = messageRouter
+        agentLifecycleActionRouter = lifecycleActionRouter
+    }
+
+    private func freezeAgentLifecycleDelivery() {
+        agentMessageRouter?.disable()
+        agentSessionController?.freeze()
+        agentLifecycleActionRouter?.disable()
+    }
+
+    private func stopAgentSocketImmediately() {
+        agentSocketServer?.stopImmediately()
     }
 
     func workspaceStoreDidChange(_ workspaceStore: WorkspaceStore) {
@@ -247,6 +345,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config.restoreWorkspaces ? applicationState.workspaceStore : WorkspaceStore()
     }
 
+    static func agentAdapterIDs(in workspaceStore: WorkspaceStore) -> [AgentAdapterID] {
+        Set(
+            workspaceStore.workspaces.flatMap(\.tabs).flatMap { tab in
+                tab.paneDescriptors.compactMap { $0.agentResumeBinding?.adapterID }
+            }
+        ).sorted { $0.rawValue < $1.rawValue }
+    }
+
+    nonisolated static func resolveAgentRestoreCompatibility(
+        adapterIDs: [AgentAdapterID],
+        path: String?,
+        resolver: AgentRestoreCompatibilityResolver = AgentRestoreCompatibilityResolver()
+    ) async -> [AgentAdapterID: AgentRestoreCompatibility] {
+        await resolver.resolve(adapterIDs: adapterIDs, path: path)
+    }
+
+    nonisolated static func runAgentRestoreCompatibilityPreflight(
+        adapterIDs: [AgentAdapterID],
+        path: String?,
+        resolver: AgentRestoreCompatibilityResolver = AgentRestoreCompatibilityResolver(),
+        continueLaunch:
+            @escaping @MainActor @Sendable (
+                [AgentAdapterID: AgentRestoreCompatibility]
+            ) -> Void
+    ) async {
+        let compatibility = await resolveAgentRestoreCompatibility(
+            adapterIDs: adapterIDs,
+            path: path,
+            resolver: resolver
+        )
+        guard !Task.isCancelled else { return }
+        await continueLaunch(compatibility)
+    }
+
     static func shouldTerminateAfterLastWindowClosed(
         isRunningHostedTests: Bool,
         presentationMode: PresentationMode?
@@ -273,19 +405,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ConfigDiagnosticPresentation(path: configURL.path, messages: [error.localizedDescription])
     }
 
+    static func loadStateAndStartAgentSubsystem<State>(
+        loadState: () -> State,
+        startAgentSubsystem: () throws -> Void,
+        onAgentSubsystemFailure: (Error) -> Void
+    ) -> State {
+        let state = loadState()
+        do {
+            try startAgentSubsystem()
+        } catch {
+            onAgentSubsystemFailure(error)
+        }
+        return state
+    }
+
+    static func makeProductionAgentIntegrationInstallers(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundle: Bundle = .main
+    ) throws -> (
+        agentIntegrationInstaller: AgentIntegrationInstaller,
+        commandLineLauncherInstaller: CommandLineLauncherInstaller
+    ) {
+        guard let homeValue = environment["HOME"],
+            (homeValue as NSString).isAbsolutePath,
+            let resourceURL = bundle.resourceURL
+        else { throw AgentIntegrationInstallerError.invalidPath }
+        let homeDirectory = URL(fileURLWithPath: homeValue, isDirectory: true)
+        let applicationSupportDirectory = homeDirectory.appending(
+            path: "Library/Application Support",
+            directoryHint: .isDirectory
+        )
+        let resourceRoot = resourceURL.appending(
+            path: "AgentSessionIntegrations",
+            directoryHint: .isDirectory
+        )
+        let helperExecutable = ApplicationEnvironment.bundledAgentHelperURL(in: bundle)
+        return try makeAgentIntegrationInstallers(
+            homeDirectory: homeDirectory,
+            applicationSupportDirectory: applicationSupportDirectory,
+            resourceRoot: resourceRoot,
+            helperExecutable: helperExecutable
+        )
+    }
+
+    static func makeAgentIntegrationInstallers(
+        homeDirectory: URL,
+        applicationSupportDirectory: URL,
+        resourceRoot: URL,
+        helperExecutable: URL
+    ) throws -> (
+        agentIntegrationInstaller: AgentIntegrationInstaller,
+        commandLineLauncherInstaller: CommandLineLauncherInstaller
+    ) {
+        (
+            try AgentIntegrationInstaller(
+                homeDirectory: homeDirectory,
+                applicationSupportDirectory: applicationSupportDirectory,
+                resourceRoot: resourceRoot,
+                helperExecutable: helperExecutable
+            ),
+            try CommandLineLauncherInstaller(
+                homeDirectory: homeDirectory,
+                helperExecutable: helperExecutable
+            )
+        )
+    }
+
+    static func installAgentIntegrationsIfAvailable<Installers>(
+        makeInstallers: () throws -> Installers,
+        install: (Installers) -> Void,
+        onFailure: (Error) -> Void
+    ) -> Bool {
+        do {
+            install(try makeInstallers())
+            return true
+        } catch {
+            onFailure(error)
+            return false
+        }
+    }
+
+    static func startAgentSubsystem(
+        server: AgentSocketServer,
+        messageRouter: AgentMessageRouter,
+        lifecycleActionRouter: AgentLifecycleActionRouter,
+        makeController: (String) throws -> AgentSessionController
+    ) throws -> AgentSessionController {
+        do {
+            let socketPath = try server.start()
+            let controller = try makeController(socketPath)
+            messageRouter.install(controller)
+            return controller
+        } catch {
+            messageRouter.disable()
+            lifecycleActionRouter.disable()
+            server.stopImmediately()
+            throw error
+        }
+    }
+
     static func performApplicationTermination(
-        stopConfiguration: () -> Void,
+        freezeAgentLifecycleDelivery: () -> Void,
         persistFinalState: () throws -> Void,
         logSaveError: (Error) -> Void,
+        stopAgentSocket: () -> Void,
         prepareForTermination: () -> Void,
         shutdownRuntime: () -> Void
     ) {
-        stopConfiguration()
+        freezeAgentLifecycleDelivery()
         do {
             try persistFinalState()
         } catch {
             logSaveError(error)
         }
+        stopAgentSocket()
         prepareForTermination()
         shutdownRuntime()
     }
@@ -323,6 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let focusUpPaneMenuItemAction = #selector(AppDelegate.focusUpPane)
     static let focusDownPaneMenuItemAction = #selector(AppDelegate.focusDownPane)
     static let toggleBroadcastMenuItemAction = #selector(AppDelegate.toggleBroadcast)
+    static let agentIntegrationsMenuItemAction = #selector(AppDelegate.openAgentIntegrations)
     static let copyMenuItemAction = #selector(NSText.copy(_:))
     static let pasteMenuItemAction = #selector(NSText.paste(_:))
     static let selectAllMenuItemAction = #selector(NSText.selectAll(_:))
@@ -459,6 +693,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || (item.keyEquivalent.lowercased() == "t"
                 && item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
                     == [.command])
+    }
+
+    static func makeAgentIntegrationsMenuItem(
+        target: AnyObject,
+        action: Selector = agentIntegrationsMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Agent Integrations…", action: action, keyEquivalent: "")
+        item.keyEquivalentModifierMask = []
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installAgentIntegrationsMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = agentIntegrationsMenuItemAction
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = applicationMenu(in: mainMenu)
+        let canonicalItems = menu.items.filter { $0.title == "Agent Integrations…" }
+        let item =
+            canonicalItems.first
+            ?? makeAgentIntegrationsMenuItem(
+                target: target,
+                action: action
+            )
+        item.title = "Agent Integrations…"
+        item.action = action
+        item.keyEquivalent = ""
+        item.keyEquivalentModifierMask = []
+        item.target = target
+        if canonicalItems.isEmpty {
+            menu.addItem(item)
+        } else {
+            for duplicate in canonicalItems.dropFirst() {
+                menu.removeItem(duplicate)
+            }
+        }
+        return mainMenu
+    }
+
+    static func validateAgentIntegrationsMenuItem(
+        _ menuItem: NSMenuItem,
+        coordinatorReady: Bool,
+        installerReady: Bool
+    ) -> Bool {
+        guard menuItem.action == agentIntegrationsMenuItemAction else { return true }
+        return coordinatorReady && installerReady
     }
 
     static func makeOpenConfigurationMenuItem(
@@ -1233,6 +1516,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == Self.agentIntegrationsMenuItemAction {
+            return Self.validateAgentIntegrationsMenuItem(
+                menuItem,
+                coordinatorReady: windowCoordinator != nil,
+                installerReady: windowCoordinator?.canPresentAgentIntegrations == true
+            )
+        }
         if menuItem.action == Self.toggleBroadcastMenuItemAction {
             return Self.validateToggleBroadcastMenuItem(
                 menuItem,
@@ -1283,6 +1573,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func deleteWorkspace() {
         windowCoordinator?.deleteActiveWorkspace()
+    }
+
+    @objc private func openAgentIntegrations() {
+        windowCoordinator?.presentAgentIntegrations()
     }
 
     @objc private func openConfiguration() {
@@ -1502,6 +1796,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             target: self,
             shortcutController: shortcutController
         )
+        mainMenu = Self.installAgentIntegrationsMenuItem(
+            in: mainMenu,
+            target: self
+        )
         mainMenu = Self.installQuitMenuItem(
             in: mainMenu,
             target: NSApp,
@@ -1631,5 +1929,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func logConfigurationError(_ error: Error) {
         logger.error("Configuration update failed: \(error.localizedDescription, privacy: .public)")
+    }
+}
+
+private enum AgentSubsystemStartupError: LocalizedError {
+    case helperUnavailable
+
+    var errorDescription: String? {
+        "The bundled QuickTTY helper is unavailable"
     }
 }

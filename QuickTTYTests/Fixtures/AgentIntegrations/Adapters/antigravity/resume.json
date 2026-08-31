@@ -1,0 +1,11 @@
+{
+  "id": "antigravity",
+  "sessionID": "session-antigravity-123",
+  "arguments": [
+    "--conversation",
+    "session-antigravity-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

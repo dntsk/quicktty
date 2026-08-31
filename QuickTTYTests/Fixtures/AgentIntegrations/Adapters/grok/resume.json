@@ -1,0 +1,9 @@
+{
+  "id": "grok",
+  "sessionID": "session-grok-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "ambiguousOfficialIdentity"
+}

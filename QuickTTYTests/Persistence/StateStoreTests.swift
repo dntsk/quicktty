@@ -21,7 +21,7 @@ struct StateStoreTests {
     }
 
     @Test
-    func versionOneFixtureRoundTripsStableFlattenedSchema() throws {
+    func versionOneFixtureMigratesToCurrentVersionAndRoundTripsStableSchema() throws {
         let fixture = Data(Self.versionOneFixture.utf8)
 
         let decoded = try StateMigration.decode(fixture)
@@ -31,13 +31,24 @@ struct StateStoreTests {
         #expect(decoded.version == ApplicationState.currentVersion)
         #expect(decoded.workspaceStore.activeWorkspaceID == Self.workspaceID(1))
         #expect(workspace.activeTabID == Self.tabID(1))
+        #expect(tab.title == "Services")
         #expect(tab.activePaneID == Self.paneID(2))
-        #expect(tab.root.leaves == [Self.paneID(1), Self.paneID(2)])
+        #expect(
+            tab.root
+                == .split(
+                    id: Self.uuid(3),
+                    axis: .vertical,
+                    ratio: 0.37,
+                    first: .pane(Self.paneID(1)),
+                    second: .pane(Self.paneID(2))
+                )
+        )
         #expect(tab.paneDescriptor(for: Self.paneID(1))?.cwd == "/tmp/existing")
         #expect(
             tab.paneDescriptor(for: Self.paneID(2))?.startupCommand
                 == .custom("printf 'pending command'")
         )
+        #expect(tab.paneDescriptors.allSatisfy { $0.agentResumeBinding == nil })
         #expect(tab.isBroadcasting == false)
         #expect(tab.titleOverride == nil)
         #expect(
@@ -50,8 +61,123 @@ struct StateStoreTests {
 
         #expect(
             Set(object.keys) == ["activeWorkspaceID", "normalWindowFrame", "version", "workspaces"])
-        #expect(object["version"] as? Int == 1)
+        #expect(object["version"] as? Int == 2)
         #expect(String(decoding: encoded, as: UTF8.self).contains("\"_0\"") == false)
+        let roundTripped = try StateMigration.decode(encoded)
+        #expect(roundTripped.workspaceStore.tab(id: Self.tabID(1))?.isBroadcasting == false)
+    }
+
+    @Test
+    func versionOneMigrationPreservesLegacySplitRatioClamping() throws {
+        let ratios = [(input: 1.25, expected: 0.9), (input: -0.25, expected: 0.1)]
+
+        for ratio in ratios {
+            let payload = Self.versionOneFixture.replacingOccurrences(
+                of: #""ratio": 0.37"#,
+                with: #""ratio": \#(ratio.input)"#
+            )
+
+            let decoded = try StateMigration.decode(Data(payload.utf8))
+            let root = try #require(decoded.workspaceStore.tab(id: Self.tabID(1))?.root)
+
+            #expect(
+                root
+                    == .split(
+                        id: Self.uuid(3),
+                        axis: .vertical,
+                        ratio: ratio.expected,
+                        first: .pane(Self.paneID(1)),
+                        second: .pane(Self.paneID(2))
+                    )
+            )
+        }
+    }
+
+    @Test
+    func versionOneMigrationDropsCraftedValidAgentBinding() throws {
+        let descriptorMarker = #""startupCommand": { "kind": "shell" }"#
+        let craftedDescriptor = #"""
+            "startupCommand": { "kind": "shell" },
+            "agentResumeBinding": {
+              "adapterID": "claude-code",
+              "sessionID": "crafted-v1-session",
+              "workingDirectory": "/tmp/existing",
+              "registeredAt": 123456,
+              "launchMetadata": { "model.name": "opus" },
+              "restoreState": { "kind": "active" }
+            }
+            """#
+        let payload = Self.versionOneFixture.replacingOccurrences(
+            of: descriptorMarker,
+            with: craftedDescriptor
+        )
+
+        let decoded = try StateMigration.decode(Data(payload.utf8))
+        let workspace = try #require(decoded.workspaceStore.workspaces.first)
+        let tab = try #require(workspace.tabs.first)
+        let descriptor = try #require(tab.paneDescriptor(for: Self.paneID(1)))
+
+        #expect(decoded.version == ApplicationState.currentVersion)
+        #expect(workspace.id == Self.workspaceID(1))
+        #expect(tab.id == Self.tabID(1))
+        #expect(tab.root.leaves == [Self.paneID(1), Self.paneID(2)])
+        #expect(descriptor.id == Self.paneID(1))
+        #expect(descriptor.cwd == "/tmp/existing")
+        #expect(descriptor.startupCommand == .shell)
+        #expect(descriptor.agentResumeBinding == nil)
+    }
+
+    @Test
+    func versionOneMigrationValidatesConvertedPaneStructure() throws {
+        var object = try jsonObject(Data(Self.versionOneFixture.utf8))
+        var workspaces = try #require(object["workspaces"] as? [[String: Any]])
+        var tabs = try #require(workspaces[0]["tabs"] as? [[String: Any]])
+        var descriptors = try #require(tabs[0]["paneDescriptors"] as? [[String: Any]])
+        descriptors[1]["id"] = descriptors[0]["id"]
+        tabs[0]["paneDescriptors"] = descriptors
+        workspaces[0]["tabs"] = tabs
+        object["workspaces"] = workspaces
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        #expect(throws: TerminalTabError.duplicatePaneDescriptor(Self.paneID(1))) {
+            try StateMigration.decode(data)
+        }
+    }
+
+    @Test
+    func currentVersionFixtureRoundTripsBindingsWithFixedDatesAndMetadata() throws {
+        let decoded = try StateMigration.decode(Data(Self.versionTwoFixture.utf8))
+        let tab = try #require(decoded.workspaceStore.tab(id: Self.tabID(2)))
+        let active = try #require(
+            tab.paneDescriptor(for: Self.paneID(21))?.agentResumeBinding
+        )
+        let failed = try #require(
+            tab.paneDescriptor(for: Self.paneID(22))?.agentResumeBinding
+        )
+        let unverified = try #require(
+            tab.paneDescriptor(for: Self.paneID(23))?.agentResumeBinding
+        )
+
+        #expect(decoded.version == 2)
+        #expect(active.registeredAt == Date(timeIntervalSinceReferenceDate: 123_456))
+        #expect(active.launchMetadata == ["model.name": "opus"])
+        #expect(active.restoreState == .active)
+        #expect(failed.registeredAt == Date(timeIntervalSinceReferenceDate: 234_567))
+        #expect(failed.launchMetadata == ["resume.mode": "automatic"])
+        #expect(
+            failed.restoreState
+                == .failed(
+                    diagnosticCode: .immediateExit,
+                    failedAt: Date(timeIntervalSinceReferenceDate: 654_321)
+                )
+        )
+        #expect(unverified.registeredAt == Date(timeIntervalSinceReferenceDate: 345_678))
+        #expect(unverified.launchMetadata == ["model.name": "gpt-5"])
+        #expect(unverified.restoreState == .unverified)
+
+        let encoded = try makeEncoder().encode(decoded)
+        #expect(try jsonObject(encoded)["version"] as? Int == 2)
+        #expect(String(decoding: encoded, as: UTF8.self).contains("futureLaunchArguments") == false)
         #expect(try StateMigration.decode(encoded) == decoded)
     }
 
@@ -86,7 +212,7 @@ struct StateStoreTests {
         try store.saveNow(state)
 
         let savedObject = try jsonObject(Data(contentsOf: fixture.stateURL))
-        #expect(savedObject["version"] as? Int == 1)
+        #expect(savedObject["version"] as? Int == 2)
         let savedWorkspaces = try #require(savedObject["workspaces"] as? [[String: Any]])
         let savedTabs = try #require(savedWorkspaces.first?["tabs"] as? [[String: Any]])
         #expect(savedTabs.first?["title"] as? String == "Fallback")
@@ -140,7 +266,7 @@ struct StateStoreTests {
     }
 
     @Test
-    func decodingIgnoresUnknownFieldsThroughoutVersionOneSnapshot() throws {
+    func decodingIgnoresUnknownFieldsThroughoutMigratedVersionOneSnapshot() throws {
         var object = try jsonObject(Data(Self.versionOneFixture.utf8))
         object["futureTopLevel"] = true
         var workspaces = try #require(object["workspaces"] as? [[String: Any]])
@@ -182,7 +308,7 @@ struct StateStoreTests {
         expectMigrationError(.nonIntegerVersion, json: #"{"version":1.5}"#)
         expectMigrationError(.nonIntegerVersion, json: #"{"version":"1"}"#)
         expectMigrationError(.unsupportedOlderVersion(0), json: #"{"version":0}"#)
-        expectMigrationError(.unsupportedNewerVersion(2), json: #"{"version":2}"#)
+        expectMigrationError(.unsupportedNewerVersion(3), json: #"{"version":3}"#)
     }
 
     @Test
@@ -256,6 +382,62 @@ struct StateStoreTests {
         #expect(recorder.fileSyncCount == 2)
         #expect(recorder.directorySyncCount == 2)
         #expect(try ownTemporarySiblings(in: fixture).isEmpty)
+    }
+
+    @Test
+    func atomicSaveRoundTripsAllAgentBindingStates() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let recorder = StateStoreFileOperationRecorder()
+        let store = try fixture.makeStore(fileOperations: recorder.operations)
+        var state = try StateMigration.decode(Data(Self.versionTwoFixture.utf8))
+        let restoringTab = TerminalTab(
+            id: Self.tabID(24),
+            title: "Restoring",
+            pane: TerminalPaneDescriptor(
+                id: Self.paneID(24),
+                cwd: "/tmp",
+                agentResumeBinding: try AgentResumeBinding(
+                    adapterID: AgentAdapterID(rawValue: "claude-code"),
+                    sessionID: "restoring-session",
+                    workingDirectory: "/tmp/restoring",
+                    registeredAt: Date(timeIntervalSinceReferenceDate: 456_789),
+                    launchMetadata: [:],
+                    restoreState: .restoring
+                )
+            )
+        )
+        try state.workspaceStore.addTab(
+            restoringTab,
+            to: state.workspaceStore.activeWorkspaceID
+        )
+
+        try store.saveNow(state)
+
+        let restored = try StateMigration.decode(Data(contentsOf: fixture.stateURL))
+        let restoredTab = try #require(restored.workspaceStore.tab(id: Self.tabID(2)))
+        let restoredRestoringTab = try #require(
+            restored.workspaceStore.tab(id: restoringTab.id)
+        )
+        let restoreStates =
+            restoredTab.paneDescriptors.compactMap {
+                $0.agentResumeBinding?.restoreState
+            }
+            + restoredRestoringTab.paneDescriptors.compactMap {
+                $0.agentResumeBinding?.restoreState
+            }
+        #expect(restored == state)
+        #expect(
+            restoreStates == [
+                .active,
+                .failed(
+                    diagnosticCode: .immediateExit,
+                    failedAt: Date(timeIntervalSinceReferenceDate: 654_321)
+                ),
+                .unverified,
+                .restoring,
+            ])
+        #expect(recorder.events == [.temporaryWrite, .fileSync, .move, .directorySync])
     }
 
     @Test
@@ -345,6 +527,60 @@ struct StateStoreTests {
     }
 
     @Test
+    func malformedOptionalAgentBindingRecoversOnlyItsPaneWithoutBackup() throws {
+        let fixture = try StoreFixture(backupSuffix: "binding")
+        defer { fixture.remove() }
+        var object = try jsonObject(Data(Self.versionTwoFixture.utf8))
+        var workspaces = try #require(object["workspaces"] as? [[String: Any]])
+        var tabs = try #require(workspaces[0]["tabs"] as? [[String: Any]])
+        var descriptors = try #require(tabs[0]["paneDescriptors"] as? [[String: Any]])
+        descriptors[1]["agentResumeBinding"] = [
+            "adapterID": "INVALID",
+            "sessionID": "still-identifiable",
+        ]
+        tabs[0]["paneDescriptors"] = descriptors
+        workspaces[0]["tabs"] = tabs
+        object["workspaces"] = workspaces
+        let bytes = try JSONSerialization.data(withJSONObject: object)
+        try bytes.write(to: fixture.stateURL)
+
+        let state = try fixture.makeStore().load()
+
+        let tab = try #require(state.workspaceStore.tab(id: Self.tabID(2)))
+        #expect(tab.paneDescriptors.count == 3)
+        #expect(tab.paneDescriptor(for: Self.paneID(21))?.agentResumeBinding != nil)
+        #expect(tab.paneDescriptor(for: Self.paneID(22))?.agentResumeBinding == nil)
+        #expect(tab.paneDescriptor(for: Self.paneID(23))?.agentResumeBinding != nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.stateURL.path))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: fixture.directoryURL.appending(
+                    path: "state.json.backup-binding"
+                ).path
+            ) == false
+        )
+    }
+
+    @Test
+    func malformedCurrentWorkspaceCoreStillBacksUpAndReturnsDefault() throws {
+        let fixture = try StoreFixture(backupSuffix: "core")
+        defer { fixture.remove() }
+        var object = try jsonObject(Data(Self.versionTwoFixture.utf8))
+        var workspaces = try #require(object["workspaces"] as? [[String: Any]])
+        workspaces[0].removeValue(forKey: "tabs")
+        object["workspaces"] = workspaces
+        let bytes = try JSONSerialization.data(withJSONObject: object)
+        try bytes.write(to: fixture.stateURL)
+
+        let state = try fixture.makeStore().load()
+
+        let backupURL = fixture.directoryURL.appending(path: "state.json.backup-core")
+        #expect(FileManager.default.fileExists(atPath: fixture.stateURL.path) == false)
+        #expect(try Data(contentsOf: backupURL) == bytes)
+        #expect(state.workspaceStore.workspaces.first?.name == "Default")
+    }
+
+    @Test
     func corruptStateMovesExactBytesToDeterministicBackupAndReturnsDefault() throws {
         let fixture = try StoreFixture(backupSuffix: "20260714T120000Z")
         defer { fixture.remove() }
@@ -396,6 +632,45 @@ struct StateStoreTests {
             #expect(FileManager.default.fileExists(atPath: fixture.stateURL.path) == false)
             #expect(try Data(contentsOf: backupURL) == bytes)
             #expect(state.workspaceStore.workspaces.first?.name == "Default")
+        }
+    }
+
+    @Test
+    func invalidVersionOneFramesAreBackedUpAndReturnFreshState() throws {
+        let frames = [
+            (suffix: "zero-width", field: #""width": 900"#, replacement: #""width": 0"#),
+            (
+                suffix: "negative-height",
+                field: #""height": 600"#,
+                replacement: #""height": -1"#
+            ),
+            (
+                suffix: "nonfinite-width",
+                field: #""width": 900"#,
+                replacement: #""width": 1e400"#
+            ),
+        ]
+
+        for frame in frames {
+            let fixture = try StoreFixture(backupSuffix: frame.suffix)
+            defer { fixture.remove() }
+            let payload = Self.versionOneFixture.replacingOccurrences(
+                of: frame.field,
+                with: frame.replacement
+            )
+            let bytes = Data(payload.utf8)
+            try bytes.write(to: fixture.stateURL)
+
+            let state = try fixture.makeStore().load()
+
+            let backupURL = fixture.directoryURL.appending(
+                path: "state.json.backup-\(frame.suffix)"
+            )
+            #expect(FileManager.default.fileExists(atPath: fixture.stateURL.path) == false)
+            #expect(try Data(contentsOf: backupURL) == bytes)
+            #expect(state.version == ApplicationState.currentVersion)
+            #expect(state.workspaceStore.workspaces.first?.name == "Default")
+            #expect(state.normalWindowFrame == nil)
         }
     }
 
@@ -462,6 +737,49 @@ struct StateStoreTests {
                 == .custom("printf 'still pending'")
         )
         #expect(tab.isBroadcasting == false)
+    }
+
+    @Test
+    func loadDoesNotNormalizeMissingAgentBindingWorkingDirectory() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let missingBindingDirectory = fixture.directoryURL.appending(
+            path: "missing-agent-directory"
+        ).path
+        let pane = TerminalPaneDescriptor(
+            id: Self.paneID(300),
+            cwd: fixture.homeURL.path,
+            agentResumeBinding: try AgentResumeBinding(
+                adapterID: AgentAdapterID(rawValue: "claude-code"),
+                sessionID: "session-300",
+                workingDirectory: missingBindingDirectory,
+                registeredAt: Date(timeIntervalSinceReferenceDate: 123_456),
+                launchMetadata: ["model.name": "opus"],
+                restoreState: .unverified
+            )
+        )
+        let tab = TerminalTab(id: Self.tabID(300), title: "Agent", pane: pane)
+        let workspace = Workspace(
+            id: Self.workspaceID(300),
+            name: "Agent",
+            tabs: [tab],
+            activeTabID: tab.id
+        )
+        let state = ApplicationState(
+            workspaceStore: try WorkspaceStore(
+                workspaces: [workspace],
+                activeWorkspaceID: workspace.id
+            )
+        )
+        let store = try fixture.makeStore()
+        try store.saveNow(state)
+
+        let restored = try store.load()
+
+        #expect(
+            restored.workspaceStore.tab(id: tab.id)?.paneDescriptor(for: pane.id)?
+                .agentResumeBinding?.workingDirectory == missingBindingDirectory
+        )
     }
 
     @Test
@@ -828,6 +1146,111 @@ struct StateStoreTests {
             "width": 900,
             "height": 600
           }
+        }
+        """#
+
+    private static let versionTwoFixture = #"""
+        {
+          "version": 2,
+          "workspaces": [
+            {
+              "id": { "rawValue": "00000000-0000-0000-0000-000000002002" },
+              "name": "Agent Sessions",
+              "tabs": [
+                {
+                  "id": { "rawValue": "00000000-0000-0000-0000-000000001002" },
+                  "title": "Bound Agents",
+                  "root": {
+                    "kind": "split",
+                    "id": "00000000-0000-0000-0000-000000000010",
+                    "axis": "horizontal",
+                    "ratio": 0.5,
+                    "first": {
+                      "kind": "pane",
+                      "paneID": { "rawValue": "00000000-0000-0000-0000-000000000021" }
+                    },
+                    "second": {
+                      "kind": "split",
+                      "id": "00000000-0000-0000-0000-000000000011",
+                      "axis": "vertical",
+                      "ratio": 0.4,
+                      "first": {
+                        "kind": "pane",
+                        "paneID": { "rawValue": "00000000-0000-0000-0000-000000000022" }
+                      },
+                      "second": {
+                        "kind": "pane",
+                        "paneID": { "rawValue": "00000000-0000-0000-0000-000000000023" }
+                      }
+                    }
+                  },
+                  "paneDescriptors": [
+                    {
+                      "id": { "rawValue": "00000000-0000-0000-0000-000000000021" },
+                      "cwd": "/tmp",
+                      "startupCommand": { "kind": "shell" },
+                      "agentResumeBinding": {
+                        "adapterID": "claude-code",
+                        "sessionID": "active-session",
+                        "workingDirectory": "/tmp/active",
+                        "registeredAt": 123456,
+                        "launchMetadata": { "model.name": "opus" },
+                        "restoreState": { "kind": "active" },
+                        "futureLaunchArguments": ["--ignored"]
+                      }
+                    },
+                    {
+                      "id": { "rawValue": "00000000-0000-0000-0000-000000000022" },
+                      "cwd": "/tmp",
+                      "startupCommand": { "kind": "shell" },
+                      "agentResumeBinding": {
+                        "adapterID": "codex",
+                        "sessionID": "failed-session",
+                        "workingDirectory": "/tmp/failed",
+                        "registeredAt": 234567,
+                        "launchMetadata": { "resume.mode": "automatic" },
+                        "restoreState": {
+                          "kind": "failed",
+                          "diagnosticCode": "immediateExit",
+                          "failedAt": 654321
+                        }
+                      }
+                    },
+                    {
+                      "id": { "rawValue": "00000000-0000-0000-0000-000000000023" },
+                      "cwd": "/tmp",
+                      "startupCommand": { "kind": "shell" },
+                      "agentResumeBinding": {
+                        "adapterID": "pi",
+                        "sessionID": "unverified-session-猫",
+                        "workingDirectory": "/tmp/unverified",
+                        "registeredAt": 345678,
+                        "launchMetadata": { "model.name": "gpt-5" },
+                        "restoreState": { "kind": "unverified" }
+                      }
+                    }
+                  ],
+                  "activePaneID": {
+                    "rawValue": "00000000-0000-0000-0000-000000000021"
+                  },
+                  "isBroadcasting": false
+                }
+              ],
+              "activeTabID": {
+                "rawValue": "00000000-0000-0000-0000-000000001002"
+              }
+            }
+          ],
+          "activeWorkspaceID": {
+            "rawValue": "00000000-0000-0000-0000-000000002002"
+          },
+          "normalWindowFrame": {
+            "x": 44,
+            "y": 55,
+            "width": 1000,
+            "height": 700
+          },
+          "futureTopLevel": { "ignored": true }
         }
         """#
 

@@ -1142,6 +1142,99 @@ struct WorkspaceStoreTests {
     }
 
     @Test
+    func initializationAllowsDuplicateAdapterAndSessionBindingsInDifferentPanes() throws {
+        let firstWorkspaceID = workspaceID(1)
+        let secondWorkspaceID = workspaceID(2)
+        var firstTab = makeTab(1)
+        var secondTab = makeTab(2)
+        let firstPaneID = try #require(firstTab.paneDescriptors.first?.id)
+        let secondPaneID = try #require(secondTab.paneDescriptors.first?.id)
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude-code"),
+            sessionID: "shared-session",
+            workingDirectory: "/tmp/project",
+            registeredAt: Date(timeIntervalSinceReferenceDate: 123),
+            launchMetadata: [:],
+            restoreState: .active
+        )
+        _ = firstTab.updateAgentResumeBinding(binding, for: firstPaneID)
+        _ = secondTab.updateAgentResumeBinding(binding, for: secondPaneID)
+
+        let store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstWorkspaceID, name: "First", tabs: [firstTab]),
+                Workspace(id: secondWorkspaceID, name: "Second", tabs: [secondTab]),
+            ],
+            activeWorkspaceID: firstWorkspaceID
+        )
+
+        #expect(
+            store.tab(id: firstTab.id)?.paneDescriptor(for: firstPaneID)?.agentResumeBinding
+                == binding)
+        #expect(
+            store.tab(id: secondTab.id)?.paneDescriptor(for: secondPaneID)?.agentResumeBinding
+                == binding)
+    }
+
+    @Test
+    func updatingAgentResumeBindingTargetsPaneAndAllowsDuplicateBindings() throws {
+        let firstWorkspaceID = workspaceID(1)
+        let secondWorkspaceID = workspaceID(2)
+        let nestedTab = try makeNestedTab(1)
+        let otherTab = makeTab(2)
+        let firstPaneID = try #require(nestedTab.paneDescriptors.first?.id)
+        let secondPaneID = try #require(nestedTab.paneDescriptors.last?.id)
+        var store = try WorkspaceStore(
+            workspaces: [
+                Workspace(id: firstWorkspaceID, name: "First", tabs: [nestedTab]),
+                Workspace(id: secondWorkspaceID, name: "Second", tabs: [otherTab]),
+            ],
+            activeWorkspaceID: secondWorkspaceID
+        )
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude-code"),
+            sessionID: "session-1",
+            workingDirectory: "/tmp/project",
+            registeredAt: Date(timeIntervalSinceReferenceDate: 123),
+            launchMetadata: ["model": "opus"],
+            restoreState: .active
+        )
+
+        try store.updateAgentResumeBinding(binding, for: firstPaneID)
+        try store.updateAgentResumeBinding(binding, for: secondPaneID)
+
+        #expect(
+            store.tab(id: nestedTab.id)?.paneDescriptor(for: firstPaneID)?.agentResumeBinding
+                == binding)
+        #expect(
+            store.tab(id: nestedTab.id)?.paneDescriptor(for: secondPaneID)?.agentResumeBinding
+                == binding)
+        #expect(store.tab(id: otherTab.id) == otherTab)
+        #expect(store.activeWorkspaceID == secondWorkspaceID)
+
+        try store.updateAgentResumeBinding(nil, for: firstPaneID)
+        #expect(
+            store.tab(id: nestedTab.id)?.paneDescriptor(for: firstPaneID)?.agentResumeBinding == nil
+        )
+        #expect(
+            store.tab(id: nestedTab.id)?.paneDescriptor(for: secondPaneID)?.agentResumeBinding
+                == binding)
+    }
+
+    @Test
+    func updatingAgentResumeBindingRejectsUnknownPaneWithoutMutation() {
+        var store = WorkspaceStore()
+        let missingPaneID = paneID(999)
+        let beforeFailure = store
+
+        expectError(.paneNotFound(missingPaneID)) {
+            try store.updateAgentResumeBinding(nil, for: missingPaneID)
+        }
+
+        #expect(store == beforeFailure)
+    }
+
+    @Test
     func updatingWorkingDirectoryChangesOnlyTheMatchingDescriptor() throws {
         let firstWorkspaceID = workspaceID(1)
         let secondWorkspaceID = workspaceID(2)

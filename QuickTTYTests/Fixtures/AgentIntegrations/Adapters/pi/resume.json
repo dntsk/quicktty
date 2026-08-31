@@ -1,0 +1,11 @@
+{
+  "id": "pi",
+  "sessionID": "session-pi-123",
+  "arguments": [
+    "--session",
+    "session-pi-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

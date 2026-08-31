@@ -3,7 +3,7 @@ import Testing
 
 @testable import QuickTTY
 
-@Suite(.serialized)
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct WorkspacePresentationTests {
     @Test
@@ -1728,6 +1728,63 @@ struct WorkspacePresentationTests {
 
         #expect(tabBar.dataReloadGenerationForTesting == reloadGeneration)
         #expect(completionCount == 0)
+    }
+
+    @Test
+    func agentResumePresentationRefreshPreservesLiveSurfaceHostAndFocus() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/cat")
+        )
+        let controller = WorkspaceViewController()
+        let window = Self.mountWorkspace(controller)
+        defer { window.orderOut(nil) }
+
+        controller.displayTerminal(
+            root: .pane(surface.paneID),
+            surfaces: [surface.paneID: surface],
+            failures: [:],
+            agentResumePresentations: [surface.paneID: .restoring],
+            palette: .fallback,
+            activePaneID: surface.paneID,
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in },
+            onRetryAgentResume: { _ in },
+            onForgetAgentResume: { _ in }
+        )
+        Self.layoutWorkspace(controller, in: window)
+        await Task.yield()
+        Self.layoutWorkspace(controller, in: window)
+        #expect(window.makeFirstResponder(surface))
+        let hostID = try #require(controller.splitHostingControllerIdentifierForTesting)
+        let hostedSurfaceIDs = controller.hostedSurfaceIdentifiersForTesting
+
+        controller.displayTerminal(
+            root: .pane(surface.paneID),
+            surfaces: [surface.paneID: surface],
+            failures: [:],
+            agentResumePresentations: [surface.paneID: .unverified],
+            palette: .fallback,
+            activePaneID: surface.paneID,
+            onResize: { _, _ in },
+            onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in },
+            onCloseUnavailablePane: { _ in },
+            onRetryAgentResume: { _ in },
+            onForgetAgentResume: { _ in }
+        )
+        Self.layoutWorkspace(controller, in: window)
+
+        #expect(controller.splitHostingControllerIdentifierForTesting == hostID)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == hostedSurfaceIDs)
+        #expect(
+            controller.hostedAgentResumePresentationsForTesting
+                == [surface.paneID: .unverified]
+        )
+        #expect(window.firstResponder === surface)
     }
 
     private static func normalizedRGBA(_ color: GhosttyRGB, alpha: CGFloat) -> [CGFloat] {

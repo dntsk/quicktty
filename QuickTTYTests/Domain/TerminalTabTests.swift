@@ -285,6 +285,36 @@ struct TerminalTabTests {
     }
 
     @Test
+    func updateAgentResumeBindingOnlyMutatesExistingTargetAndCanClearIt() throws {
+        let firstPaneID = paneID(1)
+        let secondPaneID = paneID(2)
+        var tab = try makeSplitTab()
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude-code"),
+            sessionID: "session-1",
+            workingDirectory: "/tmp/project",
+            registeredAt: Date(timeIntervalSinceReferenceDate: 123),
+            launchMetadata: ["model": "opus"],
+            restoreState: .active
+        )
+
+        let didUpdate = tab.updateAgentResumeBinding(binding, for: firstPaneID)
+
+        #expect(didUpdate)
+        #expect(tab.paneDescriptor(for: firstPaneID)?.agentResumeBinding == binding)
+        #expect(tab.paneDescriptor(for: secondPaneID)?.agentResumeBinding == nil)
+
+        let beforeMissingPane = tab
+        let didUpdateMissingPane = tab.updateAgentResumeBinding(binding, for: paneID(999))
+        #expect(!didUpdateMissingPane)
+        #expect(tab == beforeMissingPane)
+
+        let didClear = tab.updateAgentResumeBinding(nil, for: firstPaneID)
+        #expect(didClear)
+        #expect(tab.paneDescriptor(for: firstPaneID)?.agentResumeBinding == nil)
+    }
+
+    @Test
     func activatePaneAndUpdateSplitRatioOnlyMutateExistingTargets() throws {
         let firstPaneID = paneID(1)
         let secondPaneID = paneID(2)

@@ -238,6 +238,18 @@ struct TerminalTab: Codable, Equatable, Sendable {
     }
 
     @discardableResult
+    mutating func updateAgentResumeBinding(
+        _ binding: AgentResumeBinding?,
+        for paneID: PaneID
+    ) -> Bool {
+        guard let descriptorIndex = paneDescriptors.firstIndex(where: { $0.id == paneID }) else {
+            return false
+        }
+        paneDescriptors[descriptorIndex].agentResumeBinding = binding
+        return true
+    }
+
+    @discardableResult
     mutating func activatePane(_ paneID: PaneID) -> Bool {
         guard root.contains(paneID) else { return false }
         activePaneID = paneID

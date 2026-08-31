@@ -16,8 +16,30 @@ struct ConfigDocumentTests {
         #expect(config.quakePadding == 0)
         #expect(config.hideOnFocusLoss)
         #expect(config.restoreWorkspaces)
+        #expect(config.restoreAgentSessions)
         #expect(config.configEditor == "nano")
         #expect(config.shortcuts == .defaults)
+    }
+
+    @Test
+    func agentSessionRestorePolicyRequiresWorkspaceAndAgentRestore() {
+        var config = QuickTTYConfig()
+
+        config.restoreWorkspaces = false
+        config.restoreAgentSessions = false
+        #expect(!config.shouldRestoreAgentSessions)
+
+        config.restoreWorkspaces = false
+        config.restoreAgentSessions = true
+        #expect(!config.shouldRestoreAgentSessions)
+
+        config.restoreWorkspaces = true
+        config.restoreAgentSessions = false
+        #expect(!config.shouldRestoreAgentSessions)
+
+        config.restoreWorkspaces = true
+        config.restoreAgentSessions = true
+        #expect(config.shouldRestoreAgentSessions)
     }
 
     @Test
@@ -35,6 +57,7 @@ struct ConfigDocumentTests {
                     "quicktty-update-channel",
                     "quicktty-hide-on-focus-loss",
                     "quicktty-restore-workspaces",
+                    "quicktty-restore-agent-sessions",
                     "quicktty-config-editor",
                 ]
         )
@@ -195,10 +218,11 @@ struct ConfigDocumentTests {
     }
 
     @Test
-    func parsesWorkspaceRestoreAndEditorValuesIncludingArguments() {
+    func parsesWorkspaceAndAgentRestoreAndEditorValuesIncludingArguments() {
         let document = ConfigDocument(
             text: """
                 quicktty-restore-workspaces = false
+                quicktty-restore-agent-sessions = false
                 quicktty-config-editor = \t nvim --nofork \t
                 """
         )
@@ -207,7 +231,16 @@ struct ConfigDocumentTests {
 
         #expect(result.diagnostics.isEmpty)
         #expect(!result.config.restoreWorkspaces)
+        #expect(!result.config.restoreAgentSessions)
         #expect(result.config.configEditor == "nvim --nofork")
+
+        var previousConfig = QuickTTYConfig()
+        previousConfig.restoreAgentSessions = false
+        let enabled = ConfigDocument(
+            text: "quicktty-restore-agent-sessions = true\n"
+        ).parse(previousConfig: previousConfig)
+        #expect(enabled.diagnostics.isEmpty)
+        #expect(enabled.config.restoreAgentSessions)
     }
 
     @Test(arguments: ["TRUE", "False", "yes", "0"])
@@ -222,6 +255,45 @@ struct ConfigDocumentTests {
                 ConfigDiagnostic(
                     line: 1,
                     key: QuickTTYConfig.Key.restoreWorkspaces.rawValue,
+                    reason: .invalidBoolean
+                )
+            ]
+        )
+    }
+
+    @Test(arguments: ["TRUE", "False", "yes", "0"])
+    func restoreAgentSessionsRejectsNonExactBooleanValues(_ value: String) {
+        let result = ConfigDocument(
+            text: "quicktty-restore-agent-sessions = \(value)\n"
+        ).parse()
+
+        #expect(result.config.restoreAgentSessions)
+        #expect(
+            result.diagnostics == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: QuickTTYConfig.Key.restoreAgentSessions.rawValue,
+                    reason: .invalidBoolean
+                )
+            ]
+        )
+    }
+
+    @Test
+    func invalidAgentSessionRestoreKeepsPreviousValueOnReloadTransaction() {
+        var previousConfig = QuickTTYConfig()
+        previousConfig.restoreAgentSessions = false
+
+        let result = ConfigDocument(
+            text: "quicktty-restore-agent-sessions = TRUE\n"
+        ).parse(previousConfig: previousConfig)
+
+        #expect(!result.config.restoreAgentSessions)
+        #expect(
+            result.diagnostics == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: QuickTTYConfig.Key.restoreAgentSessions.rawValue,
                     reason: .invalidBoolean
                 )
             ]
@@ -247,18 +319,30 @@ struct ConfigDocumentTests {
     }
 
     @Test
-    func duplicateWorkspaceRestoreAndEditorAssignmentsUseLastValidValue() {
+    func duplicateRestoreAndEditorAssignmentsUseLastValidValue() {
         let result = ConfigDocument(
             text: """
                 quicktty-restore-workspaces = false
                 quicktty-restore-workspaces = true
+                quicktty-restore-agent-sessions = true
+                quicktty-restore-agent-sessions = false
+                quicktty-restore-agent-sessions = invalid
                 quicktty-config-editor = vim
                 quicktty-config-editor = code --wait
                 """
         ).parse()
 
-        #expect(result.diagnostics.isEmpty)
+        #expect(
+            result.diagnostics == [
+                ConfigDiagnostic(
+                    line: 5,
+                    key: QuickTTYConfig.Key.restoreAgentSessions.rawValue,
+                    reason: .invalidBoolean
+                )
+            ]
+        )
         #expect(result.config.restoreWorkspaces)
+        #expect(!result.config.restoreAgentSessions)
         #expect(result.config.configEditor == "code --wait")
     }
 
@@ -388,6 +472,7 @@ struct ConfigDocumentTests {
                 + "quicktty-quake-padding = 8\r\n"
                 + "quicktty-hide-on-focus-loss = false\r\n"
                 + "quicktty-restore-workspaces = false\r\n"
+                + "quicktty-restore-agent-sessions = false\r\n"
                 + "quicktty-config-editor = code --wait\r\n"
                 + "include = themes/local.conf").utf8
         )
@@ -403,6 +488,7 @@ struct ConfigDocumentTests {
         #expect(result.config.quakePadding == 8)
         #expect(!result.config.hideOnFocusLoss)
         #expect(!result.config.restoreWorkspaces)
+        #expect(!result.config.restoreAgentSessions)
         #expect(result.config.configEditor == "code --wait")
         #expect(
             document.filteredGhosttyData

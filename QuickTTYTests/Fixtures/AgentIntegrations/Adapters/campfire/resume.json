@@ -1,0 +1,9 @@
+{
+  "id": "campfire",
+  "sessionID": "session-campfire-123",
+  "arguments": [],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ],
+  "blockedReason": "notSessionfulAgent"
+}

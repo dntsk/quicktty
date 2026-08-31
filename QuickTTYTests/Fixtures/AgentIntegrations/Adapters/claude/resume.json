@@ -1,0 +1,11 @@
+{
+  "id": "claude",
+  "sessionID": "session-claude-123",
+  "arguments": [
+    "--resume",
+    "session-claude-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

@@ -12,7 +12,7 @@ private final class BroadcastMenuActionTarget: NSObject {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct BroadcastInputTests {
     @Test

@@ -1,0 +1,11 @@
+{
+  "id": "gemini",
+  "sessionID": "session-gemini-123",
+  "arguments": [
+    "--resume",
+    "session-gemini-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

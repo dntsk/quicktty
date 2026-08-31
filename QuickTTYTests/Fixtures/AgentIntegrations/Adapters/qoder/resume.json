@@ -1,0 +1,11 @@
+{
+  "id": "qoder",
+  "sessionID": "session-qoder-123",
+  "arguments": [
+    "--resume",
+    "session-qoder-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

@@ -1,0 +1,1 @@
+{"adapter":"omp","endEvents":["session_shutdown"],"installer":"ownedFile","physicalQuitReason":"quit","startEvents":["session_start"],"switchEvents":["session_switch"],"versionProbe":"unverified"}

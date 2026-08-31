@@ -163,6 +163,7 @@ struct ConfigDocument: Equatable, Sendable {
         var validShortcutActions = Set<ShortcutAction>()
         var invalidShortcutLines: [ShortcutAction: Int] = [:]
         var hasValidGlobalToggle = false
+        var hasValidRestoreAgentSessions = false
 
         for (index, line) in lines.enumerated() {
             let lineNumber = index + 1
@@ -210,6 +211,7 @@ struct ConfigDocument: Equatable, Sendable {
                 line: lineNumber,
                 previousConfig: previousConfig,
                 hasValidGlobalToggle: &hasValidGlobalToggle,
+                hasValidRestoreAgentSessions: &hasValidRestoreAgentSessions,
                 to: &config,
                 diagnostics: &diagnostics
             )
@@ -524,6 +526,7 @@ struct ConfigDocument: Equatable, Sendable {
         line: Int,
         previousConfig: QuickTTYConfig?,
         hasValidGlobalToggle: inout Bool,
+        hasValidRestoreAgentSessions: inout Bool,
         to config: inout QuickTTYConfig,
         diagnostics: inout [ConfigDiagnostic]
     ) {
@@ -638,6 +641,18 @@ struct ConfigDocument: Equatable, Sendable {
                 return
             }
             config.restoreWorkspaces = value == "true"
+        case .restoreAgentSessions:
+            guard value == "true" || value == "false" else {
+                if !hasValidRestoreAgentSessions, let previousConfig {
+                    config.restoreAgentSessions = previousConfig.restoreAgentSessions
+                }
+                diagnostics.append(
+                    ConfigDiagnostic(line: line, key: key.rawValue, reason: .invalidBoolean)
+                )
+                return
+            }
+            config.restoreAgentSessions = value == "true"
+            hasValidRestoreAgentSessions = true
         case .configEditor:
             guard !value.utf8.contains(0), !value.contains("\n"), !value.contains("\r") else {
                 diagnostics.append(

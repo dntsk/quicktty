@@ -59,6 +59,7 @@ struct ConfigControllerTests {
             """
             font-family = Changed\r
             quicktty-restore-workspaces = false\r
+            quicktty-restore-agent-sessions = false\r
             quicktty-config-editor = code --wait\r
             """.utf8
         ).write(to: fixture.configURL)
@@ -66,6 +67,7 @@ struct ConfigControllerTests {
         try controller.reload()
 
         #expect(!controller.activeConfig.restoreWorkspaces)
+        #expect(!controller.activeConfig.restoreAgentSessions)
         #expect(controller.activeConfig.configEditor == "code --wait")
         #expect(
             try Data(contentsOf: fixture.effectiveURL)
@@ -623,6 +625,7 @@ struct ConfigControllerTests {
                     quicktty-quake-padding = 0
                     quicktty-hide-on-focus-loss = true
                     quicktty-restore-workspaces = true
+                    quicktty-restore-agent-sessions = true
                     quicktty-config-editor = nano
                     """.utf8
                 )
@@ -842,6 +845,7 @@ private struct ConfigFixture {
         quicktty-quake-padding = 0
         quicktty-hide-on-focus-loss = true
         quicktty-restore-workspaces = true
+        quicktty-restore-agent-sessions = true
         quicktty-config-editor = nano
         """.utf8
     )

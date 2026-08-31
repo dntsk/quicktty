@@ -1,0 +1,4 @@
+{
+  "unknown": {"enabled": true, "label": "preserve-me", "token": "FIXTURE_SECRET_DO_NOT_LEAK_11"},
+  "hooks": {"start": [{"command": "user-command", "kind": "user"}]}
+}

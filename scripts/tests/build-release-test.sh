@@ -85,6 +85,29 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
+grep -F -x 'CLI_HELPER_IDENTIFIER=com.dntsk.QuickTTY.cli' "$build_script" >/dev/null \
+    || fail 'release build script does not use the exact CLI helper identifier'
+helper_identifier_line=$(grep -nF -x '    --identifier "$CLI_HELPER_IDENTIFIER" \' "$build_script" \
+    | /usr/bin/cut -d: -f1)
+[ -n "$helper_identifier_line" ] || fail 'release build script does not pass the CLI helper identifier to codesign'
+helper_sign_line=$((helper_identifier_line - 1))
+[ "$(/usr/bin/awk -v line="$helper_sign_line" 'NR == line { print }' "$build_script")" = \
+    '"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \' ] \
+    || fail 'CLI helper codesign options or order are not exact'
+sparkle_layout_line=$(grep -nF -x 'release_verify_sparkle_signing_layout "$staged_app"' \
+    "$build_script" | /usr/bin/cut -d: -f1)
+[ -n "$sparkle_layout_line" ] && [ "$sparkle_layout_line" -lt "$helper_sign_line" ] \
+    || fail 'staged Sparkle layout must be validated before any codesign invocation'
+sparkle_sign_line=$(grep -nF -x \
+    '    "$staged_app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \' \
+    "$build_script" | /usr/bin/cut -d: -f1)
+outer_app_sign_line=$(grep -nF -x '    "$staged_app" \' "$build_script" | /usr/bin/cut -d: -f1)
+outer_app_verification_line=$(grep -nF -x 'verify_signed_app_bundle "$staged_app"' "$build_script" \
+    | /usr/bin/cut -d: -f1)
+[ "$helper_sign_line" -lt "$sparkle_sign_line" ] \
+    && [ "$sparkle_sign_line" -lt "$outer_app_sign_line" ] \
+    && [ "$outer_app_sign_line" -lt "$outer_app_verification_line" ] \
+    || fail 'signing order must be CLI helper, Sparkle, outer app, then verification'
 grep -F -x '        CURRENT_PROJECT_VERSION: 9' "$project_spec" >/dev/null \
     || fail 'project spec does not set CURRENT_PROJECT_VERSION to 9'
 grep -F -x '        GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
@@ -180,6 +203,8 @@ case "$tmp_root" in
     "$tmp_base"/quicktty-release-test.*) ;;
     *) fail "temporary directory has an unexpected path: $tmp_root" ;;
 esac
+TMPDIR=$tmp_root
+export TMPDIR
 
 malicious_bin=$tmp_root/malicious-bin
 malicious_marker=$tmp_root/malicious-command-ran
@@ -328,17 +353,43 @@ assert_equals "$(release_source_tree_state "$provenance_repo" /usr/bin/git)" cle
 layout_app=$tmp_root/Layout.app
 layout_macos=$layout_app/Contents/MacOS
 layout_resources=$layout_app/Contents/Resources
-mkdir -p "$layout_macos" "$layout_resources"
+layout_helpers=$layout_app/Contents/Helpers
+mkdir -p "$layout_macos" "$layout_resources" "$layout_helpers"
 cp /usr/bin/true "$layout_macos/QuickTTY"
+printf 'fixture arm64 executable\n' >"$layout_helpers/quicktty"
+chmod 755 "$layout_helpers/quicktty"
 printf '#!/bin/sh\nexit 0\n' >"$layout_resources/resource-script.sh"
 chmod +x "$layout_resources/resource-script.sh"
 release_verify_app_code_layout "$layout_app" QuickTTY /usr/bin/file
-mkdir "$layout_app/Contents/Frameworks"
+layout_frameworks=$layout_app/Contents/Frameworks
+layout_later_operation=$tmp_root/layout-later-security-operation
+expect_layout_failure_before_later_operation() {
+    rm -f "$layout_later_operation"
+    if (release_verify_app_code_layout "$layout_app" QuickTTY /usr/bin/file; \
+        : >"$layout_later_operation") >"$tmp_root/command-output" 2>&1
+    then
+        fail 'expected Frameworks layout verification to fail'
+    fi
+    assert_missing "$layout_later_operation"
+}
+
+mkdir "$layout_frameworks"
 release_verify_app_code_layout "$layout_app" QuickTTY /usr/bin/file
-touch "$layout_app/Contents/Frameworks/unexpected"
-expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" QuickTTY /usr/bin/file' sh \
-    "$helpers" "$layout_app"
-rm "$layout_app/Contents/Frameworks/unexpected"
+mkdir "$tmp_root/frameworks-symlink-target"
+rm -rf "$layout_frameworks"
+ln -s "$tmp_root/frameworks-symlink-target" "$layout_frameworks"
+expect_layout_failure_before_later_operation
+rm "$layout_frameworks"
+mkdir "$layout_frameworks"
+touch "$layout_frameworks/.hidden"
+expect_layout_failure_before_later_operation
+rm "$layout_frameworks/.hidden"
+touch "$layout_frameworks/..hidden"
+expect_layout_failure_before_later_operation
+rm "$layout_frameworks/..hidden"
+touch "$layout_frameworks/unexpected"
+expect_layout_failure_before_later_operation
+rm "$layout_frameworks/unexpected"
 cp /usr/bin/true "$layout_resources/nested-macho"
 expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" QuickTTY /usr/bin/file' sh \
     "$helpers" "$layout_app"
@@ -347,6 +398,263 @@ touch "$layout_macos/unexpected"
 expect_failure sh -c '. "$1"; release_verify_app_code_layout "$2" QuickTTY /usr/bin/file' sh \
     "$helpers" "$layout_app"
 rm "$layout_macos/unexpected"
+
+integration_function_fixture=$tmp_root/build-release-integration-functions.sh
+/usr/bin/awk '
+    /^require_regular_file\(\) \{/ { capture = 1 }
+    /^plist_value\(\) \{/ { capture = 0 }
+    capture { print }
+' "$build_script" >"$integration_function_fixture"
+. "$integration_function_fixture"
+stat_path=/usr/bin/stat
+
+integration_fixture_resources=$tmp_root/IntegrationResources
+reset_integration_fixture() {
+    rm -rf "$integration_fixture_resources"
+    mkdir -p "$integration_fixture_resources"
+    cp -R "$repo_root/QuickTTY/Resources/AgentSessionIntegrations" \
+        "$integration_fixture_resources/AgentSessionIntegrations"
+}
+expect_integration_fixture_failure() {
+    if (verify_agent_session_integrations "$integration_fixture_resources") \
+        >"$tmp_root/command-output" 2>&1
+    then
+        fail 'expected AgentSessionIntegrations verification to fail'
+    fi
+}
+
+reset_integration_fixture
+verify_agent_session_integrations "$integration_fixture_resources"
+rm -rf "$integration_fixture_resources/AgentSessionIntegrations"
+expect_integration_fixture_failure
+reset_integration_fixture
+rm "$integration_fixture_resources/AgentSessionIntegrations/pi/index.ts"
+expect_integration_fixture_failure
+reset_integration_fixture
+printf 'corrupted\n' >"$integration_fixture_resources/AgentSessionIntegrations/pi/index.ts"
+expect_integration_fixture_failure
+reset_integration_fixture
+rm "$integration_fixture_resources/AgentSessionIntegrations/pi/index.ts"
+ln -s /usr/bin/true "$integration_fixture_resources/AgentSessionIntegrations/pi/index.ts"
+expect_integration_fixture_failure
+reset_integration_fixture
+mkdir "$integration_fixture_resources/AgentSessionIntegrations/grok"
+expect_integration_fixture_failure
+reset_integration_fixture
+touch "$integration_fixture_resources/AgentSessionIntegrations/unknown-resource"
+expect_integration_fixture_failure
+reset_integration_fixture
+chmod 644 "$integration_fixture_resources/AgentSessionIntegrations/amp/wrapper/amp"
+expect_integration_fixture_failure
+
+build_function_fixture=$tmp_root/build-release-functions.sh
+/usr/bin/awk '
+    /^verify_signature_metadata\(\) \{/ { capture = 1 }
+    /^verify_bundle\(\) \{/ { capture = 0 }
+    capture { print }
+' "$build_script" >"$build_function_fixture"
+. "$build_function_fixture"
+
+mock_tools=$tmp_root/mock-tools
+mock_signature_metadata=$tmp_root/mock-signature-metadata
+mock_entitlements=$tmp_root/mock-entitlements
+mock_file_description=$tmp_root/mock-file-description
+mock_lipo_architectures=$tmp_root/mock-lipo-architectures
+mock_codesign_log=$tmp_root/mock-codesign-log
+mkdir "$mock_tools"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'printf "%s\n" "$*" >>"$QUICKTTY_MOCK_CODESIGN_LOG"' \
+    'if [ "$1" = -d ] && [ "$2" = -vvv ]; then cat "$QUICKTTY_MOCK_SIGNATURE_METADATA" >&2; exit 0; fi' \
+    'if [ "$1" = -d ] && [ "$2" = --entitlements ]; then cat "$QUICKTTY_MOCK_ENTITLEMENTS"; exit 0; fi' \
+    'if [ "$1" = --verify ]; then exit 0; fi' \
+    'exit 97' >"$mock_tools/codesign"
+printf '%s\n' \
+    '#!/bin/sh' \
+    'if [ -n "${QUICKTTY_MOCK_MACHO_PATH:-}" ] && [ "${2:-}" != "$QUICKTTY_MOCK_MACHO_PATH" ]; then printf "%s\\n" data; else cat "$QUICKTTY_MOCK_FILE_DESCRIPTION"; fi' \
+    >"$mock_tools/file"
+printf '%s\n' '#!/bin/sh' 'cat "$QUICKTTY_MOCK_LIPO_ARCHITECTURES"' >"$mock_tools/lipo"
+chmod +x "$mock_tools/codesign" "$mock_tools/file" "$mock_tools/lipo"
+
+codesign_path=$mock_tools/codesign
+file_path=$mock_tools/file
+lipo_path=$mock_tools/lipo
+stat_path=/usr/bin/stat
+CLI_HELPER_NAME=quicktty
+CLI_HELPER_IDENTIFIER=com.dntsk.QuickTTY.cli
+export QUICKTTY_MOCK_CODESIGN_LOG="$mock_codesign_log"
+export QUICKTTY_MOCK_SIGNATURE_METADATA="$mock_signature_metadata"
+export QUICKTTY_MOCK_ENTITLEMENTS="$mock_entitlements"
+export QUICKTTY_MOCK_FILE_DESCRIPTION="$mock_file_description"
+export QUICKTTY_MOCK_LIPO_ARCHITECTURES="$mock_lipo_architectures"
+
+cli_fixture_app=$tmp_root/CLIHelper.app
+cli_fixture_helpers=$cli_fixture_app/Contents/Helpers
+cli_fixture_helper=$cli_fixture_helpers/quicktty
+reset_cli_fixture() {
+    rm -rf "$cli_fixture_app"
+    mkdir -p "$cli_fixture_helpers"
+    printf 'fixture arm64 executable\n' >"$cli_fixture_helper"
+    chmod 755 "$cli_fixture_helper"
+    printf '%s\n' \
+        'Identifier=com.dntsk.QuickTTY.cli' \
+        "Authority=$CODE_SIGN_IDENTITY" \
+        "TeamIdentifier=$DEVELOPMENT_TEAM" \
+        'Timestamp=Aug 7, 2026 at 12:00:00' \
+        'CodeDirectory flags=0x10000(runtime)' >"$mock_signature_metadata"
+    : >"$mock_entitlements"
+    printf '%s\n' 'Mach-O 64-bit executable arm64' >"$mock_file_description"
+    printf '%s\n' arm64 >"$mock_lipo_architectures"
+    : >"$mock_codesign_log"
+}
+
+expect_cli_fixture_failure() {
+    if (verify_cli_helper_signature "$cli_fixture_app") >"$tmp_root/command-output" 2>&1; then
+        fail 'expected CLI helper verification to fail'
+    fi
+}
+
+reset_cli_fixture
+verify_cli_helper_signature "$cli_fixture_app"
+grep -F -x -- "--verify --strict --verbose=4 $cli_fixture_helper" "$mock_codesign_log" >/dev/null \
+    || fail 'CLI helper strict signature verification was not invoked'
+grep -F -x -- "-d -vvv $cli_fixture_helper" "$mock_codesign_log" >/dev/null \
+    || fail 'CLI helper signature metadata was not inspected'
+grep -F -x -- "-d --entitlements :- $cli_fixture_helper" "$mock_codesign_log" >/dev/null \
+    || fail 'CLI helper entitlements were not inspected'
+
+reset_cli_fixture
+rm "$cli_fixture_helper"
+expect_cli_fixture_failure
+reset_cli_fixture
+touch "$cli_fixture_helpers/extra"
+expect_cli_fixture_failure
+reset_cli_fixture
+mkdir "$cli_fixture_helpers/extra-directory"
+expect_cli_fixture_failure
+reset_cli_fixture
+rm "$cli_fixture_helper"
+ln -s /usr/bin/true "$cli_fixture_helper"
+expect_cli_fixture_failure
+reset_cli_fixture
+rm "$cli_fixture_helper"
+mkdir "$cli_fixture_helper"
+expect_cli_fixture_failure
+reset_cli_fixture
+chmod 644 "$cli_fixture_helper"
+expect_cli_fixture_failure
+reset_cli_fixture
+chmod 775 "$cli_fixture_helper"
+expect_cli_fixture_failure
+reset_cli_fixture
+printf '%s\n' 'arm64 x86_64' >"$mock_lipo_architectures"
+expect_cli_fixture_failure
+reset_cli_fixture
+printf '%s\n' x86_64 >"$mock_lipo_architectures"
+expect_cli_fixture_failure
+reset_cli_fixture
+/usr/bin/sed -i '' 's/Identifier=com.dntsk.QuickTTY.cli/Identifier=com.dntsk.QuickTTY.wrong/' \
+    "$mock_signature_metadata"
+expect_cli_fixture_failure
+reset_cli_fixture
+/usr/bin/sed -i '' 's/CodeDirectory flags=0x10000(runtime)/CodeDirectory flags=0x0(none)/' \
+    "$mock_signature_metadata"
+expect_cli_fixture_failure
+reset_cli_fixture
+/usr/bin/sed -i '' "s|Authority=$CODE_SIGN_IDENTITY|Authority=Developer ID Application: Wrong (WRONG12345)|" \
+    "$mock_signature_metadata"
+expect_cli_fixture_failure
+reset_cli_fixture
+/usr/bin/sed -i '' "s/TeamIdentifier=$DEVELOPMENT_TEAM/TeamIdentifier=WRONG12345/" \
+    "$mock_signature_metadata"
+expect_cli_fixture_failure
+reset_cli_fixture
+printf '%s\n' '<plist><dict><key>com.apple.security.app-sandbox</key><true/></dict></plist>' \
+    >"$mock_entitlements"
+expect_cli_fixture_failure
+
+nested_fixture_app=$tmp_root/NestedCode.app
+nested_sparkle=$nested_fixture_app/Contents/Frameworks/Sparkle.framework/Versions/B
+nested_autoupdate=$nested_sparkle/Autoupdate
+nested_later_operation=$tmp_root/nested-later-security-operation
+mkdir -p \
+    "$nested_sparkle/XPCServices/Installer.xpc/Contents/MacOS" \
+    "$nested_sparkle/XPCServices/Downloader.xpc/Contents/MacOS" \
+    "$nested_sparkle/Updater.app/Contents/MacOS"
+for nested_fixture_executable in \
+    "$nested_autoupdate" \
+    "$nested_sparkle/Sparkle" \
+    "$nested_sparkle/XPCServices/Installer.xpc/Contents/MacOS/Installer" \
+    "$nested_sparkle/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+    "$nested_sparkle/Updater.app/Contents/MacOS/Updater"
+do
+    printf 'fixture Mach-O\n' >"$nested_fixture_executable"
+    chmod 755 "$nested_fixture_executable"
+done
+export QUICKTTY_MOCK_MACHO_PATH="$nested_autoupdate"
+reset_nested_signature_metadata() {
+    printf '%s\n' \
+        'Identifier=Autoupdate-fixture' \
+        "Authority=$CODE_SIGN_IDENTITY" \
+        "TeamIdentifier=$DEVELOPMENT_TEAM" \
+        'Timestamp=Aug 7, 2026 at 12:00:00' \
+        'CodeDirectory flags=0x10000(runtime)' >"$mock_signature_metadata"
+    : >"$mock_codesign_log"
+    rm -f "$nested_later_operation"
+}
+expect_nested_failure_before_later_operation() {
+    if (release_verify_nested_code_recursively \
+        "$nested_fixture_app" "$codesign_path" "$file_path" \
+        "$CODE_SIGN_IDENTITY" "$DEVELOPMENT_TEAM"; \
+        "$codesign_path" --verify --strict --deep --verbose=4 "$nested_fixture_app"; \
+        : >"$nested_later_operation") >"$tmp_root/command-output" 2>&1
+    then
+        fail 'expected nested code verification to fail'
+    fi
+    assert_missing "$nested_later_operation"
+    if grep -F -x -- "--verify --strict --deep --verbose=4 $nested_fixture_app" \
+        "$mock_codesign_log" >/dev/null
+    then
+        fail 'outer app verification ran after nested code verification failed'
+    fi
+}
+
+reset_nested_signature_metadata
+release_verify_nested_code_recursively \
+    "$nested_fixture_app" "$codesign_path" "$file_path" \
+    "$CODE_SIGN_IDENTITY" "$DEVELOPMENT_TEAM"
+grep -F -x -- "--verify --strict --verbose=4 $nested_autoupdate" "$mock_codesign_log" >/dev/null \
+    || fail 'nested Mach-O strict verification was not invoked'
+grep -F -x -- "-d -vvv $nested_autoupdate" "$mock_codesign_log" >/dev/null \
+    || fail 'nested Mach-O signature metadata was not inspected'
+
+reset_nested_signature_metadata
+mock_find_failure=$mock_tools/find-failure
+printf '%s\n' '#!/bin/sh' 'exit 73' >"$mock_find_failure"
+chmod +x "$mock_find_failure"
+release_real_find_path=$RELEASE_FIND_PATH
+RELEASE_FIND_PATH=$mock_find_failure
+expect_nested_failure_before_later_operation
+RELEASE_FIND_PATH=$release_real_find_path
+for nested_code_list in "$TMPDIR"/quicktty-nested-code.*; do
+    [ ! -e "$nested_code_list" ] && [ ! -L "$nested_code_list" ] \
+        || fail "nested code list leaked after find failure: $nested_code_list"
+done
+
+reset_nested_signature_metadata
+/usr/bin/sed -i '' "s|Authority=$CODE_SIGN_IDENTITY|Authority=Developer ID Application: Wrong (WRONG12345)|" \
+    "$mock_signature_metadata"
+expect_nested_failure_before_later_operation
+reset_nested_signature_metadata
+/usr/bin/sed -i '' "s/TeamIdentifier=$DEVELOPMENT_TEAM/TeamIdentifier=WRONG12345/" \
+    "$mock_signature_metadata"
+expect_nested_failure_before_later_operation
+reset_nested_signature_metadata
+/usr/bin/sed -i '' 's/CodeDirectory flags=0x10000(runtime)/CodeDirectory flags=0x0(none)/' \
+    "$mock_signature_metadata"
+expect_nested_failure_before_later_operation
+unset QUICKTTY_MOCK_MACHO_PATH
 
 symlink_main_app=$tmp_root/SymlinkMain.app
 mkdir -p "$symlink_main_app/Contents/MacOS"

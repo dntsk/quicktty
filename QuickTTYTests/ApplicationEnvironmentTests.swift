@@ -12,6 +12,14 @@ struct ApplicationEnvironmentTests {
     }
 
     @Test
+    func hostedApplicationBundleContainsCLIHelper() throws {
+        let helperURL = ApplicationEnvironment.bundledAgentHelperURL()
+
+        #expect(helperURL.path.hasSuffix("/QuickTTY.app/Contents/Helpers/quicktty"))
+        #expect(FileManager.default.isExecutableFile(atPath: helperURL.path))
+    }
+
+    @Test
     func hostedApplicationBundleContainsAgentIntegrationResources() throws {
         let resourceURL = try #require(Bundle.main.resourceURL)
         let integrationURL = resourceURL.appending(

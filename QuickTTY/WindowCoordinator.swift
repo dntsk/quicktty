@@ -26,6 +26,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ) -> Void
     typealias ErrorHandler = @MainActor (Error) -> Void
     typealias TerminalActivityEffectHandler = @MainActor (TerminalActivityEffect) -> Void
+    typealias AgentRestoreCompatibilityProvider =
+        @MainActor ([AgentAdapterID]) -> [AgentAdapterID: AgentRestoreCompatibility]
+    typealias AgentRestoreHomeDirectory = @MainActor () -> String
+    typealias AgentRestoreWorkingDirectoryExists = @MainActor (String) -> Bool
+    typealias AgentRestorePlanning =
+        @MainActor (AgentRestorePlanner.Input) -> [PaneID: AgentRestoreDecision]
 
     private let ghosttyBridge: GhosttyBridge
     private let normalWindowController: NormalWindowController
@@ -34,6 +40,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let hotKeyController: any HotKeyControlling
     private let menuBarManager: MenuBarManager
     private let surfaceConfiguration: GhosttySurfaceConfiguration
+    private weak var agentSessionController: AgentSessionController?
+    private let agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility]
+    private let agentRestoreCompatibilityResolver: AgentRestoreCompatibilityProvider?
+    private let agentRestoreHomeDirectory: AgentRestoreHomeDirectory
+    private let agentRestoreWorkingDirectoryExists: AgentRestoreWorkingDirectoryExists
+    private let agentRestorePlanner: AgentRestorePlanning
+    private let agentResumeScheduler: any AgentResumeScheduling
+    private let agentResumeRegistrationTimeout: TimeInterval
+    private let agentResumeStableConfirmationThreshold: TimeInterval
+    private let agentResumeClaimLifetime: TimeInterval
     private let terminalActivityController: TerminalActivityController
     private var terminalNotificationController: TerminalNotificationController?
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
@@ -45,10 +61,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let splitCoordinator = SplitCoordinator()
     private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
+    private var agentIntegrationsSheetController: AgentIntegrationsSheetController?
     private var pendingWorkspaceDeletionID: WorkspaceID?
     private var startupState: StartupState = .notStarted
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
     private var surfaceFailures: [PaneID: SurfaceFailurePresentation] = [:]
+    private var agentResumePresentations: [PaneID: AgentResumePresentation] = [:]
+    private var agentResumeAttempts: [PaneID: AgentResumeAttempt] = [:]
+    private var agentResumeGenerationByPane: [PaneID: UInt64] = [:]
+    private var shouldRestoreAgentSessions = false
     private var closingTabIDs: Set<TabID> = []
     private var closingPaneIDs: Set<PaneID> = []
     private var configuredGlobalChord = ShortcutChord(key: .f12)
@@ -59,6 +80,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var isPreparingForTermination = false
     private var activityConfiguration: GhosttyActivityConfiguration
     private var activityCallbackGeneration = 0
+
+    private lazy var agentResumeRuntime = AgentResumeRuntime(
+        scheduler: agentResumeScheduler,
+        registrationTimeout: agentResumeRegistrationTimeout,
+        stableConfirmationThreshold: agentResumeStableConfirmationThreshold,
+        claimLifetime: agentResumeClaimLifetime
+    ) { [weak self] action in
+        self?.applyAgentResumeRuntimeAction(action)
+    }
 
     var terminalActivityEffectHandler: TerminalActivityEffectHandler?
 
@@ -134,6 +164,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         (activeTab?.root.leaves.count ?? 0) > 1
     }
 
+    var canPresentAgentIntegrations: Bool {
+        agentIntegrationsSheetController != nil && activeWindow != nil
+    }
+
     var activeTabCount: Int {
         workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)?.tabs.count ?? 0
     }
@@ -158,15 +192,117 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         requestDeleteActiveWorkspace()
     }
 
+    func installAgentIntegrations(
+        installer: AgentIntegrationInstallerClient,
+        launcherInstaller: CommandLineLauncherInstallerClient
+    ) {
+        guard agentIntegrationsSheetController == nil else { return }
+        let viewController = AgentIntegrationsViewController(
+            installer: installer,
+            launcherInstaller: launcherInstaller,
+            bindingProvider: { [weak self] in
+                self?.agentIntegrationBindingSnapshots() ?? []
+            },
+            retryBinding: { [weak self] paneID in
+                self?.retryAgentResume(paneID)
+            },
+            forgetBinding: { [weak self] paneID in
+                self?.forgetAgentResume(paneID)
+            }
+        )
+        agentIntegrationsSheetController = AgentIntegrationsSheetController(
+            viewController: viewController,
+            restoreTerminalFocus: { [weak self] in
+                guard let self,
+                    let paneID = activePaneID,
+                    let surface = surfaces[paneID],
+                    let window = activeWindow,
+                    surface.window === window
+                else { return }
+                _ = window.makeFirstResponder(surface)
+            }
+        )
+    }
+
+    func presentAgentIntegrations() {
+        guard let sheetController = agentIntegrationsSheetController else { return }
+        do {
+            try presentationController.showCurrentPresentation()
+        } catch {
+            onError(error)
+            return
+        }
+        guard let window = activeWindow else { return }
+        sheetController.present(on: window)
+    }
+
+    private func agentIntegrationBindingSnapshots() -> [AgentIntegrationBindingSnapshot] {
+        workspaceStore.workspaces.flatMap { workspace in
+            workspace.tabs.flatMap { tab in
+                tab.root.leaves.compactMap { paneID in
+                    guard let binding = tab.paneDescriptor(for: paneID)?.agentResumeBinding else {
+                        return nil
+                    }
+                    let definition = AgentIntegrationRegistry.definition(for: binding.adapterID)
+                    let state: AgentIntegrationBindingSnapshot.State
+                    let canRetry: Bool
+                    switch binding.restoreState {
+                    case .active:
+                        state = .active
+                        canRetry = false
+                    case .restoring:
+                        state = .restoring
+                        canRetry = false
+                    case .unverified:
+                        state = .unverified
+                        canRetry = true
+                    case .failed(let diagnosticCode, _):
+                        state = .failed
+                        canRetry =
+                            AgentResumePresentation.failed(
+                                diagnosticCode: diagnosticCode
+                            ).canRetry
+                    }
+                    return AgentIntegrationBindingSnapshot(
+                        paneID: paneID,
+                        agentName: definition?.displayName ?? "Unknown Agent",
+                        state: state,
+                        canRetry: canRetry,
+                        canForget: true
+                    )
+                }
+            }
+        }
+    }
+
     init(
         ghosttyBridge: GhosttyBridge,
         presentationMode: PresentationMode = .normal,
         normalWindowFrame: NormalWindowFrame? = nil,
         quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
+        agentSessionController: AgentSessionController? = nil,
         terminalActivityController: TerminalActivityController? = nil,
         terminalNotificationController: TerminalNotificationController? = nil,
         initialWorkspaceStore: WorkspaceStore = WorkspaceStore(),
+        agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility] = [:],
+        agentRestoreCompatibilityResolver: AgentRestoreCompatibilityProvider? = nil,
+        agentRestoreHomeDirectory: @escaping AgentRestoreHomeDirectory = {
+            FileManager.default.homeDirectoryForCurrentUser.path
+        },
+        agentRestoreWorkingDirectoryExists: @escaping AgentRestoreWorkingDirectoryExists = {
+            path in
+            var isDirectory = ObjCBool(false)
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        },
+        agentRestorePlanner: @escaping AgentRestorePlanning = {
+            AgentRestorePlanner().plan($0)
+        },
+        agentResumeScheduler: (any AgentResumeScheduling)? = nil,
+        agentResumeRegistrationTimeout: TimeInterval = 10,
+        agentResumeStableConfirmationThreshold: TimeInterval = 1,
+        agentResumeClaimLifetime: TimeInterval = 30,
         persistWorkspaceStore: @escaping WorkspacePersistence = { _ in },
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         workspaceDeletionConfirmationPresenter: WorkspaceDeletionConfirmationPresenter? = nil,
@@ -200,6 +336,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.hotKeyController = resolvedHotKeyController
         self.menuBarManager = MenuBarManager()
         self.surfaceConfiguration = surfaceConfiguration
+        self.agentSessionController = agentSessionController
+        self.agentRestoreCompatibility = agentRestoreCompatibility
+        self.agentRestoreCompatibilityResolver = agentRestoreCompatibilityResolver
+        self.agentRestoreHomeDirectory = agentRestoreHomeDirectory
+        self.agentRestoreWorkingDirectoryExists = agentRestoreWorkingDirectoryExists
+        self.agentRestorePlanner = agentRestorePlanner
+        self.agentResumeScheduler = agentResumeScheduler ?? AgentResumeProductionScheduler()
+        self.agentResumeRegistrationTimeout = agentResumeRegistrationTimeout
+        self.agentResumeStableConfirmationThreshold = agentResumeStableConfirmationThreshold
+        self.agentResumeClaimLifetime = agentResumeClaimLifetime
         self.terminalActivityController =
             terminalActivityController ?? TerminalActivityController()
         self.terminalNotificationController = terminalNotificationController
@@ -389,6 +535,179 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             previousSurface.endSearchForDeactivation()
         }
         return true
+    }
+
+    func handleAgentSessionLifecycleAction(_ action: AgentSessionLifecycleAction) -> Bool {
+        let paneID: PaneID
+        switch action {
+        case .register(let actionPaneID, _), .replace(let actionPaneID, _, _),
+            .unregister(let actionPaneID, _, _):
+            paneID = actionPaneID
+        }
+        guard surfaces[paneID] != nil,
+            let descriptor = workspaceStore.workspaces.lazy
+                .flatMap(\.tabs)
+                .compactMap({ $0.paneDescriptor(for: paneID) })
+                .first
+        else { return false }
+
+        if let attempt = agentResumeAttempts[paneID],
+            agentResumeRuntime.isCurrent(attempt.reference)
+        {
+            switch action {
+            case .register(_, let binding):
+                guard binding.adapterID == attempt.claimKey.adapterID,
+                    binding.sessionID == attempt.claimKey.sessionID
+                else { return false }
+                agentResumeRuntime.register(
+                    attempt.reference,
+                    adapterID: binding.adapterID,
+                    sessionID: binding.sessionID
+                )
+                return true
+            case .unregister(_, let adapterID, let sessionID):
+                guard adapterID == attempt.claimKey.adapterID,
+                    sessionID == attempt.claimKey.sessionID
+                else { return false }
+                agentResumeRuntime.unregister(
+                    attempt.reference,
+                    adapterID: adapterID,
+                    sessionID: sessionID
+                )
+                return true
+            case .replace:
+                return false
+            }
+        }
+
+        switch action {
+        case .register(_, let binding):
+            if let currentBinding = descriptor.agentResumeBinding {
+                guard currentBinding.adapterID == binding.adapterID,
+                    currentBinding.sessionID == binding.sessionID
+                else { return false }
+                if case .active = currentBinding.restoreState {
+                    agentResumePresentations.removeValue(forKey: paneID)
+                    return true
+                }
+            }
+            let updated = updateAgentResumeBinding(binding, for: paneID)
+            if updated {
+                agentResumePresentations.removeValue(forKey: paneID)
+            }
+            return updated
+        case .replace(_, let previousSessionID, let binding):
+            guard let currentBinding = descriptor.agentResumeBinding,
+                currentBinding.adapterID == binding.adapterID,
+                currentBinding.sessionID == previousSessionID,
+                previousSessionID != binding.sessionID
+            else { return false }
+            let updated = updateAgentResumeBinding(binding, for: paneID)
+            if updated {
+                agentResumePresentations.removeValue(forKey: paneID)
+            }
+            return updated
+        case .unregister(_, let adapterID, let sessionID):
+            guard let currentBinding = descriptor.agentResumeBinding,
+                currentBinding.adapterID == adapterID,
+                currentBinding.sessionID == sessionID
+            else { return false }
+            let updated = updateAgentResumeBinding(nil, for: paneID)
+            if updated {
+                agentResumePresentations.removeValue(forKey: paneID)
+            }
+            return updated
+        }
+    }
+
+    private func updateAgentResumeBinding(
+        _ binding: AgentResumeBinding?,
+        for paneID: PaneID
+    ) -> Bool {
+        var candidate = workspaceStore
+        guard (try? candidate.updateAgentResumeBinding(binding, for: paneID)) != nil else {
+            return false
+        }
+        if candidate == workspaceStore {
+            return true
+        }
+        return commitWorkspaceStore(candidate)
+    }
+
+    private func applyAgentResumeRuntimeAction(_ action: AgentResumeRuntimeAction) {
+        let paneID: PaneID
+        switch action {
+        case .updateBinding(let actionPaneID, let binding):
+            paneID = actionPaneID
+            guard updateAgentResumeBinding(binding, for: paneID) else { return }
+            switch binding.restoreState {
+            case .active:
+                agentResumePresentations.removeValue(forKey: paneID)
+            case .restoring:
+                agentResumePresentations[paneID] = .restoring
+            case .unverified:
+                agentResumePresentations[paneID] = .unverified
+            case .failed(let diagnosticCode, _):
+                agentResumePresentations[paneID] = .failed(
+                    diagnosticCode: diagnosticCode
+                )
+            }
+        case .removeBinding(let actionPaneID):
+            paneID = actionPaneID
+            guard updateAgentResumeBinding(nil, for: paneID) else { return }
+            agentResumePresentations.removeValue(forKey: paneID)
+        }
+
+        if case .started = startupState, activeTab?.root.contains(paneID) == true {
+            refreshWorkspacePresentation(focusTerminal: false)
+        }
+    }
+
+    private func makeConfiguredSurface(
+        id paneID: PaneID,
+        configuration: GhosttySurfaceConfiguration,
+        additionalAppOwnedEnvironment: [String: String] = [:]
+    ) throws -> GhosttySurfaceView {
+        var configuredSurface = configuration
+        configuredSurface.environment.removeValue(
+            forKey: AgentInvocationPayloadEnvironment.payloadKey
+        )
+        var installedAgentCredentials = false
+
+        if let agentSessionController {
+            let identityEnvironment: [String: String]?
+            if agentSessionController.environment(for: paneID) == nil {
+                identityEnvironment = agentSessionController.register(paneID: paneID)
+            } else {
+                identityEnvironment = agentSessionController.rotate(paneID: paneID)
+            }
+            if let identityEnvironment {
+                configuredSurface.environment.merge(identityEnvironment) { _, appValue in appValue }
+                installedAgentCredentials = true
+            }
+        }
+        configuredSurface.environment.merge(additionalAppOwnedEnvironment) {
+            _, appValue in appValue
+        }
+
+        do {
+            return try ghosttyBridge.makeSurface(
+                id: paneID,
+                configuration: configuredSurface
+            ) { [weak self] paneID, processAlive in
+                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
+            }
+        } catch {
+            if installedAgentCredentials {
+                agentSessionController?.revoke(paneID: paneID)
+            }
+            throw error
+        }
+    }
+
+    private func closeCreatedSurface(id paneID: PaneID) {
+        agentSessionController?.revoke(paneID: paneID)
+        ghosttyBridge.closeSurface(id: paneID)
     }
 
     private func installSurfaceActivityHandlers() {
@@ -592,12 +911,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         splitConfiguration.command = nil
         splitConfiguration.initialInput = nil
         splitConfiguration.context = .split
-        let surface = try ghosttyBridge.makeSurface(
+        let surface = try makeConfiguredSurface(
             id: paneID,
             configuration: splitConfiguration
-        ) { [weak self] paneID, processAlive in
-            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-        }
+        )
         let newPane = TerminalPaneDescriptor(
             id: paneID,
             cwd: workingDirectory,
@@ -625,7 +942,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 to: &candidate
             )
         } catch {
-            ghosttyBridge.closeSurface(id: paneID)
+            closeCreatedSurface(id: paneID)
             throw error
         }
 
@@ -824,12 +1141,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         var startupConfiguration = surfaceConfiguration
         startupConfiguration.context = .window
         do {
-            let surface = try ghosttyBridge.makeSurface(
+            let surface = try makeConfiguredSurface(
                 id: paneID,
                 configuration: startupConfiguration
-            ) { [weak self] paneID, processAlive in
-                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-            }
+            )
             surfaces[paneID] = surface
             installSurfaceActivityHandlers()
             surfaceFailures.removeValue(forKey: paneID)
@@ -952,19 +1267,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         in workspaceID: WorkspaceID,
         candidate: inout WorkspaceStore
     ) throws -> GhosttySurfaceView {
-        let surface = try ghosttyBridge.makeSurface(
+        let surface = try makeConfiguredSurface(
             id: paneID,
             configuration: configuration
-        ) { [weak self] paneID, processAlive in
-            self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-        }
+        )
         let tab = TerminalTab(title: title, pane: descriptor)
 
         do {
             try candidate.addTab(tab, to: workspaceID)
             try candidate.activateTab(tab.id, in: workspaceID)
         } catch {
-            ghosttyBridge.closeSurface(id: paneID)
+            closeCreatedSurface(id: paneID)
             throw error
         }
 
@@ -975,50 +1288,258 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func restoreWorkspaceSurfaces() throws {
-        var candidate = workspaceStore
-        var restoredSurfaces: [PaneID: GhosttySurfaceView] = [:]
-        var restoredFailures: [PaneID: SurfaceFailurePresentation] = [:]
+    private struct SavedRestorePane {
+        let workspaceID: WorkspaceID
+        let tabID: TabID
+        let leafIndex: Int
+        let descriptor: TerminalPaneDescriptor
+    }
 
-        do {
-            for workspace in workspaceStore.workspaces {
-                for tab in workspace.tabs {
-                    for (leafIndex, paneID) in tab.root.leaves.enumerated() {
-                        guard let descriptor = tab.paneDescriptor(for: paneID) else {
-                            preconditionFailure("WorkspaceStore contains an invalid tab")
-                        }
-                        var restoredConfiguration = surfaceConfiguration
-                        restoredConfiguration.workingDirectory = descriptor.cwd
-                        restoredConfiguration.command = nil
-                        restoredConfiguration.initialInput = nil
-                        restoredConfiguration.context = leafIndex == 0 ? .newTab : .split
-                        do {
-                            let surface = try ghosttyBridge.makeSurface(
-                                id: paneID,
-                                configuration: restoredConfiguration
-                            ) { [weak self] paneID, processAlive in
-                                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-                            }
-                            restoredSurfaces[paneID] = surface
-                        } catch {
-                            restoredFailures[paneID] = SurfaceFailurePresentation(
-                                message: error.localizedDescription
-                            )
-                            try candidate.resetBroadcasting(for: tab.id, in: workspace.id)
-                        }
+    private func restoreWorkspaceSurfaces() throws {
+        let panes = orderedSavedRestorePanes()
+        let decisions = planAgentRestore(
+            for: panes,
+            explicitRetry: [],
+            retryPaneID: nil
+        )
+        surfaces = [:]
+        surfaceFailures = [:]
+
+        for pane in panes {
+            let paneID = pane.descriptor.id
+            let configuration = savedRestoreSurfaceConfiguration(for: pane)
+            switch decisions[paneID] ?? .freshShell(binding: nil) {
+            case .freshShell(let binding):
+                applyFreshShellAgentPresentation(binding, paneID: paneID)
+                do {
+                    surfaces[paneID] = try makeConfiguredSurface(
+                        id: paneID,
+                        configuration: configuration
+                    )
+                } catch {
+                    surfaceFailures[paneID] = SurfaceFailurePresentation(
+                        message: error.localizedDescription
+                    )
+                    resetBroadcastingForRestoreFailure(pane)
+                }
+
+            case .blocked(let binding, let diagnostic):
+                _ = updateAgentResumeBinding(binding, for: paneID)
+                agentResumePresentations[paneID] = .failed(
+                    diagnosticCode: diagnostic.code
+                )
+                do {
+                    surfaces[paneID] = try makeConfiguredSurface(
+                        id: paneID,
+                        configuration: configuration
+                    )
+                } catch {
+                    surfaceFailures[paneID] = SurfaceFailurePresentation(
+                        message: error.localizedDescription
+                    )
+                    resetBroadcastingForRestoreFailure(pane)
+                }
+
+            case .resume(let attempt):
+                guard agentResumeRuntime.begin(attempt) else {
+                    let failedBinding = attempt.binding.updatingRestoreState(
+                        .failed(
+                            diagnosticCode: .duplicateBinding,
+                            failedAt: agentResumeScheduler.date
+                        )
+                    )
+                    _ = updateAgentResumeBinding(failedBinding, for: paneID)
+                    agentResumePresentations[paneID] = .failed(
+                        diagnosticCode: .duplicateBinding
+                    )
+                    do {
+                        surfaces[paneID] = try makeConfiguredSurface(
+                            id: paneID,
+                            configuration: configuration
+                        )
+                    } catch {
+                        surfaceFailures[paneID] = SurfaceFailurePresentation(
+                            message: error.localizedDescription
+                        )
+                        resetBroadcastingForRestoreFailure(pane)
                     }
+                    continue
+                }
+
+                agentResumeAttempts[paneID] = attempt
+                do {
+                    let launch = try agentLaunchConfiguration(for: attempt)
+                    var resumeConfiguration = configuration
+                    resumeConfiguration.workingDirectory = attempt.invocation.workingDirectory
+                    resumeConfiguration.command = launch.command
+                    let surface = try makeConfiguredSurface(
+                        id: paneID,
+                        configuration: resumeConfiguration,
+                        additionalAppOwnedEnvironment: launch.environment
+                    )
+                    surfaces[paneID] = surface
+                    agentResumeRuntime.surfaceDidBecomeLive(attempt.reference)
+                } catch {
+                    agentResumeRuntime.surfaceCreationFailed(attempt.reference)
+                    agentResumeAttempts.removeValue(forKey: paneID)
+                    resetBroadcastingForRestoreFailure(pane)
                 }
             }
-        } catch {
-            for paneID in restoredSurfaces.keys {
-                ghosttyBridge.closeSurface(id: paneID)
-            }
-            throw error
         }
 
-        surfaces = restoredSurfaces
         installSurfaceActivityHandlers()
-        surfaceFailures = restoredFailures
+    }
+
+    private func orderedSavedRestorePanes() -> [SavedRestorePane] {
+        workspaceStore.workspaces.flatMap { workspace in
+            workspace.tabs.flatMap { tab in
+                tab.root.leaves.enumerated().map { leafIndex, paneID in
+                    guard let descriptor = tab.paneDescriptor(for: paneID) else {
+                        preconditionFailure("WorkspaceStore contains an invalid tab")
+                    }
+                    return SavedRestorePane(
+                        workspaceID: workspace.id,
+                        tabID: tab.id,
+                        leafIndex: leafIndex,
+                        descriptor: descriptor
+                    )
+                }
+            }
+        }
+    }
+
+    private func planAgentRestore(
+        for panes: [SavedRestorePane],
+        explicitRetry: Set<PaneID>,
+        retryPaneID: PaneID?
+    ) -> [PaneID: AgentRestoreDecision] {
+        let adapterIDs = Set(
+            panes.compactMap { $0.descriptor.agentResumeBinding?.adapterID }
+        ).sorted { $0.rawValue < $1.rawValue }
+        let compatibility: [AgentAdapterID: AgentRestoreCompatibility]
+        if !shouldRestoreAgentSessions || agentSessionController == nil {
+            compatibility = [:]
+        } else if let agentRestoreCompatibilityResolver,
+            retryPaneID != nil || agentRestoreCompatibility.isEmpty
+        {
+            compatibility = agentRestoreCompatibilityResolver(adapterIDs)
+        } else {
+            compatibility = Dictionary(
+                uniqueKeysWithValues: adapterIDs.compactMap { adapterID in
+                    agentRestoreCompatibility[adapterID].map { (adapterID, $0) }
+                }
+            )
+        }
+        let attemptIdentities: [PaneID: AgentResumeAttemptIdentity] = Dictionary(
+            uniqueKeysWithValues: panes.compactMap { pane in
+                guard pane.descriptor.agentResumeBinding != nil else { return nil }
+                if retryPaneID == nil || retryPaneID == pane.descriptor.id {
+                    return (
+                        pane.descriptor.id,
+                        nextAgentResumeAttemptIdentity(for: pane.descriptor.id)
+                    )
+                }
+                return (
+                    pane.descriptor.id,
+                    AgentResumeAttemptIdentity(
+                        id: UUID(),
+                        generation: (agentResumeGenerationByPane[pane.descriptor.id] ?? 0) + 1
+                    )
+                )
+            }
+        )
+        return agentRestorePlanner(
+            AgentRestorePlanner.Input(
+                panes: panes.map { pane in
+                    AgentRestorePaneInput(
+                        descriptor: pane.descriptor,
+                        bindingWorkingDirectoryExists: pane.descriptor.agentResumeBinding.map {
+                            agentRestoreWorkingDirectoryExists($0.workingDirectory)
+                        } ?? true
+                    )
+                },
+                effectivePolicyEnabled: shouldRestoreAgentSessions,
+                registry: Dictionary(
+                    uniqueKeysWithValues: AgentIntegrationRegistry.definitions.map { ($0.id, $0) }
+                ),
+                compatibilityByAdapter: compatibility,
+                homeDirectory: agentRestoreHomeDirectory(),
+                explicitRetry: explicitRetry,
+                attemptIdentityByPane: attemptIdentities,
+                failedAt: agentResumeScheduler.date
+            )
+        )
+    }
+
+    private func nextAgentResumeAttemptIdentity(
+        for paneID: PaneID
+    ) -> AgentResumeAttemptIdentity {
+        let generation = (agentResumeGenerationByPane[paneID] ?? 0) + 1
+        agentResumeGenerationByPane[paneID] = generation
+        return AgentResumeAttemptIdentity(id: UUID(), generation: generation)
+    }
+
+    private func savedRestoreSurfaceConfiguration(
+        for pane: SavedRestorePane
+    ) -> GhosttySurfaceConfiguration {
+        var configuration = surfaceConfiguration
+        configuration.workingDirectory = pane.descriptor.cwd
+        configuration.command = nil
+        configuration.initialInput = nil
+        configuration.environment.removeValue(
+            forKey: AgentInvocationPayloadEnvironment.payloadKey
+        )
+        configuration.environment.removeValue(
+            forKey: AgentInvocationPayloadEnvironment.helperKey
+        )
+        configuration.context = pane.leafIndex == 0 ? .newTab : .split
+        return configuration
+    }
+
+    private func agentLaunchConfiguration(
+        for attempt: AgentResumeAttempt
+    ) throws -> AgentLaunchConfiguration {
+        guard let helperPath = agentSessionController?.bundledHelperPath else {
+            throw AgentLaunchConfigurationError.invalidHelperPath
+        }
+        return try AgentLaunchConfiguration(
+            invocation: attempt.invocation,
+            bundledHelperPath: helperPath
+        )
+    }
+
+    private func applyFreshShellAgentPresentation(
+        _ binding: AgentResumeBinding?,
+        paneID: PaneID
+    ) {
+        guard let binding else {
+            agentResumePresentations.removeValue(forKey: paneID)
+            return
+        }
+        guard shouldRestoreAgentSessions else {
+            agentResumePresentations[paneID] = .restoreDisabled
+            return
+        }
+        switch binding.restoreState {
+        case .failed(let diagnosticCode, _):
+            agentResumePresentations[paneID] = .failed(
+                diagnosticCode: diagnosticCode
+            )
+        case .unverified:
+            agentResumePresentations[paneID] = .unverified
+        case .active, .restoring:
+            agentResumePresentations.removeValue(forKey: paneID)
+        }
+    }
+
+    private func resetBroadcastingForRestoreFailure(_ pane: SavedRestorePane) {
+        var candidate = workspaceStore
+        guard
+            (try? candidate.resetBroadcasting(
+                for: pane.tabID,
+                in: pane.workspaceID
+            )) != nil
+        else { return }
         _ = commitWorkspaceStore(candidate)
     }
 
@@ -1059,12 +1580,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             && owningWorkspace.activeTabID == owningTab.id
         let shouldFocus = ownerTabWasVisible && owningTab.activePaneID == paneID
         do {
-            let surface = try ghosttyBridge.makeSurface(
+            let surface = try makeConfiguredSurface(
                 id: paneID,
                 configuration: retryConfiguration
-            ) { [weak self] paneID, processAlive in
-                self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
-            }
+            )
             cleanUpPaneLifecycle(paneID)
             surfaces[paneID] = surface
             installSurfaceActivityHandlers()
@@ -1079,6 +1598,169 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             if ownerTabWasVisible {
                 refreshWorkspacePresentation(focusTerminal: false)
             }
+        }
+    }
+
+    private func retryAgentResume(_ paneID: PaneID) {
+        let panes = orderedSavedRestorePanes()
+        guard
+            let pane = panes.first(where: {
+                $0.descriptor.id == paneID
+            }), let binding = pane.descriptor.agentResumeBinding
+        else { return }
+        switch binding.restoreState {
+        case .failed(let diagnosticCode, _):
+            guard
+                AgentResumePresentation.failed(
+                    diagnosticCode: diagnosticCode
+                ).canRetry
+            else { return }
+        case .unverified:
+            break
+        case .active, .restoring:
+            return
+        }
+
+        let decisions = planAgentRestore(
+            for: panes,
+            explicitRetry: [paneID],
+            retryPaneID: paneID
+        )
+        guard let decision = decisions[paneID] else { return }
+        switch decision {
+        case .freshShell(let retainedBinding):
+            applyFreshShellAgentPresentation(retainedBinding, paneID: paneID)
+            if activeTab?.root.contains(paneID) == true {
+                refreshWorkspacePresentation(focusTerminal: false)
+            }
+            return
+        case .blocked(let failedBinding, let diagnostic):
+            let replacesResumeSurface = agentResumeAttempts[paneID] != nil
+            let shouldFocus = activePaneID == paneID && surfaces[paneID] != nil
+            if replacesResumeSurface, surfaces[paneID] != nil {
+                _ = removeSurface(
+                    id: paneID,
+                    closeBridgeSurface: true,
+                    preserveAgentPresentation: true
+                )
+            } else if let previousAttempt = agentResumeAttempts.removeValue(forKey: paneID) {
+                agentResumeRuntime.surfaceDidClose(previousAttempt.reference)
+            }
+            _ = updateAgentResumeBinding(failedBinding, for: paneID)
+            agentResumePresentations[paneID] = .failed(
+                diagnosticCode: diagnostic.code
+            )
+            if surfaces[paneID] == nil {
+                do {
+                    surfaces[paneID] = try makeConfiguredSurface(
+                        id: paneID,
+                        configuration: savedRestoreSurfaceConfiguration(for: pane)
+                    )
+                    surfaceFailures.removeValue(forKey: paneID)
+                    installSurfaceActivityHandlers()
+                } catch {
+                    surfaceFailures[paneID] = SurfaceFailurePresentation(
+                        message: error.localizedDescription
+                    )
+                    resetBroadcastingForRestoreFailure(pane)
+                }
+            }
+            if activeTab?.root.contains(paneID) == true {
+                refreshWorkspacePresentation(focusTerminal: shouldFocus)
+            }
+            return
+        case .resume(let attempt):
+            let shouldFocus = activePaneID == paneID && surfaces[paneID] != nil
+            if surfaces[paneID] != nil {
+                _ = removeSurface(
+                    id: paneID,
+                    closeBridgeSurface: true,
+                    preserveAgentPresentation: true
+                )
+            } else if let previousAttempt = agentResumeAttempts.removeValue(forKey: paneID) {
+                agentResumeRuntime.surfaceDidClose(previousAttempt.reference)
+            }
+            surfaceFailures.removeValue(forKey: paneID)
+            agentResumeAttempts[paneID] = attempt
+            guard agentResumeRuntime.retry(attempt) else {
+                agentResumeAttempts.removeValue(forKey: paneID)
+                let failedBinding = attempt.binding.updatingRestoreState(
+                    .failed(
+                        diagnosticCode: .duplicateBinding,
+                        failedAt: agentResumeScheduler.date
+                    )
+                )
+                _ = updateAgentResumeBinding(failedBinding, for: paneID)
+                agentResumePresentations[paneID] = .failed(
+                    diagnosticCode: .duplicateBinding
+                )
+                if activeTab?.root.contains(paneID) == true {
+                    refreshWorkspacePresentation(focusTerminal: false)
+                }
+                return
+            }
+
+            do {
+                let launch = try agentLaunchConfiguration(for: attempt)
+                var configuration = savedRestoreSurfaceConfiguration(for: pane)
+                configuration.workingDirectory = attempt.invocation.workingDirectory
+                configuration.command = launch.command
+                let surface = try makeConfiguredSurface(
+                    id: paneID,
+                    configuration: configuration,
+                    additionalAppOwnedEnvironment: launch.environment
+                )
+                surfaces[paneID] = surface
+                installSurfaceActivityHandlers()
+                agentResumeRuntime.surfaceDidBecomeLive(attempt.reference)
+                if activeTab?.root.contains(paneID) == true {
+                    refreshWorkspacePresentation(focusTerminal: shouldFocus)
+                }
+            } catch {
+                agentResumeRuntime.surfaceCreationFailed(attempt.reference)
+                agentResumeAttempts.removeValue(forKey: paneID)
+                resetBroadcastingForRestoreFailure(pane)
+                if activeTab?.root.contains(paneID) == true {
+                    refreshWorkspacePresentation(focusTerminal: false)
+                }
+            }
+        }
+    }
+
+    private func forgetAgentResume(_ paneID: PaneID) {
+        guard
+            let pane = orderedSavedRestorePanes().first(where: {
+                $0.descriptor.id == paneID
+            }), pane.descriptor.agentResumeBinding != nil
+        else { return }
+
+        if agentResumeAttempts[paneID] != nil {
+            agentResumeRuntime.forget(paneID: paneID)
+            agentResumeAttempts.removeValue(forKey: paneID)
+        } else {
+            _ = updateAgentResumeBinding(nil, for: paneID)
+        }
+        agentResumePresentations.removeValue(forKey: paneID)
+
+        if surfaces[paneID] == nil {
+            do {
+                let surface = try makeConfiguredSurface(
+                    id: paneID,
+                    configuration: savedRestoreSurfaceConfiguration(for: pane)
+                )
+                surfaces[paneID] = surface
+                surfaceFailures.removeValue(forKey: paneID)
+                installSurfaceActivityHandlers()
+            } catch {
+                surfaceFailures[paneID] = SurfaceFailurePresentation(
+                    message: error.localizedDescription
+                )
+                resetBroadcastingForRestoreFailure(pane)
+            }
+        }
+
+        if activeTab?.root.contains(paneID) == true {
+            refreshWorkspacePresentation(focusTerminal: activePaneID == paneID)
         }
     }
 
@@ -1126,6 +1808,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         guard commitWorkspaceStore(candidate) else { return }
         cleanUpPaneLifecycle(paneID)
         surfaceFailures.removeValue(forKey: paneID)
+        agentResumePresentations.removeValue(forKey: paneID)
+        if let attempt = agentResumeAttempts.removeValue(forKey: paneID) {
+            agentResumeRuntime.surfaceDidClose(attempt.reference)
+        }
         guard ownerWorkspaceWasActive else { return }
         guard ownerTabWasActive else {
             workspaceViewController.apply(
@@ -1154,6 +1840,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func applyConfiguration(_ config: QuickTTYConfig) {
+        shouldRestoreAgentSessions = config.shouldRestoreAgentSessions
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
         activityConfiguration = ghosttyBridge.activityConfiguration
@@ -1177,7 +1864,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         configuredGlobalChord = config.globalToggle
         do {
-            try presentationController.transition(to: config.presentationMode, persist: false)
+            try transitionPresentation(to: config.presentationMode, persist: false)
             if presentationMode == .quake {
                 try hotKeyController.replace(with: configuredGlobalChord)
             } else {
@@ -1192,7 +1879,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     func togglePresentationMode() {
         let target: PresentationMode = presentationMode == .normal ? .quake : .normal
         do {
-            try presentationController.transition(to: target)
+            try transitionPresentation(to: target)
             menuBarManager.applyMode(target)
             if target == .quake {
                 try hotKeyController.replace(with: configuredGlobalChord)
@@ -1203,6 +1890,31 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             onError(error)
         }
         synchronizeTabRenameTransientInteraction()
+    }
+
+    private func transitionPresentation(
+        to target: PresentationMode,
+        persist: Bool = true
+    ) throws {
+        guard target != presentationMode else { return }
+        let wasPresented = agentIntegrationsSheetController?.detachForWindowTransition() ?? false
+        do {
+            try presentationController.transition(to: target, persist: persist)
+        } catch {
+            if let window = activeWindow {
+                agentIntegrationsSheetController?.reattachAfterWindowTransition(
+                    to: window,
+                    wasPresented: wasPresented
+                )
+            }
+            throw error
+        }
+        if let window = activeWindow {
+            agentIntegrationsSheetController?.reattachAfterWindowTransition(
+                to: window,
+                wasPresented: wasPresented
+            )
+        }
     }
 
     private func configurePresentationCallbacks() {
@@ -1426,6 +2138,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 surfaceFailures[paneID].map { (paneID, $0) }
             }
         )
+        let activeAgentResumePresentations = Dictionary(
+            uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
+                agentResumePresentations[paneID].map { (paneID, $0) }
+            }
+        )
         let surface = activePaneID.flatMap { activeTabSurfaces[$0] }
         let retryUnavailablePaneCallback: (PaneID) -> Void = { [weak self] paneID in
             self?.retryUnavailablePane(paneID)
@@ -1441,6 +2158,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             root: activeTab?.root,
             surfaces: activeTabSurfaces,
             failures: activeSurfaceFailures,
+            agentResumePresentations: activeAgentResumePresentations,
             palette: ghosttyBridge.chromePalette,
             activePaneID: activePaneID,
             splitAppearance: ghosttyBridge.splitAppearance,
@@ -1451,7 +2169,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 self?.equalizeActiveSplits(triggeredBy: splitID)
             },
             onRetryUnavailablePane: retryUnavailablePaneCallback,
-            onCloseUnavailablePane: closeUnavailablePaneCallback
+            onCloseUnavailablePane: closeUnavailablePaneCallback,
+            onRetryAgentResume: { [weak self] paneID in
+                self?.retryAgentResume(paneID)
+            },
+            onForgetAgentResume: { [weak self] paneID in
+                self?.forgetAgentResume(paneID)
+            }
         )
         if focusTerminal, let surface, let paneID = activePaneID {
             focus(surface, paneID: paneID)
@@ -1567,7 +2291,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     surfaces[prepared.paneID] = prepared.surface
                     installSurfaceActivityHandlers()
                     guard commitWorkspaceStore(candidate) else {
-                        ghosttyBridge.closeSurface(id: prepared.paneID)
+                        closeCreatedSurface(id: prepared.paneID)
                         surfaces.removeValue(forKey: prepared.paneID)
                         return .failure(.workspaceNotFound(workspaceID))
                     }
@@ -1699,7 +2423,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         detachActiveWorkspacePresentation()
         for paneID in removedWorkspace.tabs.flatMap(\.root.leaves) {
             surfaceFailures.removeValue(forKey: paneID)
+            agentResumePresentations.removeValue(forKey: paneID)
             if !removeSurface(id: paneID, closeBridgeSurface: true) {
+                if let attempt = agentResumeAttempts.removeValue(forKey: paneID) {
+                    agentResumeRuntime.surfaceDidClose(attempt.reference)
+                }
                 cleanUpPaneLifecycle(paneID)
             }
         }
@@ -1914,7 +2642,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         for paneID in paneIDs {
             guard removeSurface(id: paneID, closeBridgeSurface: true) else {
                 if let replacement {
-                    ghosttyBridge.closeSurface(id: replacement.paneID)
+                    closeCreatedSurface(id: replacement.paneID)
                 }
                 return
             }
@@ -1931,8 +2659,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     @discardableResult
-    private func removeSurface(id: PaneID, closeBridgeSurface: Bool) -> Bool {
+    private func removeSurface(
+        id: PaneID,
+        closeBridgeSurface: Bool,
+        preserveAgentPresentation: Bool = false
+    ) -> Bool {
         guard surfaces.removeValue(forKey: id) != nil else { return false }
+        if let attempt = agentResumeAttempts.removeValue(forKey: id) {
+            agentResumeRuntime.surfaceDidClose(attempt.reference)
+        }
+        if !preserveAgentPresentation {
+            agentResumePresentations.removeValue(forKey: id)
+        }
+        agentSessionController?.revoke(paneID: id)
         cleanUpPaneLifecycle(id)
         if !isPreparingForTermination {
             installSurfaceActivityHandlers()
@@ -2012,6 +2751,35 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaceFailures.mapValues(\.message)
         }
 
+        var agentResumePresentationsForTesting: [PaneID: AgentResumePresentation] {
+            agentResumePresentations
+        }
+
+        var agentResumeDateForTesting: Date {
+            agentResumeScheduler.date
+        }
+
+        func agentResumeAttemptReferenceForTesting(
+            _ paneID: PaneID
+        ) -> AgentResumeAttemptReference? {
+            agentResumeAttempts[paneID]?.reference
+        }
+
+        func agentResumeHasClaimForTesting(_ binding: AgentResumeBinding) -> Bool {
+            agentResumeRuntime.hasClaim(
+                AgentResumeClaimKey(
+                    adapterID: binding.adapterID,
+                    sessionID: binding.sessionID
+                )
+            )
+        }
+
+        func processAgentResumeExitForTesting(
+            _ reference: AgentResumeAttemptReference
+        ) {
+            agentResumeRuntime.processExited(reference)
+        }
+
         func surfaceForTesting(id paneID: PaneID) -> GhosttySurfaceView? {
             surfaces[paneID]
         }
@@ -2022,6 +2790,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         func retryUnavailablePaneForTesting(_ paneID: PaneID) {
             retryUnavailablePane(paneID)
+        }
+
+        func retryAgentResumeForTesting(_ paneID: PaneID) {
+            retryAgentResume(paneID)
+        }
+
+        func forgetAgentResumeForTesting(_ paneID: PaneID) {
+            forgetAgentResume(paneID)
         }
 
         func invokeRetryUnavailablePanePresentationCallbackForTesting(_ paneID: PaneID) {
@@ -2135,6 +2911,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         var workspaceStoreForTesting: WorkspaceStore {
             workspaceStore
         }
+
+        var agentIntegrationsSheetControllerForTesting: AgentIntegrationsSheetController? {
+            agentIntegrationsSheetController
+        }
+
+        var agentIntegrationBindingSnapshotsForTesting: [AgentIntegrationBindingSnapshot] {
+            agentIntegrationBindingSnapshots()
+        }
     #endif
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -2222,7 +3006,31 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {
+        if !processAlive, let attempt = agentResumeAttempts[id] {
+            if agentResumeRuntime.isCurrent(attempt.reference) {
+                agentResumeRuntime.processExited(attempt.reference)
+            }
+            if case .failed(.immediateExit, _) = agentResumeBinding(for: id)?.restoreState {
+                _ = removeSurface(
+                    id: id,
+                    closeBridgeSurface: true,
+                    preserveAgentPresentation: true
+                )
+                surfaceFailures.removeValue(forKey: id)
+                if case .started = startupState, activeTab?.root.contains(id) == true {
+                    refreshWorkspacePresentation(focusTerminal: false)
+                }
+                return
+            }
+        }
         requestClosePane(id, requiresConfirmation: processAlive)
+    }
+
+    private func agentResumeBinding(for paneID: PaneID) -> AgentResumeBinding? {
+        workspaceStore.workspaces.lazy
+            .flatMap(\.tabs)
+            .compactMap { $0.paneDescriptor(for: paneID)?.agentResumeBinding }
+            .first
     }
 
     private func presentConfirmation(
@@ -2390,7 +3198,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     surfaceContext: .newTab
                 )
                 guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else {
-                    ghosttyBridge.closeSurface(id: replacement.paneID)
+                    closeCreatedSurface(id: replacement.paneID)
                     return
                 }
                 surfaces[replacement.paneID] = replacement.surface

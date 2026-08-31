@@ -53,7 +53,7 @@ struct NormalWindowFrame: Equatable, Codable, Sendable {
 }
 
 struct ApplicationState: Equatable, Codable, Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let version: Int
     var workspaceStore: WorkspaceStore

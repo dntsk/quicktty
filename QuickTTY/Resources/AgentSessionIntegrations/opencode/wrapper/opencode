@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+wrapper_path=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)/$(basename "$0")
+export QUICKTTY_WRAPPER_DIR=${wrapper_path%/*}
+export QUICKTTY_WRAPPER_PATH=$wrapper_path
+helper=${QUICKTTY_AGENT_HELPER:-/Applications/QuickTTY.app/Contents/Helpers/quicktty}
+exec "$helper" internal wrap opencode -- "$@"

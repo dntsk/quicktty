@@ -1,0 +1,22 @@
+[
+  {"id":"claude","displayName":"Claude Code","capability":"nativeLifecycle","executable":"claude"},
+  {"id":"codex","displayName":"Codex","capability":"nativeLifecycle","executable":"codex"},
+  {"id":"grok","displayName":"Grok","capability":"blocked","executable":"grok","blockedReason":"ambiguousOfficialIdentity"},
+  {"id":"pi","displayName":"Pi","capability":"nativeLifecycle","executable":"pi"},
+  {"id":"omp","displayName":"OMP","capability":"nativeLifecycle","executable":"omp"},
+  {"id":"campfire","displayName":"Campfire","capability":"blocked","executable":"the-campfire","blockedReason":"notSessionfulAgent"},
+  {"id":"amp","displayName":"Amp","capability":"wrapperLifecycle","executable":"amp"},
+  {"id":"cursor","displayName":"Cursor CLI","capability":"nativeLifecycle","executable":"agent"},
+  {"id":"gemini","displayName":"Gemini CLI","capability":"nativeLifecycle","executable":"gemini"},
+  {"id":"kiro","displayName":"Kiro","capability":"blocked","executable":"kiro-cli","blockedReason":"incompatibleLifecycleGenerations"},
+  {"id":"antigravity","displayName":"Antigravity","capability":"wrapperLifecycle","executable":"agy"},
+  {"id":"opencode","displayName":"OpenCode","capability":"wrapperLifecycle","executable":"opencode"},
+  {"id":"rovo-dev","displayName":"Rovo Dev","capability":"blocked","executable":"acli","blockedReason":"missingSessionIdentity"},
+  {"id":"hermes","displayName":"Hermes Agent","capability":"nativeLifecycle","executable":"hermes"},
+  {"id":"copilot","displayName":"GitHub Copilot CLI","capability":"nativeLifecycle","executable":"copilot"},
+  {"id":"codebuddy","displayName":"CodeBuddy","capability":"blocked","executable":"codebuddy","blockedReason":"betaLifecycleOnly"},
+  {"id":"droid","displayName":"Factory/Droid","capability":"nativeLifecycle","executable":"droid"},
+  {"id":"qoder","displayName":"Qoder","capability":"nativeLifecycle","executable":"qodercli"},
+  {"id":"kimi","displayName":"Kimi Code","capability":"nativeLifecycle","executable":"kimi"},
+  {"id":"ollama","displayName":"Ollama","capability":"blocked","executable":"ollama","blockedReason":"missingPersistentSessionAPI"}
+]

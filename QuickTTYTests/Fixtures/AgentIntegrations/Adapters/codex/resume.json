@@ -1,0 +1,11 @@
+{
+  "id": "codex",
+  "sessionID": "session-codex-123",
+  "arguments": [
+    "resume",
+    "session-codex-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

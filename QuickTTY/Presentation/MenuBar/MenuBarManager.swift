@@ -20,14 +20,19 @@ final class MenuBarManager {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            let image = NSImage(named: "MenuBarIcon")
-            image?.isTemplate = true
-            button.image = image
-            button.imageScaling = .scaleProportionallyDown
-            button.target = self
-            button.action = #selector(statusItemClicked)
+            configure(button: button)
         }
         statusItem = item
+    }
+
+    func configure(button: NSStatusBarButton) {
+        let image = NSImage(named: "MenuBarIcon")
+        image?.isTemplate = true
+        button.image = image
+        button.imageScaling = .scaleProportionallyDown
+        button.target = self
+        button.action = #selector(statusItemClicked)
+        button.setAccessibilityLabel("QuickTTY")
     }
 
     func deactivateMenuBar() {

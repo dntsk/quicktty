@@ -24,6 +24,8 @@ BUILD_NUMBER=9
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY
+CLI_HELPER_NAME=quicktty
+CLI_HELPER_IDENTIFIER=com.dntsk.QuickTTY.cli
 VOLUME_NAME="QuickTTY $RELEASE_LABEL_DEFAULT"
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
@@ -54,62 +56,109 @@ require_directory() {
     [ ! -L "$1" ] || release_fail "required directory must not be a symlink: $1"
 }
 
+verify_agent_session_integrations() {
+    resources_dir=$1
+    integrations_dir=$resources_dir/AgentSessionIntegrations
+    source_integrations_dir=$repo_root/QuickTTY/Resources/AgentSessionIntegrations
+
+    require_directory "$integrations_dir"
+    for adapter in \
+        amp antigravity claude codex copilot cursor droid gemini hermes kimi omp opencode pi qoder
+    do
+        require_directory "$integrations_dir/$adapter"
+        require_regular_file "$integrations_dir/$adapter/integration.json"
+        /usr/bin/cmp -s \
+            "$source_integrations_dir/$adapter/integration.json" \
+            "$integrations_dir/$adapter/integration.json" \
+            || release_fail "bundled integration manifest differs from source: $adapter"
+    done
+    for wrapper_adapter in amp antigravity opencode; do
+        require_directory "$integrations_dir/$wrapper_adapter/wrapper"
+    done
+    for required_resource in \
+        amp/plugin.json \
+        amp/wrapper/amp \
+        antigravity/hook.json \
+        antigravity/wrapper/agy \
+        opencode/plugin.js \
+        opencode/wrapper/opencode \
+        pi/index.ts
+    do
+        require_regular_file "$integrations_dir/$required_resource"
+        /usr/bin/cmp -s \
+            "$source_integrations_dir/$required_resource" \
+            "$integrations_dir/$required_resource" \
+            || release_fail "bundled integration resource differs from source: $required_resource"
+    done
+
+    for blocked_adapter in grok campfire kiro rovo-dev codebuddy ollama; do
+        [ ! -e "$integrations_dir/$blocked_adapter" ] && [ ! -L "$integrations_dir/$blocked_adapter" ] \
+            || release_fail "blocked adapter resource must be absent: $integrations_dir/$blocked_adapter"
+    done
+
+    integration_entry_count=$("$RELEASE_FIND_PATH" "$integrations_dir" -mindepth 1 -print \
+        | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [ "$integration_entry_count" = 38 ] \
+        || release_fail "AgentSessionIntegrations resource set is not exact: $integrations_dir"
+    integration_directory_count=$("$RELEASE_FIND_PATH" "$integrations_dir" -mindepth 1 -type d -print \
+        | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [ "$integration_directory_count" = 17 ] \
+        || release_fail "AgentSessionIntegrations directory set is not exact: $integrations_dir"
+    integration_file_count=$("$RELEASE_FIND_PATH" "$integrations_dir" -mindepth 1 -type f -print \
+        | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [ "$integration_file_count" = 21 ] \
+        || release_fail "AgentSessionIntegrations file set is not exact: $integrations_dir"
+    if "$RELEASE_FIND_PATH" "$integrations_dir" -mindepth 1 -type l -print | /usr/bin/grep . >/dev/null; then
+        release_fail "AgentSessionIntegrations must not contain symlinks: $integrations_dir"
+    fi
+
+    for wrapper_resource in \
+        amp/wrapper/amp antigravity/wrapper/agy opencode/wrapper/opencode
+    do
+        [ "$("$stat_path" -f '%Lp' "$integrations_dir/$wrapper_resource")" = 755 ] \
+            || release_fail "wrapper resource mode must be 0755: $integrations_dir/$wrapper_resource"
+    done
+    for configuration_resource in \
+        amp/plugin.json antigravity/hook.json opencode/plugin.js pi/index.ts
+    do
+        [ "$("$stat_path" -f '%Lp' "$integrations_dir/$configuration_resource")" = 644 ] \
+            || release_fail "integration resource mode must be 0644: $integrations_dir/$configuration_resource"
+    done
+}
+
 plist_value() {
     "$plist_buddy" -c "Print :$2" "$1" 2>/dev/null
 }
 
-signature_has_exact_line() {
-    signature_data=$1
-    expected_line=$2
-
-    while IFS= read -r signature_line || [ -n "$signature_line" ]; do
-        [ "$signature_line" = "$expected_line" ] && return 0
-    done <<EOF
-$signature_data
-EOF
-
-    return 1
-}
-
-signature_has_prefix() {
-    signature_data=$1
-    expected_prefix=$2
-
-    while IFS= read -r signature_line || [ -n "$signature_line" ]; do
-        case "$signature_line" in
-            "$expected_prefix"*) return 0 ;;
-        esac
-    done <<EOF
-$signature_data
-EOF
-
-    return 1
-}
-
 verify_signature_metadata() {
-    signed_path=$1
-    expected_identifier=$2
-    require_runtime=$3
+    release_verify_signature_metadata \
+        "$1" "$2" "$3" "$codesign_path" "$CODE_SIGN_IDENTITY" "$DEVELOPMENT_TEAM"
+}
 
-    signature_data=$("$codesign_path" -d -vvv "$signed_path" 2>&1) \
-        || release_fail "could not display code-signature metadata: $signed_path"
+verify_cli_helper_signature() {
+    signed_app=$1
+    cli_helper=$signed_app/Contents/Helpers/$CLI_HELPER_NAME
 
-    signature_has_exact_line "$signature_data" "Authority=$CODE_SIGN_IDENTITY" \
-        || release_fail "signature authority does not match CODE_SIGN_IDENTITY: $signed_path"
-    signature_has_exact_line "$signature_data" "TeamIdentifier=$DEVELOPMENT_TEAM" \
-        || release_fail "signature team does not match DEVELOPMENT_TEAM: $signed_path"
-    signature_has_prefix "$signature_data" 'Timestamp=' \
-        || release_fail "signature has no secure timestamp: $signed_path"
+    release_verify_cli_helper_artifact "$signed_app" "$file_path" "$lipo_path" "$stat_path"
+    "$codesign_path" --verify --strict --verbose=4 "$cli_helper" \
+        || release_fail "CLI helper did not pass strict code-signature verification: $cli_helper"
+    verify_signature_metadata "$cli_helper" "$CLI_HELPER_IDENTIFIER" yes
 
-    if [ -n "$expected_identifier" ]; then
-        signature_has_exact_line "$signature_data" "Identifier=$expected_identifier" \
-            || release_fail "signature identifier does not match bundle identifier: $signed_path"
-    fi
+    cli_helper_entitlements=$("$codesign_path" -d --entitlements :- "$cli_helper" 2>/dev/null) \
+        || release_fail "could not inspect CLI helper entitlements: $cli_helper"
+    [ -z "$cli_helper_entitlements" ] \
+        || release_fail "CLI helper must not contain entitlements: $cli_helper"
+}
 
-    if [ "$require_runtime" = yes ]; then
-        release_signature_has_hardened_runtime "$signature_data" \
-            || release_fail "hardened runtime flag is missing: $signed_path"
-    fi
+verify_signed_app_bundle() {
+    signed_app=$1
+
+    release_verify_app_code_layout "$signed_app" "$PRODUCT_NAME" "$file_path"
+    verify_cli_helper_signature "$signed_app"
+    release_verify_nested_code_recursively \
+        "$signed_app" "$codesign_path" "$file_path" "$CODE_SIGN_IDENTITY" "$DEVELOPMENT_TEAM"
+    "$codesign_path" --verify --strict --deep --verbose=4 "$signed_app" \
+        || release_fail "app did not pass strict deep code-signature verification: $signed_app"
 }
 
 verify_bundle() {
@@ -181,6 +230,7 @@ verify_bundle() {
     require_directory "$resources_dir/ghostty/shell-integration"
     require_directory "$resources_dir/ghostty/themes"
     require_regular_file "$resources_dir/ThirdPartyNotices.txt"
+    verify_agent_session_integrations "$resources_dir"
 
     architectures=$("$lipo_path" -archs "$archive_app/Contents/MacOS/$PRODUCT_NAME") \
         || release_fail 'could not determine executable architectures'
@@ -199,6 +249,7 @@ verify_bundle() {
     fi
     [ "$sparkle_linked" = no ] \
         || release_fail 'Sparkle.framework must be embedded in Frameworks'
+    release_verify_sparkle_signing_layout "$archive_app"
 
     linked_libraries=$("$otool_path" -L "$archive_app/Contents/MacOS/$PRODUCT_NAME") \
         || release_fail 'could not inspect executable linked libraries'
@@ -213,8 +264,7 @@ EOF
     [ "$ghosttykit_linked" = no ] \
         || release_fail 'executable references GhosttyKit.framework instead of the static library'
 
-    "$codesign_path" --verify --strict --verbose=4 "$archive_app" \
-        || release_fail 'archived app did not pass strict code-signature verification'
+    verify_signed_app_bundle "$archive_app"
 
     app_entitlements=$("$codesign_path" -d --entitlements :- "$archive_app" 2>/dev/null) \
         || release_fail 'could not read archived app entitlements'
@@ -235,6 +285,9 @@ cleanup_release_outputs() {
     cleanup_status=$1
     trap - 0 HUP INT TERM
 
+    if ! release_cleanup_nested_code_list; then
+        printf '%s\n' 'error: could not remove nested code list' >&2
+    fi
     if [ "$stage_created" = yes ]; then
         if ! release_remove_generated_directory "$release_dir" "$stage_dir"; then
             printf 'error: could not remove generated staging directory: %s\n' "$stage_dir" >&2
@@ -273,6 +326,7 @@ release_validate_identity "${CODE_SIGN_IDENTITY:-}"
 [ -e "$repo_root/.git" ] || release_fail "not a Git repository: $repo_root"
 [ -f "$repo_root/project.yml" ] || release_fail "project.yml is missing: $repo_root/project.yml"
 [ -x "$script_dir/build-ghostty.sh" ] || release_fail "Ghostty build script is not executable: $script_dir/build-ghostty.sh"
+[ -x "$script_dir/copy-cli-helper.sh" ] || release_fail "CLI helper copy script is not executable: $script_dir/copy-cli-helper.sh"
 
 DEVELOPER_DIR=${DEVELOPER_DIR:-$DEFAULT_DEVELOPER_DIR}
 [ -d "$DEVELOPER_DIR" ] || release_fail "DEVELOPER_DIR is not an existing directory: $DEVELOPER_DIR"
@@ -287,6 +341,7 @@ ditto_path=/usr/bin/ditto
 xcrun_path=/usr/bin/xcrun
 readlink_path=/usr/bin/readlink
 file_path=/usr/bin/file
+stat_path=/usr/bin/stat
 git_path=/usr/bin/git
 plist_buddy=/usr/libexec/PlistBuddy
 mkdir_path=/bin/mkdir
@@ -299,11 +354,14 @@ for required_tool_path in \
     "$xcrun_path" \
     "$readlink_path" \
     "$file_path" \
+    "$stat_path" \
     "$git_path" \
     "$plist_buddy" \
     "$mkdir_path" \
     "$ln_path" \
     "$RELEASE_FIND_PATH" \
+    "$RELEASE_MKTEMP_PATH" \
+    "$RELEASE_CHMOD_PATH" \
     "$RELEASE_MKDIR_PATH" \
     "$RELEASE_RM_PATH"
 do
@@ -378,28 +436,56 @@ archive_pending=yes
 archive_app=$archive_path/Products/Applications/$PRODUCT_NAME.app
 verify_bundle "$archive_app"
 
+cli_build_dir=$archive_path/QuickTTYCLIProducts
+[ ! -e "$cli_build_dir" ] && [ ! -L "$cli_build_dir" ] \
+    || release_fail "CLI helper build directory must be absent: $cli_build_dir"
+"$xcodebuild_path" build \
+    -project "$repo_root/QuickTTY.xcodeproj" \
+    -target QuickTTYCLI \
+    -configuration Release \
+    -destination 'generic/platform=macOS' \
+    ARCHS=arm64 \
+    ONLY_ACTIVE_ARCH=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    "CONFIGURATION_BUILD_DIR=$cli_build_dir"
+cli_build_product=$cli_build_dir/$CLI_HELPER_NAME
+require_regular_file "$cli_build_product"
+[ -x "$cli_build_product" ] || release_fail "built CLI helper is not executable: $cli_build_product"
+
 "$mkdir_path" "$stage_dir" || release_fail "could not create staging directory: $stage_dir"
 stage_created=yes
-"$ditto_path" "$archive_app" "$stage_dir/$PRODUCT_NAME.app"
+staged_app=$stage_dir/$PRODUCT_NAME.app
+"$ditto_path" "$archive_app" "$staged_app"
+"$script_dir/copy-cli-helper.sh" \
+    "$cli_build_product" "$staged_app/Contents/Helpers/$CLI_HELPER_NAME"
+"$RELEASE_RM_PATH" -rf "$cli_build_dir" \
+    || release_fail "could not remove CLI helper build directory: $cli_build_dir"
+release_verify_sparkle_signing_layout "$staged_app"
+
+"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    --identifier "$CLI_HELPER_IDENTIFIER" \
+    "$staged_app/Contents/Helpers/$CLI_HELPER_NAME" \
+    || release_fail 'could not sign QuickTTY CLI helper'
+verify_cli_helper_signature "$staged_app"
 
 # Re-sign Sparkle binaries with our Developer ID certificate for notarization
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \
+    "$staged_app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \
     || release_fail 'could not sign Sparkle Autoupdate'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc" \
+    "$staged_app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc" \
     || release_fail 'could not sign Sparkle Installer.xpc'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" \
+    "$staged_app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" \
     || release_fail 'could not sign Sparkle Downloader.xpc'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+    "$staged_app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
     || release_fail 'could not sign Sparkle Updater.app'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app/Contents/Frameworks/Sparkle.framework" \
+    "$staged_app/Contents/Frameworks/Sparkle.framework" \
     || release_fail 'could not re-sign Sparkle.framework'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
-    "$stage_dir/$PRODUCT_NAME.app" \
+    "$staged_app" \
     || release_fail 'could not re-sign staged app after Sparkle re-sign'
 
 "$ln_path" -s /Applications "$stage_dir/Applications" \
@@ -407,8 +493,7 @@ stage_created=yes
 [ -L "$stage_dir/Applications" ] || release_fail 'Applications staging entry is not a symlink'
 [ "$("$readlink_path" "$stage_dir/Applications")" = /Applications ] \
     || release_fail 'Applications staging symlink does not target /Applications'
-"$codesign_path" --verify --strict --verbose=4 "$stage_dir/$PRODUCT_NAME.app" \
-    || release_fail 'staged app did not preserve its strict code signature'
+verify_signed_app_bundle "$staged_app"
 
 release_assert_generated_path_absent "$release_dir" "$dmg_path"
 dmg_pending=yes

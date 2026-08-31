@@ -1,0 +1,11 @@
+{
+  "id": "droid",
+  "sessionID": "session-droid-123",
+  "arguments": [
+    "--resume",
+    "session-droid-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

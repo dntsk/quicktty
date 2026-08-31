@@ -1,0 +1,11 @@
+{
+  "id": "hermes",
+  "sessionID": "session-hermes-123",
+  "arguments": [
+    "--resume",
+    "session-hermes-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

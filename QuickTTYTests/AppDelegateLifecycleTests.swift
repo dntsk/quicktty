@@ -1,7 +1,18 @@
 import AppKit
+import Darwin
+import Foundation
 import Testing
 
 @testable import QuickTTY
+
+@MainActor
+private final class LaunchContinuationRecorder {
+    private(set) var didContinue = false
+
+    func recordContinuation() {
+        didContinue = true
+    }
+}
 
 @MainActor
 private final class NewTabMenuActionTarget: NSObject {
@@ -17,6 +28,15 @@ private final class OpenConfigurationMenuActionTarget: NSObject {
     private(set) var invocationCount = 0
 
     @objc func openConfiguration() {
+        invocationCount += 1
+    }
+}
+
+@MainActor
+private final class AgentIntegrationsMenuActionTarget: NSObject {
+    private(set) var invocationCount = 0
+
+    @objc func openAgentIntegrations() {
         invocationCount += 1
     }
 }
@@ -130,6 +150,179 @@ struct AppDelegateLifecycleTests {
         #expect(
             AppDelegate.betaFeedURL.absoluteString
                 == "https://raw.githubusercontent.com/dntsk/quicktty/master/docs/appcasts/beta.xml"
+        )
+    }
+
+    @Test
+    func startupLoadsStateThenListensAndPreflightsBeforeCoordinatorStartsItsFirstSurface() {
+        var events: [String] = []
+
+        let state = AppDelegate.loadStateAndStartAgentSubsystem(
+            loadState: {
+                events.append("load state")
+                return "loaded"
+            },
+            startAgentSubsystem: {
+                events.append("start socket")
+            },
+            onAgentSubsystemFailure: { _ in
+                events.append("disable agent subsystem")
+            }
+        )
+        events.append("compatibility preflight")
+        events.append("coordinator start and first surface")
+
+        #expect(state == "loaded")
+        #expect(
+            events
+                == [
+                    "load state",
+                    "start socket",
+                    "compatibility preflight",
+                    "coordinator start and first surface",
+                ]
+        )
+    }
+
+    @Test
+    func compatibilityPreflightRunsOffMainActor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-AppDelegate-Compatibility-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appending(path: "pi")
+        try Data("fixture".utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+        let piID = try AgentAdapterID(rawValue: "pi")
+        let resolver = AgentRestoreCompatibilityResolver { _, _ in
+            dispatchPrecondition(condition: .notOnQueue(.main))
+            return .exited(status: 0, output: Data("0.83.0\n".utf8))
+        }
+
+        let result = await AppDelegate.resolveAgentRestoreCompatibility(
+            adapterIDs: [piID],
+            path: directory.path,
+            resolver: resolver
+        )
+
+        #expect(result[piID]?.status == .compatible(version: "0.83.0"))
+    }
+
+    @Test
+    func cancellingCompatibilityPreflightPreventsLaunchContinuation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-AppDelegate-Cancellation-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appending(path: "pi")
+        try Data("fixture".utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+        let piID = try AgentAdapterID(rawValue: "pi")
+        let (probeStarted, signalProbeStarted) = AsyncStream<Void>.makeStream()
+        let resolver = AgentRestoreCompatibilityResolver { _, _ in
+            signalProbeStarted.yield()
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            return .failedToLaunch
+        }
+        let recorder = LaunchContinuationRecorder()
+        let task = Task {
+            await AppDelegate.runAgentRestoreCompatibilityPreflight(
+                adapterIDs: [piID],
+                path: directory.path,
+                resolver: resolver
+            ) { _ in
+                recorder.recordContinuation()
+            }
+        }
+        var iterator = probeStarted.makeAsyncIterator()
+        _ = await iterator.next()
+
+        task.cancel()
+        await task.value
+
+        #expect(!recorder.didContinue)
+    }
+
+    @Test
+    func agentStartupFailureDisablesSubsystemWithoutPreventingFreshShellStartup() {
+        enum ExpectedFailure: Error {
+            case socket
+        }
+
+        var events: [String] = []
+
+        AppDelegate.loadStateAndStartAgentSubsystem(
+            loadState: {
+                events.append("load state")
+            },
+            startAgentSubsystem: {
+                events.append("start socket")
+                throw ExpectedFailure.socket
+            },
+            onAgentSubsystemFailure: { _ in
+                events.append("disable agent subsystem")
+            }
+        )
+        events.append("start fresh shell")
+
+        #expect(
+            events
+                == [
+                    "load state",
+                    "start socket",
+                    "disable agent subsystem",
+                    "start fresh shell",
+                ])
+    }
+
+    @Test
+    func agentStartupPartialFailureUnlinksSocketBeforeReturning() async throws {
+        enum ExpectedFailure: Error {
+            case controller
+        }
+
+        let baseDirectory = "/tmp/qtt-app-startup-test-\(UUID().uuidString)"
+        guard mkdir(baseDirectory, 0o700) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = rmdir(baseDirectory) }
+
+        let messageRouter = AgentMessageRouter()
+        let lifecycleActionRouter = AgentLifecycleActionRouter()
+        let server = AgentSocketServer(temporaryBaseDirectory: baseDirectory) { _ in true }
+        var socketPath: String?
+
+        #expect(throws: ExpectedFailure.controller) {
+            try AppDelegate.startAgentSubsystem(
+                server: server,
+                messageRouter: messageRouter,
+                lifecycleActionRouter: lifecycleActionRouter
+            ) { startedSocketPath -> AgentSessionController in
+                socketPath = startedSocketPath
+                throw ExpectedFailure.controller
+            }
+        }
+
+        let startedSocketPath = try #require(socketPath)
+        #expect(access(startedSocketPath, F_OK) != 0)
+        await server.stop()
+        #expect(
+            access(
+                URL(fileURLWithPath: startedSocketPath).deletingLastPathComponent().path,
+                F_OK
+            ) != 0
         )
     }
 
@@ -373,8 +566,8 @@ struct AppDelegateLifecycleTests {
         var scheduledState: ApplicationState?
 
         AppDelegate.performApplicationTermination(
-            stopConfiguration: {
-                events.append("stop configuration")
+            freezeAgentLifecycleDelivery: {
+                events.append("freeze router and controller")
             },
             persistFinalState: {
                 events.append("snapshot")
@@ -390,8 +583,12 @@ struct AppDelegateLifecycleTests {
             logSaveError: { _ in
                 events.append("save failed")
             },
+            stopAgentSocket: {
+                events.append("stop socket immediately")
+            },
             prepareForTermination: {
-                events.append("detach")
+                events.append("stop configuration")
+                events.append("detach surfaces")
             },
             shutdownRuntime: {
                 events.append("shutdown")
@@ -401,16 +598,79 @@ struct AppDelegateLifecycleTests {
         #expect(
             events
                 == [
-                    "stop configuration",
+                    "freeze router and controller",
                     "snapshot",
                     "schedule and flush",
                     "save failed",
-                    "detach",
+                    "stop socket immediately",
+                    "stop configuration",
+                    "detach surfaces",
                     "shutdown",
                 ]
         )
         #expect(scheduledState?.workspaceStore == finalStore)
         #expect(scheduledState?.normalWindowFrame == finalFrame)
+    }
+
+    @Test
+    func agentIntegrationsMenuIsExactIdempotentShortcutFreeAndReadinessGated() throws {
+        let target = AgentIntegrationsMenuActionTarget()
+        var mainMenu: NSMenu? = nil
+        for _ in 0..<3 {
+            mainMenu = AppDelegate.installAgentIntegrationsMenuItem(
+                in: mainMenu,
+                target: target,
+                action: #selector(AgentIntegrationsMenuActionTarget.openAgentIntegrations)
+            )
+        }
+
+        let applicationMenu = try #require(mainMenu?.item(withTitle: "QuickTTY")?.submenu)
+        let items = applicationMenu.items.filter { $0.title == "Agent Integrations…" }
+        let item = try #require(items.first)
+        #expect(items.count == 1)
+        #expect(item.keyEquivalent.isEmpty)
+        #expect(item.keyEquivalentModifierMask.isEmpty)
+        #expect(item.target === target)
+        #expect(
+            !AppDelegate.validateAgentIntegrationsMenuItem(
+                item,
+                coordinatorReady: false,
+                installerReady: true
+            )
+        )
+        #expect(
+            !AppDelegate.validateAgentIntegrationsMenuItem(
+                item,
+                coordinatorReady: true,
+                installerReady: false
+            )
+        )
+
+        item.action = AppDelegate.agentIntegrationsMenuItemAction
+        #expect(
+            AppDelegate.validateAgentIntegrationsMenuItem(
+                item,
+                coordinatorReady: true,
+                installerReady: true
+            )
+        )
+    }
+
+    @Test
+    func agentIntegrationInstallerFailureIsNonFatalAndDoesNotInstallServices() {
+        enum ExpectedFailure: Error { case unavailable }
+        var didInstall = false
+        var didReportFailure = false
+
+        let ready = AppDelegate.installAgentIntegrationsIfAvailable(
+            makeInstallers: { throw ExpectedFailure.unavailable },
+            install: { (_: String) in didInstall = true },
+            onFailure: { _ in didReportFailure = true }
+        )
+
+        #expect(!ready)
+        #expect(!didInstall)
+        #expect(didReportFailure)
     }
 
     @Test

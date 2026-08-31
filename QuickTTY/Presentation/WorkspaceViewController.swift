@@ -48,6 +48,8 @@ final class WorkspaceViewController: NSViewController {
 
     #if DEBUG
         private var hostedSurfacesForTesting: [PaneID: GhosttySurfaceView] = [:]
+        private var hostedAgentResumePresentationsForTestingStorage:
+            [PaneID: AgentResumePresentation] = [:]
     #endif
 
     override func loadView() {
@@ -420,6 +422,10 @@ final class WorkspaceViewController: NSViewController {
                 })
         }
 
+        var hostedAgentResumePresentationsForTesting: [PaneID: AgentResumePresentation] {
+            hostedAgentResumePresentationsForTestingStorage
+        }
+
         var renderedSurfaceIdentifiersForTesting: [ObjectIdentifier] {
             guard let splitHostingController else { return [] }
             return surfaceViews(in: splitHostingController.view).map(ObjectIdentifier.init)
@@ -438,13 +444,16 @@ final class WorkspaceViewController: NSViewController {
         root: SplitNode?,
         surfaces: [PaneID: GhosttySurfaceView],
         failures: [PaneID: SurfaceFailurePresentation],
+        agentResumePresentations: [PaneID: AgentResumePresentation] = [:],
         palette: GhosttyChromePalette,
         activePaneID: PaneID? = nil,
         splitAppearance: GhosttySplitAppearance = .fallback,
         onResize: @escaping (UUID, Double) -> Void,
         onEqualize: @escaping (UUID) -> Void,
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
-        onCloseUnavailablePane: @escaping (PaneID) -> Void
+        onCloseUnavailablePane: @escaping (PaneID) -> Void,
+        onRetryAgentResume: @escaping (PaneID) -> Void = { _ in },
+        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in }
     ) {
         loadViewIfNeeded()
         presentationState.setChromePalette(palette)
@@ -455,6 +464,7 @@ final class WorkspaceViewController: NSViewController {
 
             #if DEBUG
                 hostedSurfacesForTesting = [:]
+                hostedAgentResumePresentationsForTestingStorage = [:]
             #endif
 
             removeSplitHost()
@@ -467,6 +477,7 @@ final class WorkspaceViewController: NSViewController {
 
         #if DEBUG
             hostedSurfacesForTesting = surfaces
+            hostedAgentResumePresentationsForTestingStorage = agentResumePresentations
         #endif
 
         emptyLabel.isHidden = true
@@ -474,12 +485,15 @@ final class WorkspaceViewController: NSViewController {
             root: root,
             surfaces: surfaces,
             failures: failures,
+            agentResumePresentations: agentResumePresentations,
             activePaneID: activePaneID,
             presentationState: presentationState,
             onResize: onResize,
             onEqualize: onEqualize,
             onRetryUnavailablePane: onRetryUnavailablePane,
-            onCloseUnavailablePane: onCloseUnavailablePane
+            onCloseUnavailablePane: onCloseUnavailablePane,
+            onRetryAgentResume: onRetryAgentResume,
+            onForgetAgentResume: onForgetAgentResume
         )
         if let splitHostingController {
             splitHostingController.rootView = splitTreeView

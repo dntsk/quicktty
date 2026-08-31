@@ -163,6 +163,18 @@ struct WorkspaceStore: Codable, Equatable, Sendable {
         throw WorkspaceError.tabNotFound(tabID)
     }
 
+    mutating func updateAgentResumeBinding(
+        _ binding: AgentResumeBinding?,
+        for paneID: PaneID
+    ) throws {
+        guard let location = paneDescriptorLocation(for: paneID) else {
+            throw WorkspaceError.paneNotFound(paneID)
+        }
+
+        _ = workspaces[location.workspaceIndex].tabs[location.tabIndex]
+            .updateAgentResumeBinding(binding, for: paneID)
+    }
+
     mutating func updateWorkingDirectory(_ cwd: String, for paneID: PaneID) throws {
         guard let location = paneDescriptorLocation(for: paneID) else {
             throw WorkspaceError.paneNotFound(paneID)

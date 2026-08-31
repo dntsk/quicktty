@@ -1,0 +1,11 @@
+{
+  "id": "omp",
+  "sessionID": "session-omp-123",
+  "arguments": [
+    "--resume",
+    "session-omp-123"
+  ],
+  "ignoredArguments": [
+    "--must-not-launch"
+  ]
+}

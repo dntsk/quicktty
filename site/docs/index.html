@@ -98,7 +98,9 @@ copy-on-select = clipboard
 quicktty-presentation-mode = normal
 quicktty-global-toggle = f12
 quicktty-quake-height = 75%
-quicktty-restore-workspaces = true</code></pre>
+quicktty-restore-workspaces = true
+quicktty-restore-agent-sessions = true</code></pre>
+            <p>Agent restoration requires both restore keys. It relaunches an eligible native agent by an opaque session ID into its original pane; it is not a PTY or process checkpoint. QuickTTY persists no arbitrary command or environment for restoration, and an unverified or invalid binding uses a fresh shell fallback.</p>
             <p>The generated sibling file <code>~/.config/quicktty/.ghostty-effective-config</code> belongs to QuickTTY and should not be edited.</p>
           </section>
 
@@ -273,11 +275,53 @@ quicktty-shortcut = action-id=disabled</code></pre>
           <section id="coding-agent-integrations">
             <h2>Coding Agent Integrations</h2>
             <p>QuickTTY shows standard OSC <code>9;4</code> progress as tab and workspace status. It does not infer agent identity from output, titles, prompts, or process trees.</p>
-            <p>Setup is manual: QuickTTY never installs hooks or changes agent configuration. Bundled integration files are located at:</p>
+            <h3>Native session restoration</h3>
+            <p>When <code>quicktty-restore-workspaces</code> and <code>quicktty-restore-agent-sessions</code> are both true, QuickTTY may relaunch a version-verified agent with its opaque native session ID in the original pane. This is not PTY/process checkpointing. There is no arbitrary command or environment persistence; QuickTTY performs no output/title/process/store inference, and uses a fixed bundled <code>quicktty</code> trampoline with structured argv and a bounded canonical payload. Any ineligible binding takes the fresh shell fallback.</p>
+            <p>The authenticated local socket is scoped by five app-owned pane variables: <code>QUICKTTY_PANE_ID</code>, <code>QUICKTTY_AGENT_SOCKET</code>, <code>QUICKTTY_INSTANCE_ID</code>, <code>QUICKTTY_PANE_TOKEN</code>, and <code>QUICKTTY_AGENT_HELPER</code>. On shutdown, registration freezes, credentials are cleared, and later lifecycle messages are rejected.</p>
+
+            <h4>Exact 20-entry registry</h4>
+            <div class="shortcut-table-wrap" role="region" aria-label="Agent integration registry" tabindex="0">
+              <table class="shortcut-table agent-registry-table">
+                <thead><tr><th scope="col">ID</th><th scope="col">Capability</th><th scope="col">Current policy</th></tr></thead>
+                <tbody>
+                  <tr data-agent-id="claude"><td><code>claude</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="codex"><td><code>codex</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="grok"><td><code>grok</code></td><td>blocked</td><td>Ambiguous official identity</td></tr>
+                  <tr data-agent-id="pi"><td><code>pi</code></td><td>native</td><td>Exactly 0.83.0; locally/runtime verified</td></tr>
+                  <tr data-agent-id="omp"><td><code>omp</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="campfire"><td><code>campfire</code></td><td>blocked</td><td>Not a sessionful agent</td></tr>
+                  <tr data-agent-id="amp"><td><code>amp</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="cursor"><td><code>cursor</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="gemini"><td><code>gemini</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="kiro"><td><code>kiro</code></td><td>blocked</td><td>Incompatible lifecycle generations</td></tr>
+                  <tr data-agent-id="antigravity"><td><code>antigravity</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="opencode"><td><code>opencode</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="rovo-dev"><td><code>rovo-dev</code></td><td>blocked</td><td>Missing session identity</td></tr>
+                  <tr data-agent-id="hermes"><td><code>hermes</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="copilot"><td><code>copilot</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="codebuddy"><td><code>codebuddy</code></td><td>blocked</td><td>Beta lifecycle only</td></tr>
+                  <tr data-agent-id="droid"><td><code>droid</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="qoder"><td><code>qoder</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="kimi"><td><code>kimi</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="ollama"><td><code>ollama</code></td><td>blocked</td><td>Missing persistent session API</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Totals: 11 native, 3 wrapper, and 6 blocked. Only Pi <code>0.83.0</code> is currently locally and runtime verified. Every other launch-capable version policy is unverified/documented and therefore starts a fresh shell until an exact policy and tests are added.</p>
+
+            <h4>Explicit installer</h4>
+            <pre><code>quicktty integrations status [ids...]
+quicktty integrations install [ids...] [--yes]
+quicktty integrations uninstall [ids...] [--yes]</code></pre>
+            <p>Install and uninstall always show a mutation preview and require explicit confirmation: type the literal <code>yes</code> in a TTY, or place <code>--yes</code> last for non-interactive use. Existing files receive uniquely named backups. QuickTTY tracks ownership and uninstalls only matching owned content; conflicts and changed files are not overwritten. The Agent Integrations sheet uses the same core, supports the <code>~/.local/bin/quicktty</code> launcher, and makes no silent configuration writes.</p>
+            <p>The sheet reports bounded states and redacted diagnostics without raw session IDs. Pane bindings show Active, Restoring, Unverified, or Failed. Retry rotates credentials and rechecks compatibility; Forget removes the binding and starts a fresh shell. Duplicate adapter/session claims all fail rather than selecting a winner.</p>
+
+            <h3>OSC progress</h3>
+            <p>Progress setup is independent from session restoration. Manual progress-only examples remain bundled at:</p>
             <pre><code>/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/</code></pre>
             <div class="note"><strong>Custom installation path</strong>If QuickTTY is installed elsewhere, replace <code>/Applications/QuickTTY.app</code> in the commands below. Always merge these examples into your existing configuration; never replace the whole configuration file.</div>
 
-            <h3>Pi 0.82</h3>
+            <h3>Pi 0.83.0</h3>
             <p>Open <code>/settings</code> and enable <strong>Terminal progress</strong> (<code>terminal.showTerminalProgress</code>). It is off by default. No helper, hooks, or extensions are required.</p>
             <p>Pi emits OSC <code>9;4</code> directly: <strong>working</strong> at <code>agent_start</code>, keepalive updates while working, and <strong>completed</strong> at <code>agent_end</code>.</p>
 
