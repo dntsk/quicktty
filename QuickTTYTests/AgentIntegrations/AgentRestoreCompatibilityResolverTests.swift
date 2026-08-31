@@ -9,18 +9,11 @@ struct AgentRestoreCompatibilityResolverTests {
     private let claudeID = try! AgentAdapterID(rawValue: "claude")
 
     @Test
-    func registryKeepsExactPiVersionContractWithAdapterDefinition() throws {
+    func registryKeepsVersionAgnosticPiContractWithAdapterDefinition() throws {
         let definitions = AgentIntegrationRegistry.definitions
         let pi = try #require(AgentIntegrationRegistry.definition(for: piID))
 
-        #expect(
-            pi.versionProbePolicy
-                == .exact(
-                    arguments: ["--version"],
-                    acceptedLine: "0.83.0",
-                    version: "0.83.0"
-                )
-        )
+        #expect(pi.versionProbePolicy == .anyVersion(arguments: ["--version"]))
 
         let launchCapable = definitions.filter { definition in
             switch definition.capability {
@@ -76,7 +69,7 @@ struct AgentRestoreCompatibilityResolverTests {
         let resolver = AgentRestoreCompatibilityResolver { request, _ in
             #expect(request.arguments == ["--version"])
             #expect(request.executablePath == fixture.canonicalExecutablePath)
-            return .exited(status: 0, output: Data("0.83.0\n".utf8))
+            return .exited(status: 0, output: Data("0.84.4\n".utf8))
         }
 
         let result = await resolver.resolve(adapterIDs: [piID], path: path)
@@ -84,17 +77,17 @@ struct AgentRestoreCompatibilityResolverTests {
         #expect(
             result[piID]
                 == AgentRestoreCompatibility(
-                    status: .compatible(version: "0.83.0"),
+                    status: .compatible(version: "0.84.4"),
                     resolvedExecutablePath: fixture.canonicalExecutablePath
                 )
         )
     }
 
-    @Test
-    func productionProbeAcceptsRealisticPiVersionFixture() async throws {
+    @Test(arguments: ["0.83.0", "0.84.4", "0.85.0-beta.1+darwin-arm64"])
+    func productionProbeAcceptsRealisticPiVersionFixture(version: String) async throws {
         let fixture = try ExecutablePathFixture(
             name: "pi",
-            contents: "#!/bin/sh\nprintf '0.83.0\\n'\n"
+            contents: "#!/bin/sh\nprintf '\(version)\\n'\n"
         )
         defer { fixture.remove() }
 
@@ -103,7 +96,7 @@ struct AgentRestoreCompatibilityResolverTests {
             path: fixture.directoryURL.path
         )
 
-        #expect(result[piID]?.status == .compatible(version: "0.83.0"))
+        #expect(result[piID]?.status == .compatible(version: version))
         #expect(result[piID]?.resolvedExecutablePath == fixture.canonicalExecutablePath)
     }
 
@@ -153,10 +146,16 @@ struct AgentRestoreCompatibilityResolverTests {
 
     @Test(arguments: [
         "",
-        "0.83.0\nsecond line\n",
-        "0.83.0\u{0007}\n",
-        "pi 0.83.0\n",
-        "0.83.1\n",
+        "error\n",
+        "pi 0.84.4\n",
+        "0.84\n",
+        "0.84.4.1\n",
+        "00.84.4\n",
+        "0.84.4-01\n",
+        "0.84.4-beta..1\n",
+        "0.84.4+darwin_arm64\n",
+        "0.84.4\nsecond line\n",
+        "0.84.4\u{0007}\n",
         String(repeating: "1", count: 129) + "\n",
     ])
     func malformedPiOutputIsUnverified(output: String) async throws {
@@ -178,7 +177,7 @@ struct AgentRestoreCompatibilityResolverTests {
     @Test(arguments: [
         AgentVersionProbeResult.timedOut,
         .outputOverflow,
-        .exited(status: 9, output: Data("0.83.0\n".utf8)),
+        .exited(status: 9, output: Data("0.84.4\n".utf8)),
         .failedToLaunch,
     ])
     func probeFailuresAreUnverified(result: AgentVersionProbeResult) async throws {
@@ -218,7 +217,7 @@ struct AgentRestoreCompatibilityResolverTests {
         defer { fixture.remove() }
         let unknown = try AgentAdapterID(rawValue: "unknown")
         let resolver = AgentRestoreCompatibilityResolver { _, _ in
-            .exited(status: 0, output: Data("0.83.0\n".utf8))
+            .exited(status: 0, output: Data("0.84.4\n".utf8))
         }
 
         let result = await resolver.resolve(
@@ -227,7 +226,7 @@ struct AgentRestoreCompatibilityResolverTests {
         )
 
         #expect(Set(result.keys) == [piID])
-        #expect(result[piID]?.status == .compatible(version: "0.83.0"))
+        #expect(result[piID]?.status == .compatible(version: "0.84.4"))
     }
 }
 

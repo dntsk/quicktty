@@ -8,11 +8,7 @@ struct AgentIntegrationRegistry {
             "Pi",
             "pi",
             .option("--session"),
-            versionProbePolicy: .exact(
-                arguments: ["--version"],
-                acceptedLine: "0.83.0",
-                version: "0.83.0"
-            )
+            versionProbePolicy: .anyVersion(arguments: ["--version"])
         ),
         native("omp", "OMP", "omp", .option("--resume")),
         blocked("campfire"),

@@ -1,1 +1,1 @@
-{"adapter":"pi","endEvents":["session_shutdown"],"installer":"ownedFile","physicalQuitReason":"quit","startEvents":["session_start"],"switchEvents":["session_switch"],"versionProbe":{"arguments":["--version"],"line":"0.83.0","version":"0.83.0"}}
+{"adapter":"pi","endEvents":["session_shutdown"],"installer":"ownedFile","physicalQuitReason":"quit","startEvents":["session_start"],"switchEvents":["session_switch"],"versionProbe":{"arguments":["--version"],"policy":"anyVersion"}}

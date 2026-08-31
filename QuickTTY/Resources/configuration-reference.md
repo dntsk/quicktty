@@ -198,7 +198,7 @@ Interactive Search uses Ghostty's native `start_search`, `end_search`, `search:<
 
 ## Coding-agent integrations
 
-QuickTTY displays OSC `9;4` progress and can optionally restore a version-verified native agent session. Session restoration requires the exact two-key policy above and never restores a PTY/process checkpoint or a persisted arbitrary command. The installer is explicit and never silently changes agent configuration. See `docs/agent-integrations.md` in the repository for the exact 20-entry registry, current Pi `0.83.0` verification boundary, CLI/UI workflow, fallback behavior, and progress setup.
+QuickTTY displays OSC `9;4` progress and can optionally restore a version-verified native agent session. Session restoration requires the exact two-key policy above and never restores a PTY/process checkpoint or a persisted arbitrary command. The installer is explicit and never silently changes agent configuration. Installed Pi versions that report a valid semantic version and expose the required public lifecycle extension API are supported, with local verification on current Pi `0.84.4`. See `docs/agent-integrations.md` in the repository for the exact 20-entry registry, CLI/UI workflow, fallback behavior, and progress setup.
 
 ## Ghostty options
 

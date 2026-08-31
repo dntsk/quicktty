@@ -469,8 +469,8 @@ def main() -> int:
                 "Retry",
                 "Forget",
                 "no silent configuration writes",
-                "Pi <code>0.83.0</code>",
-                "Only Pi <code>0.83.0</code>",
+                "valid semantic version",
+                "current Pi <code>0.84.4</code>",
                 "11 native, 3 wrapper, and 6 blocked",
                 "QUICKTTY_PANE_ID",
                 "QUICKTTY_AGENT_SOCKET",
@@ -488,7 +488,7 @@ def main() -> int:
                 "site/docs/index.html: agent registry must match the exact ordered 20 IDs"
             )
 
-    pi_guide = section_between(docs_source, "<h3>Pi 0.83.0</h3>", "<h3>Claude Code")
+    pi_guide = section_between(docs_source, "<h3>Pi</h3>", "<h3>Claude Code")
     if pi_guide is None:
         errors.append("site/docs/index.html: missing Pi agent guide")
     else:
@@ -504,7 +504,6 @@ def main() -> int:
                 "<code>agent_start</code>",
                 "keepalive",
                 "<code>agent_end</code>",
-                "0.83.0",
             ),
             errors,
         )

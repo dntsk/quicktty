@@ -64,11 +64,7 @@ enum NativeLifecycleAdapters {
             switches: ["session_switch"],
             ends: ["session_shutdown"],
             installer: .ownedFile,
-            versionProbePolicy: .exact(
-                arguments: ["--version"],
-                acceptedLine: "0.83.0",
-                version: "0.83.0"
-            )
+            versionProbePolicy: .anyVersion(arguments: ["--version"])
         ),
         policy(
             "omp",

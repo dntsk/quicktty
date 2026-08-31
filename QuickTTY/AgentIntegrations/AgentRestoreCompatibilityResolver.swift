@@ -103,56 +103,61 @@ struct AgentRestoreCompatibilityResolver: Sendable {
                 )
                 continue
             }
+            let arguments: [String]
             switch definition.versionProbePolicy {
             case .blocked:
                 result[definition.id] = AgentRestoreCompatibility(
                     status: .unverifiedVersion,
                     resolvedExecutablePath: nil
                 )
+                continue
             case .unverified:
                 result[definition.id] = AgentRestoreCompatibility(
                     status: .unverifiedVersion,
                     resolvedExecutablePath: executablePath
                 )
-            case .exact(let arguments, let acceptedLine, let version):
-                let remaining = Self.remainingTime(until: deadline)
-                guard remaining > 0 else {
-                    result[definition.id] = AgentRestoreCompatibility(
-                        status: .unverifiedVersion,
-                        resolvedExecutablePath: executablePath
-                    )
-                    continue
-                }
-                guard !Task.isCancelled else {
-                    result[definition.id] = AgentRestoreCompatibility(
-                        status: .unverifiedVersion,
-                        resolvedExecutablePath: executablePath
-                    )
-                    continue
-                }
-                let probeResult = await probe(
-                    AgentVersionProbeRequest(
-                        executablePath: executablePath,
-                        arguments: arguments,
-                        environmentPath: pathEntries.joined(separator: ":")
-                    ),
-                    min(probeTimeout, remaining)
-                )
-                let status: AgentCompatibilityStatus
-                if !Task.isCancelled,
-                    case .exited(let exitStatus, let output) = probeResult,
-                    exitStatus == 0,
-                    Self.printableVersionLine(from: output) == acceptedLine
-                {
-                    status = .compatible(version: version)
-                } else {
-                    status = .unverifiedVersion
-                }
+                continue
+            case .anyVersion(let probeArguments):
+                arguments = probeArguments
+            }
+
+            let remaining = Self.remainingTime(until: deadline)
+            guard remaining > 0 else {
                 result[definition.id] = AgentRestoreCompatibility(
-                    status: status,
+                    status: .unverifiedVersion,
                     resolvedExecutablePath: executablePath
                 )
+                continue
             }
+            guard !Task.isCancelled else {
+                result[definition.id] = AgentRestoreCompatibility(
+                    status: .unverifiedVersion,
+                    resolvedExecutablePath: executablePath
+                )
+                continue
+            }
+            let probeResult = await probe(
+                AgentVersionProbeRequest(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    environmentPath: pathEntries.joined(separator: ":")
+                ),
+                min(probeTimeout, remaining)
+            )
+            let status: AgentCompatibilityStatus
+            if !Task.isCancelled,
+                case .exited(let exitStatus, let output) = probeResult,
+                exitStatus == 0,
+                let version = Self.semanticVersionLine(from: output)
+            {
+                status = .compatible(version: version)
+            } else {
+                status = .unverifiedVersion
+            }
+            result[definition.id] = AgentRestoreCompatibility(
+                status: status,
+                resolvedExecutablePath: executablePath
+            )
         }
 
         return result
@@ -217,7 +222,7 @@ struct AgentRestoreCompatibilityResolver: Sendable {
         return resolved
     }
 
-    private static func printableVersionLine(from output: Data) -> String? {
+    private static func semanticVersionLine(from output: Data) -> String? {
         guard !output.isEmpty, output.count <= maximumOutputBytes else { return nil }
         var bytes = Array(output)
         if bytes.last == 0x0A {
@@ -226,9 +231,66 @@ struct AgentRestoreCompatibilityResolver: Sendable {
         guard !bytes.isEmpty,
             bytes.count <= maximumVersionLineBytes,
             bytes.allSatisfy({ (0x20...0x7E).contains($0) }),
-            let line = String(bytes: bytes, encoding: .utf8)
+            let line = String(bytes: bytes, encoding: .utf8),
+            isSemanticVersion(line)
         else { return nil }
         return line
+    }
+
+    private static func isSemanticVersion(_ version: String) -> Bool {
+        let buildParts = version.split(
+            separator: "+",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard !buildParts.isEmpty else { return false }
+        if buildParts.count == 2,
+            !isValidSemanticVersionIdentifiers(buildParts[1], forbidLeadingZeros: false)
+        {
+            return false
+        }
+
+        let prereleaseParts = buildParts[0].split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        let coreIdentifiers = prereleaseParts[0].split(
+            separator: ".",
+            omittingEmptySubsequences: false
+        )
+        guard coreIdentifiers.count == 3,
+            coreIdentifiers.allSatisfy({ isValidSemanticVersionCoreIdentifier($0) })
+        else { return false }
+
+        return prereleaseParts.count == 1
+            || isValidSemanticVersionIdentifiers(
+                prereleaseParts[1],
+                forbidLeadingZeros: true
+            )
+    }
+
+    private static func isValidSemanticVersionCoreIdentifier(_ identifier: Substring) -> Bool {
+        !identifier.isEmpty
+            && identifier.utf8.allSatisfy({ (0x30...0x39).contains($0) })
+            && (identifier.count == 1 || identifier.first != "0")
+    }
+
+    private static func isValidSemanticVersionIdentifiers(
+        _ value: Substring,
+        forbidLeadingZeros: Bool
+    ) -> Bool {
+        value.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { identifier in
+            guard !identifier.isEmpty,
+                identifier.utf8.allSatisfy({ byte in
+                    (0x30...0x39).contains(byte) || (0x41...0x5A).contains(byte)
+                        || (0x61...0x7A).contains(byte) || byte == 0x2D
+                })
+            else { return false }
+            return !forbidLeadingZeros
+                || !identifier.utf8.allSatisfy({ (0x30...0x39).contains($0) })
+                || identifier.count == 1 || identifier.first != "0"
+        }
     }
 
     private static func deadline(after interval: TimeInterval) -> UInt64 {

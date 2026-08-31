@@ -45,7 +45,7 @@ The registry contains these 20 IDs in this order. “Native” means a documente
 | 1 | `claude` | native | Unverified; fresh shell |
 | 2 | `codex` | native | Unverified; fresh shell |
 | 3 | `grok` | blocked | Ambiguous official identity |
-| 4 | `pi` | native | Exactly Pi `0.83.0`; locally and runtime verified |
+| 4 | `pi` | native | Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; locally and runtime verified on current Pi `0.84.4` |
 | 5 | `omp` | native | Unverified; fresh shell |
 | 6 | `campfire` | blocked | Not a sessionful agent |
 | 7 | `amp` | wrapper | Unverified; fresh shell; wrapper required for lifecycle |
@@ -63,7 +63,7 @@ The registry contains these 20 IDs in this order. “Native” means a documente
 | 19 | `kimi` | native | Unverified; fresh shell |
 | 20 | `ollama` | blocked | Missing persistent session API |
 
-Totals are exactly 11 native, 3 wrapper, and 6 blocked. At present, only Pi `0.83.0` has an exact locally and runtime-verified launch policy. Every other launch-capable entry remains documented but version-unverified and therefore starts a fresh shell until an exact policy and tests are added. QuickTTY does not claim working auto-resume for those entries.
+Totals are exactly 11 native, 3 wrapper, and 6 blocked. At present, only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the integration is locally verified on current Pi `0.84.4`. Every other launch-capable entry remains documented but version-unverified and therefore starts a fresh shell until a verified policy and tests are added. QuickTTY does not claim working auto-resume for those entries.
 
 ## Installer CLI
 

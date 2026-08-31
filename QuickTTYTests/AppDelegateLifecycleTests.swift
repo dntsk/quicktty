@@ -201,7 +201,7 @@ struct AppDelegateLifecycleTests {
         let piID = try AgentAdapterID(rawValue: "pi")
         let resolver = AgentRestoreCompatibilityResolver { _, _ in
             dispatchPrecondition(condition: .notOnQueue(.main))
-            return .exited(status: 0, output: Data("0.83.0\n".utf8))
+            return .exited(status: 0, output: Data("0.84.4\n".utf8))
         }
 
         let result = await AppDelegate.resolveAgentRestoreCompatibility(
@@ -210,7 +210,7 @@ struct AppDelegateLifecycleTests {
             resolver: resolver
         )
 
-        #expect(result[piID]?.status == .compatible(version: "0.83.0"))
+        #expect(result[piID]?.status == .compatible(version: "0.84.4"))
     }
 
     @Test

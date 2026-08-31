@@ -124,14 +124,49 @@ pi_extension="$home/.pi/agent/extensions/quicktty-session/index.ts"
 
 pi_package=/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent
 pi_types=$pi_package/dist/core/extensions/types.d.ts
-[ "$(/opt/homebrew/bin/node -p "require('$pi_package/package.json').version")" = 0.83.0 ] \
-    || fail 'installed Pi SDK is not the required 0.83.0'
-for type_contract in \
-    'on(event: "session_start"' \
-    'on(event: "session_shutdown"' \
-    'reason: "quit" | "reload" | "new" | "resume" | "fork"'
+pi_session_manager_types=$pi_package/dist/core/session-manager.d.ts
+[ -d "$pi_package" ] || fail 'installed Pi SDK package is missing'
+[ -f "$pi_types" ] || fail 'installed Pi SDK extension types are missing'
+[ -f "$pi_session_manager_types" ] || fail 'installed Pi SDK session manager types are missing'
+
+pi_extension_context=$test_root/pi-extension-context.d.ts
+/usr/bin/awk '
+    /^export interface ExtensionContext \{/ { found = 1 }
+    found { print }
+    found && /^}/ { exit }
+' "$pi_types" >"$pi_extension_context"
+for context_contract in \
+    '    cwd: string;' \
+    '    sessionManager: ReadonlySessionManager;'
 do
-    /usr/bin/grep -F "$type_contract" "$pi_types" >/dev/null \
+    /usr/bin/grep -Fx "$context_contract" "$pi_extension_context" >/dev/null \
+        || fail "installed Pi SDK ExtensionContext contract is missing: $context_contract"
+done
+pi_readonly_session_manager=$test_root/pi-readonly-session-manager.d.ts
+/usr/bin/awk '
+    /^export type ReadonlySessionManager = Pick<SessionManager,/ { found = 1 }
+    found { print }
+    found && /;[[:space:]]*$/ { exit }
+' "$pi_session_manager_types" >"$pi_readonly_session_manager"
+/usr/bin/grep -F '"getSessionId"' "$pi_readonly_session_manager" >/dev/null \
+    || fail 'installed Pi SDK ReadonlySessionManager contract is missing: "getSessionId"'
+/usr/bin/grep -Fx '    getSessionId(): string;' "$pi_session_manager_types" >/dev/null \
+    || fail 'installed Pi SDK session manager contract is missing: getSessionId(): string'
+pi_session_shutdown_event=$test_root/pi-session-shutdown-event.d.ts
+/usr/bin/awk '
+    /^export interface SessionShutdownEvent \{/ { found = 1 }
+    found { print }
+    found && /^}/ { exit }
+' "$pi_types" >"$pi_session_shutdown_event"
+for shutdown_reason in '"quit"' '"new"' '"resume"' '"fork"'; do
+    /usr/bin/grep -F "$shutdown_reason" "$pi_session_shutdown_event" >/dev/null \
+        || fail "installed Pi SDK SessionShutdownEvent contract is missing reason: $shutdown_reason"
+done
+for type_contract in \
+    '    on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;' \
+    '    on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;'
+do
+    /usr/bin/grep -Fx "$type_contract" "$pi_types" >/dev/null \
         || fail "installed Pi SDK type contract is missing: $type_contract"
 done
 "$pi_package/node_modules/.bin/jiti" "$pi_extension" >/dev/null 2>&1 \

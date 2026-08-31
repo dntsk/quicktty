@@ -218,7 +218,7 @@ struct WindowCoordinatorAgentResumeTests {
             initialWorkspaceStore: store,
             agentRestoreCompatibility: [
                 piID: AgentRestoreCompatibility(
-                    status: .compatible(version: "0.83.0"),
+                    status: .compatible(version: "0.84.4"),
                     resolvedExecutablePath: "/bin/echo"
                 )
             ],

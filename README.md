@@ -29,7 +29,7 @@ QuickTTY is a native AppKit terminal powered by the full [`libghostty`](https://
 - **Normal and Quake modes** — move the same live workspace between a standard window and a drop-down presentation without restarting shells.
 - **Broadcast input** — send keyboard input or a confirmed paste to every pane in the active tab.
 - **Native search** — search the active terminal with match navigation and result counts.
-- **Coding-agent continuity** — show standard OSC `9;4` progress and optionally relaunch a version-verified native agent session into its original pane after restart. This restores an opaque agent session ID, not a PTY or process checkpoint; only Pi `0.83.0` is currently locally/runtime verified for auto-resume.
+- **Coding-agent continuity** — show standard OSC `9;4` progress and optionally relaunch a version-verified native agent session into its original pane after restart. This restores an opaque agent session ID, not a PTY or process checkpoint. Auto-resume supports installed Pi versions that report a valid semantic version and expose the required public lifecycle extension API; it is locally verified on current Pi `0.84.4`.
 - **Ghostty configuration and themes** — use the terminal engine's rendering, shell integration, fonts, palettes, and themes.
 
 ## Install

@@ -190,7 +190,7 @@ enum AgentCompatibilityPolicy: Equatable, Sendable {
 }
 
 enum AgentVersionProbePolicy: Equatable, Sendable {
-    case exact(arguments: [String], acceptedLine: String, version: String)
+    case anyVersion(arguments: [String])
     case unverified
     case blocked(AgentIntegrationBlockedReason)
 }

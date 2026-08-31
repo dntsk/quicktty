@@ -287,7 +287,7 @@ quicktty-shortcut = action-id=disabled</code></pre>
                   <tr data-agent-id="claude"><td><code>claude</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
                   <tr data-agent-id="codex"><td><code>codex</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
                   <tr data-agent-id="grok"><td><code>grok</code></td><td>blocked</td><td>Ambiguous official identity</td></tr>
-                  <tr data-agent-id="pi"><td><code>pi</code></td><td>native</td><td>Exactly 0.83.0; locally/runtime verified</td></tr>
+                  <tr data-agent-id="pi"><td><code>pi</code></td><td>native</td><td>Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; locally/runtime verified on current 0.84.4</td></tr>
                   <tr data-agent-id="omp"><td><code>omp</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
                   <tr data-agent-id="campfire"><td><code>campfire</code></td><td>blocked</td><td>Not a sessionful agent</td></tr>
                   <tr data-agent-id="amp"><td><code>amp</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
@@ -307,7 +307,7 @@ quicktty-shortcut = action-id=disabled</code></pre>
                 </tbody>
               </table>
             </div>
-            <p>Totals: 11 native, 3 wrapper, and 6 blocked. Only Pi <code>0.83.0</code> is currently locally and runtime verified. Every other launch-capable version policy is unverified/documented and therefore starts a fresh shell until an exact policy and tests are added.</p>
+            <p>Totals: 11 native, 3 wrapper, and 6 blocked. Only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the integration is locally verified on current Pi <code>0.84.4</code>. Every other launch-capable version policy is unverified/documented and therefore starts a fresh shell until a verified policy and tests are added.</p>
 
             <h4>Explicit installer</h4>
             <pre><code>quicktty integrations status [ids...]
@@ -321,7 +321,7 @@ quicktty integrations uninstall [ids...] [--yes]</code></pre>
             <pre><code>/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/</code></pre>
             <div class="note"><strong>Custom installation path</strong>If QuickTTY is installed elsewhere, replace <code>/Applications/QuickTTY.app</code> in the commands below. Always merge these examples into your existing configuration; never replace the whole configuration file.</div>
 
-            <h3>Pi 0.83.0</h3>
+            <h3>Pi</h3>
             <p>Open <code>/settings</code> and enable <strong>Terminal progress</strong> (<code>terminal.showTerminalProgress</code>). It is off by default. No helper, hooks, or extensions are required.</p>
             <p>Pi emits OSC <code>9;4</code> directly: <strong>working</strong> at <code>agent_start</code>, keepalive updates while working, and <strong>completed</strong> at <code>agent_end</code>.</p>
 

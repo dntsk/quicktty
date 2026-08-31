@@ -170,6 +170,17 @@ struct NativeLifecycleAdapterTests {
             #expect(manifest.switchEvents == policy.switchEvents)
             #expect(manifest.endEvents == policy.endEvents)
             #expect(manifest.installer == policy.installerStrategy.rawValue)
+            let expectedVersionProbe: NativeLifecycleVersionProbeManifestFixture
+            if policy.id == "pi" {
+                guard case .anyVersion(let arguments) = policy.versionProbePolicy else {
+                    Issue.record("Pi native policy does not use anyVersion")
+                    continue
+                }
+                expectedVersionProbe = .anyVersion(arguments: arguments)
+            } else {
+                expectedVersionProbe = .unverified
+            }
+            #expect(manifest.versionProbe == expectedVersionProbe)
 
             let definition = try #require(
                 AgentIntegrationRegistry.definition(
@@ -440,6 +451,7 @@ private struct NativeLifecycleManifestFixture: Decodable {
     let switchEvents: [String]
     let endEvents: [String]
     let installer: String
+    let versionProbe: NativeLifecycleVersionProbeManifestFixture
 
     private enum CodingKeys: String, CodingKey {
         case adapter
@@ -447,6 +459,7 @@ private struct NativeLifecycleManifestFixture: Decodable {
         case switchEvents
         case endEvents
         case installer
+        case versionProbe
     }
 
     init(from decoder: Decoder) throws {
@@ -456,5 +469,44 @@ private struct NativeLifecycleManifestFixture: Decodable {
         switchEvents = try container.decodeIfPresent([String].self, forKey: .switchEvents) ?? []
         endEvents = try container.decode([String].self, forKey: .endEvents)
         installer = try container.decode(String.self, forKey: .installer)
+        versionProbe = try container.decode(
+            NativeLifecycleVersionProbeManifestFixture.self,
+            forKey: .versionProbe
+        )
+    }
+}
+
+private enum NativeLifecycleVersionProbeManifestFixture: Decodable, Equatable {
+    case unverified
+    case anyVersion(arguments: [String])
+
+    private enum CodingKeys: String, CodingKey {
+        case policy
+        case arguments
+    }
+
+    init(from decoder: Decoder) throws {
+        let singleValueContainer = try decoder.singleValueContainer()
+        if let value = try? singleValueContainer.decode(String.self) {
+            guard value == "unverified" else {
+                throw DecodingError.dataCorruptedError(
+                    in: singleValueContainer,
+                    debugDescription: "Unknown version probe policy: \(value)"
+                )
+            }
+            self = .unverified
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let policy = try container.decode(String.self, forKey: .policy)
+        guard policy == "anyVersion" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .policy,
+                in: container,
+                debugDescription: "Unknown version probe policy: \(policy)"
+            )
+        }
+        self = .anyVersion(arguments: try container.decode([String].self, forKey: .arguments))
     }
 }
