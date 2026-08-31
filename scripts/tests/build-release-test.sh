@@ -133,6 +133,40 @@ helper_sign_line=$((helper_identifier_line - 1))
 [ "$(/usr/bin/awk -v line="$helper_sign_line" 'NR == line { print }' "$build_script")" = \
     '"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \' ] \
     || fail 'CLI helper codesign options or order are not exact'
+archive_verification_body=$(/usr/bin/awk '
+    /^verify_bundle\(\) \{/ { capture = 1 }
+    /^stage_created=no$/ { capture = 0 }
+    capture { print }
+' "$build_script")
+printf '%s\n' "$archive_verification_body" \
+    | grep -F -x '    "$codesign_path" --verify --strict --verbose=4 "$archive_app" \' >/dev/null \
+    || fail 'archive app must receive strict non-deep signature verification'
+printf '%s\n' "$archive_verification_body" \
+    | grep -F -x '    verify_signature_metadata "$archive_app" "$BUNDLE_IDENTIFIER" yes' >/dev/null \
+    || fail 'archive app must require exact outer signature metadata and hardened runtime'
+printf '%s\n' "$archive_verification_body" \
+    | grep -F -x '    [ -z "$app_entitlements" ] \' >/dev/null \
+    || fail 'archive app must require an exact empty entitlement set'
+printf '%s\n' "$archive_verification_body" \
+    | grep -F -x '    verify_cli_helper_signature "$archive_app"' >/dev/null \
+    || fail 'archive app must verify the exact CLI helper signature'
+if printf '%s\n' "$archive_verification_body" \
+    | grep -F -e 'verify_signed_app_bundle' -e 'release_verify_nested_code_recursively' -e '--deep' \
+        >/dev/null
+then
+    fail 'archive verification must not require final recursive nested-code verification'
+fi
+signed_app_verification_body=$(/usr/bin/awk '
+    /^verify_signed_app_bundle\(\) \{/ { capture = 1 }
+    /^verify_bundle\(\) \{/ { capture = 0 }
+    capture { print }
+' "$build_script")
+printf '%s\n' "$signed_app_verification_body" \
+    | grep -F -x '    release_verify_nested_code_recursively \' >/dev/null \
+    || fail 'final signed app verification must recursively verify nested code'
+printf '%s\n' "$signed_app_verification_body" \
+    | grep -F -x '    "$codesign_path" --verify --strict --deep --verbose=4 "$signed_app" \' >/dev/null \
+    || fail 'final signed app verification must retain strict deep integrity verification'
 archive_bundle_verification_line=$(grep -nF -x 'verify_bundle "$archive_app"' "$build_script" \
     | /usr/bin/cut -d: -f1)
 cli_stage_copy_line=$(grep -nF -x '"$script_dir/copy-cli-helper.sh" \' "$build_script" \

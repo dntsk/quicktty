@@ -264,17 +264,16 @@ EOF
     [ "$ghosttykit_linked" = no ] \
         || release_fail 'executable references GhosttyKit.framework instead of the static library'
 
-    verify_signed_app_bundle "$archive_app"
+    "$codesign_path" --verify --strict --verbose=4 "$archive_app" \
+        || release_fail "archived app did not pass strict code-signature verification: $archive_app"
+    verify_signature_metadata "$archive_app" "$BUNDLE_IDENTIFIER" yes
 
     app_entitlements=$("$codesign_path" -d --entitlements :- "$archive_app" 2>/dev/null) \
         || release_fail 'could not read archived app entitlements'
-    case "$app_entitlements" in
-        *com.apple.security.get-task-allow*)
-            release_fail 'archived app contains forbidden get-task-allow entitlement'
-            ;;
-    esac
+    [ -z "$app_entitlements" ] \
+        || release_fail 'archived app must not contain entitlements'
 
-    verify_signature_metadata "$archive_app" "$BUNDLE_IDENTIFIER" yes
+    verify_cli_helper_signature "$archive_app"
 }
 
 stage_created=no
