@@ -176,21 +176,21 @@ enum ShortcutEventMatcher {
         charactersIgnoringModifiers: String?,
         unmodifiedCharacters: String?
     ) -> ShortcutChord? {
+        let shifted = flags.contains(.shift)
         let matchedKey: ShortcutKey?
-        if let unmodifiedCharacters, !unmodifiedCharacters.isEmpty {
-            let logicalKey = key(matching: unmodifiedCharacters, shifted: false)
-            if logicalKey != nil || !isSyntheticControlOutput(unmodifiedCharacters) {
-                matchedKey = logicalKey
-            } else {
+        if shifted, let unmodifiedCharacters, !unmodifiedCharacters.isEmpty {
+            if isSyntheticControlOutput(unmodifiedCharacters) {
                 matchedKey = key(
                     matching: charactersIgnoringModifiers,
-                    shifted: flags.contains(.shift)
+                    shifted: shifted
                 )
+            } else {
+                matchedKey = key(matching: unmodifiedCharacters, shifted: false)
             }
         } else {
             matchedKey = key(
                 matching: charactersIgnoringModifiers,
-                shifted: flags.contains(.shift)
+                shifted: shifted
             )
         }
         guard let key = matchedKey else { return nil }

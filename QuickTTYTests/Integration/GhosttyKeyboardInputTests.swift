@@ -179,6 +179,17 @@ extension GhosttyBridgeTests {
     }
 
     @Test
+    func explicitCharactersIgnoringModifiersWinWithoutShift() {
+        #expect(
+            ShortcutEventMatcher.chord(
+                modifierFlags: [.command],
+                charactersIgnoringModifiers: "k",
+                unmodifiedCharacters: "л"
+            ) == ShortcutChord(key: .k, modifiers: [.command])
+        )
+    }
+
+    @Test
     func logicalUnmodifiedOutputWinsOverShiftedSymbolFallback() {
         let modifiers: NSEvent.ModifierFlags = [.command, .shift]
 
@@ -202,6 +213,19 @@ extension GhosttyBridgeTests {
                 charactersIgnoringModifiers: "@",
                 unmodifiedCharacters: "ж"
             ) == nil
+        )
+    }
+
+    @Test
+    func shiftedSyntheticControlOutputFallsBackToCharactersIgnoringModifiers() {
+        let modifiers: NSEvent.ModifierFlags = [.command, .control, .shift]
+
+        #expect(
+            ShortcutEventMatcher.chord(
+                modifierFlags: modifiers,
+                charactersIgnoringModifiers: "c",
+                unmodifiedCharacters: "\u{3}"
+            ) == ShortcutChord(key: .c, modifiers: [.command, .control, .shift])
         )
     }
 
