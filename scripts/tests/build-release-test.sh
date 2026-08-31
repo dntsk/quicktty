@@ -67,9 +67,9 @@ sh -n "$ghostty_build_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
     || fail 'release build script does not set the trusted PATH'
 for required_build_setting in \
-    'BUILD_NUMBER=9' \
+    'BUILD_NUMBER=10' \
     'BUNDLE_IDENTIFIER=com.dntsk.QuickTTY' \
-    'MARKETING_VERSION=0.1.2' \
+    'MARKETING_VERSION=0.1.3' \
     'PRODUCT_NAME=QuickTTY'
 do
     grep -F -x "$required_build_setting" "$build_script" >/dev/null \
@@ -108,16 +108,16 @@ outer_app_verification_line=$(grep -nF -x 'verify_signed_app_bundle "$staged_app
     && [ "$sparkle_sign_line" -lt "$outer_app_sign_line" ] \
     && [ "$outer_app_sign_line" -lt "$outer_app_verification_line" ] \
     || fail 'signing order must be CLI helper, Sparkle, outer app, then verification'
-grep -F -x '        CURRENT_PROJECT_VERSION: 9' "$project_spec" >/dev/null \
-    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 9'
+grep -F -x '        CURRENT_PROJECT_VERSION: 10' "$project_spec" >/dev/null \
+    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 10'
 grep -F -x '        GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
     || fail 'project spec does not disable generated app Info.plist'
 grep -F -x '        GENERATE_INFOPLIST_FILE: YES' "$project_spec" >/dev/null \
     || fail 'project spec does not generate the test Info.plist'
 grep -F -x '        INFOPLIST_FILE: QuickTTY/Resources/Info.plist' "$project_spec" >/dev/null \
     || fail 'project spec does not use the app Info.plist'
-grep -F -x '        MARKETING_VERSION: 0.1.2' "$project_spec" >/dev/null \
-    || fail 'project spec does not set MARKETING_VERSION to 0.1.2'
+grep -F -x '        MARKETING_VERSION: 0.1.3' "$project_spec" >/dev/null \
+    || fail 'project spec does not set MARKETING_VERSION to 0.1.3'
 grep -F -x '    <key>CFBundleExecutable</key>' "$app_info_plist" >/dev/null \
     || fail 'app Info.plist does not define CFBundleExecutable'
 grep -F -x '    <string>$(EXECUTABLE_NAME)</string>' "$app_info_plist" >/dev/null \
@@ -152,14 +152,14 @@ unset APPLE_ID
 
 . "$helpers"
 
-assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.2
+assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.3.beta-1
 assert_equals "$RELEASE_ARCHIVE_NAME" QuickTTY.xcarchive
-assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.2-arm64.dmg
-assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.2-stage
+assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.3.beta-1-arm64.dmg
+assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.3.beta-1-stage
 assert_equals "$RELEASE_APPCAST_DIRECTORY_NAME" appcast
 assert_equals "$RELEASE_APPCAST_NAME" appcast.xml
 assert_equals "$(release_appcast_download_url_prefix)" \
-    https://github.com/dntsk/quicktty/releases/download/v0.1.2/
+    https://github.com/dntsk/quicktty/releases/download/v0.1.3.beta-1/
 release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'

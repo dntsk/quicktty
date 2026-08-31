@@ -66,10 +66,10 @@ targets:
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CURRENT_PROJECT_VERSION: 9
+        CURRENT_PROJECT_VERSION: 10
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: QuickTTY/Resources/Info.plist
-        MARKETING_VERSION: 0.1.2
+        MARKETING_VERSION: 0.1.3
         OTHER_LDFLAGS: "$(inherited) -lstdc++"
         PRODUCT_BUNDLE_IDENTIFIER: com.dntsk.QuickTTY
         PRODUCT_NAME: QuickTTY
