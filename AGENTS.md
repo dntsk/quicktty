@@ -30,6 +30,7 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 7. Не читать секреты и `.env`; не коммитить и не выполнять release/signing без явного запроса.
 8. После значимых изменений обновлять соответствующую project memory; при завершении сессии оставлять handoff.
 9. Любой release строго выполнять по внешнему `agents/rules/releasing.md` и `docs/releasing.md`; нельзя вручную изменять published release, tag или assets. Beta channel является надмножеством stable: после каждого более нового stable или beta application release обязательно продвигать exact final appcast через `make beta-feed` в `docs/appcasts/beta.xml` отдельным post-release commit.
+10. Никогда не запускать тесты без отдельного явного разрешения пользователя непосредственно перед каждым запуском. Запрет включает `make test`, `make check`, `scripts/pre-deploy-check.sh`, `xcodebuild test` и любые команды, транзитивно запускающие test-host. Предыдущее разрешение не переносится на следующий запуск; release-runbook не отменяет это правило. Если обязательный gate требует тестов, остановиться и запросить разрешение.
 
 ## Навигация
 
