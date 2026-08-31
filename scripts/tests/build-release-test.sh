@@ -145,8 +145,8 @@ printf '%s\n' "$archive_verification_body" \
     | grep -F -x '    verify_signature_metadata "$archive_app" "$BUNDLE_IDENTIFIER" yes' >/dev/null \
     || fail 'archive app must require exact outer signature metadata and hardened runtime'
 printf '%s\n' "$archive_verification_body" \
-    | grep -F -x '    [ -z "$app_entitlements" ] \' >/dev/null \
-    || fail 'archive app must require an exact empty entitlement set'
+    | grep -F -x '        *com.apple.security.get-task-allow*)' >/dev/null \
+    || fail 'archive app must reject the get-task-allow entitlement'
 printf '%s\n' "$archive_verification_body" \
     | grep -F -x '    verify_cli_helper_signature "$archive_app"' >/dev/null \
     || fail 'archive app must verify the exact CLI helper signature'

@@ -270,8 +270,11 @@ EOF
 
     app_entitlements=$("$codesign_path" -d --entitlements :- "$archive_app" 2>/dev/null) \
         || release_fail 'could not read archived app entitlements'
-    [ -z "$app_entitlements" ] \
-        || release_fail 'archived app must not contain entitlements'
+    case "$app_entitlements" in
+        *com.apple.security.get-task-allow*)
+            release_fail 'archived app contains forbidden get-task-allow entitlement'
+            ;;
+    esac
 
     verify_cli_helper_signature "$archive_app"
 }
