@@ -85,6 +85,15 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
+cli_phase_gate_line=$(grep -nF -x '          if [ "$ACTION" != install ]; then' "$project_spec" \
+    | /usr/bin/cut -d: -f1)
+cli_phase_copy_line=$(grep -nF -x '            "$SRCROOT/scripts/copy-cli-helper.sh" \' "$project_spec" \
+    | /usr/bin/cut -d: -f1)
+cli_phase_end_line=$(grep -nF -x '          fi' "$project_spec" | /usr/bin/cut -d: -f1)
+[ -n "$cli_phase_gate_line" ] && [ -n "$cli_phase_copy_line" ] && [ -n "$cli_phase_end_line" ] \
+    && [ "$cli_phase_gate_line" -lt "$cli_phase_copy_line" ] \
+    && [ "$cli_phase_copy_line" -lt "$cli_phase_end_line" ] \
+    || fail 'CLI helper post-build phase must copy only when ACTION is not install'
 grep -F -x 'CLI_HELPER_IDENTIFIER=com.dntsk.QuickTTY.cli' "$build_script" >/dev/null \
     || fail 'release build script does not use the exact CLI helper identifier'
 helper_identifier_line=$(grep -nF -x '    --identifier "$CLI_HELPER_IDENTIFIER" \' "$build_script" \
@@ -94,6 +103,14 @@ helper_sign_line=$((helper_identifier_line - 1))
 [ "$(/usr/bin/awk -v line="$helper_sign_line" 'NR == line { print }' "$build_script")" = \
     '"$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \' ] \
     || fail 'CLI helper codesign options or order are not exact'
+archive_bundle_verification_line=$(grep -nF -x 'verify_bundle "$archive_app"' "$build_script" \
+    | /usr/bin/cut -d: -f1)
+cli_stage_copy_line=$(grep -nF -x '"$script_dir/copy-cli-helper.sh" \' "$build_script" \
+    | /usr/bin/cut -d: -f1)
+[ -n "$archive_bundle_verification_line" ] && [ -n "$cli_stage_copy_line" ] \
+    && [ "$archive_bundle_verification_line" -lt "$cli_stage_copy_line" ] \
+    && [ "$cli_stage_copy_line" -lt "$helper_sign_line" ] \
+    || fail 'release build must separately stage the CLI helper after bundle verification and before signing'
 sparkle_layout_line=$(grep -nF -x 'release_verify_sparkle_signing_layout "$staged_app"' \
     "$build_script" | /usr/bin/cut -d: -f1)
 [ -n "$sparkle_layout_line" ] && [ "$sparkle_layout_line" -lt "$helper_sign_line" ] \
