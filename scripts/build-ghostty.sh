@@ -24,9 +24,23 @@ fail() {
     exit 1
 }
 
+remove_forced_zig_cache() {
+    [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 1 ] || return 0
+    [ ! -L "$zig_cache_dir" ] \
+        || fail "refusing to remove generated Ghostty Zig cache directory symlink: $zig_cache_dir"
+    if [ -e "$zig_cache_dir" ] && [ ! -d "$zig_cache_dir" ]; then
+        fail "generated Ghostty Zig cache path is not a directory: $zig_cache_dir"
+    fi
+
+    printf 'Removing generated Ghostty Zig cache directory for forced rebuild: %s\n' \
+        "$zig_cache_dir" >&2
+    rm -rf "$zig_cache_dir" || fail "could not remove generated Ghostty Zig cache directory: $zig_cache_dir"
+}
+
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 repo_root=$(CDPATH= cd "$script_dir/.." && pwd)
 ghostty_dir=$repo_root/Vendor/ghostty
+zig_cache_dir=$ghostty_dir/.zig-cache
 xcframework_dir=$ghostty_dir/macos/GhosttyKit.xcframework
 cache_dir=$repo_root/.build/ghostty
 
@@ -256,6 +270,7 @@ else
         "$cache_validation_error" "$stamp_path" >&2
 fi
 rm -f "$stamp_path"
+remove_forced_zig_cache
 
 (
     cd "$ghostty_dir"
