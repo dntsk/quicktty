@@ -1,6 +1,6 @@
 # Release procedure
 
-Этот документ обязателен для любого QuickTTY release и выполняется вместе с краткими agent-facing правилами `.agents/rules/releasing.md`. Перед началом выпуска оба документа нужно прочитать полностью. Если команда, script или привычка противоречат им, релиз останавливается до исправления pipeline. Нельзя обещать готовый release до прохождения публичной проверки, продвижения beta feed и применимых update smoke tests.
+Этот документ обязателен и самодостаточен для любого QuickTTY release. Agents также читают краткие правила `agents/rules/releasing.md` из внешнего project vault. Если команда, script или привычка противоречат runbook, релиз останавливается до исправления pipeline. Нельзя обещать готовый release до прохождения публичной проверки, продвижения beta feed и применимых update smoke tests.
 
 ## Инварианты
 
@@ -28,7 +28,7 @@
 6. Выполнить **один** полный gate для этого commit:
 
    ```sh
-   .agents/scripts/pre-deploy-check.sh
+   scripts/pre-deploy-check.sh
    ```
 
    Не запускать отдельный `make check` до или после этого gate. Если gate не прошёл, не создавать tag; исправить причину новым commit и повторить только этот gate.
@@ -139,7 +139,7 @@ Beta channel — это поток «самый новый stable или beta bu
 
 ## 7. Evidence и запреты
 
-После успешной публичной проверки, продвижения beta channel и всех применимых update smoke tests записать tag, release commit, beta-feed commit, notarization submission ID, artifact path, size, SHA-256, public URLs и gates в `.agents/memory/tasks-completed.md` и handoff. Не записывать Apple ID, passwords, tokens, private keys или другие secrets.
+После успешной публичной проверки, продвижения beta channel и всех применимых update smoke tests записать tag, release commit, beta-feed commit, notarization submission ID, artifact path, size, SHA-256, public URLs и gates во внешние `agents/memory/tasks-completed.md` и `agents/memory/handoffs/`. Не записывать Apple ID, passwords, tokens, private keys или другие secrets.
 
 Запрещено:
 
