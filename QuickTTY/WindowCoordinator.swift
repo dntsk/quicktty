@@ -40,6 +40,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let hotKeyController: any HotKeyControlling
     private let menuBarManager: MenuBarManager
     private let surfaceConfiguration: GhosttySurfaceConfiguration
+    private let executableSearchPath: String
     private weak var agentSessionController: AgentSessionController?
     private let agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility]
     private let agentRestoreCompatibilityResolver: AgentRestoreCompatibilityProvider?
@@ -281,6 +282,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         normalWindowFrame: NormalWindowFrame? = nil,
         quakeConfiguration: QuakeWindowConfiguration = QuakeWindowConfiguration(),
         surfaceConfiguration: GhosttySurfaceConfiguration = GhosttySurfaceConfiguration(),
+        executableSearchPath: String = ApplicationEnvironment.effectiveGUIExecutableSearchPath(),
         agentSessionController: AgentSessionController? = nil,
         terminalActivityController: TerminalActivityController? = nil,
         terminalNotificationController: TerminalNotificationController? = nil,
@@ -336,6 +338,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.hotKeyController = resolvedHotKeyController
         self.menuBarManager = MenuBarManager()
         self.surfaceConfiguration = surfaceConfiguration
+        self.executableSearchPath = executableSearchPath
         self.agentSessionController = agentSessionController
         self.agentRestoreCompatibility = agentRestoreCompatibility
         self.agentRestoreCompatibilityResolver = agentRestoreCompatibilityResolver
@@ -1504,7 +1507,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         return try AgentLaunchConfiguration(
             invocation: attempt.invocation,
-            bundledHelperPath: helperPath
+            bundledHelperPath: helperPath,
+            executableSearchPath: executableSearchPath
         )
     }
 

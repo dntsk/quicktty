@@ -40,7 +40,7 @@ QuickTTY requires **macOS 15 or newer** on an **Apple Silicon Mac**.
 2. Open the DMG and move QuickTTY to Applications.
 3. Launch QuickTTY. Stable builds are signed with Developer ID and notarized by Apple.
 
-QuickTTY can check for stable updates in the app. An opt-in beta channel is also available; see the [release channels](https://quicktty.app/releases/) page for details. The current beta is [0.1.3.beta-2](https://github.com/dntsk/quicktty/releases/download/v0.1.3.beta-2/QuickTTY-0.1.3.beta-2-arm64.dmg).
+QuickTTY can check for stable updates in the app. An opt-in beta channel is also available; see the [release channels](https://quicktty.app/releases/) page for details. The current beta is [0.1.3.beta-3](https://github.com/dntsk/quicktty/releases/download/v0.1.3.beta-3/QuickTTY-0.1.3.beta-3-arm64.dmg).
 
 ## Documentation
 

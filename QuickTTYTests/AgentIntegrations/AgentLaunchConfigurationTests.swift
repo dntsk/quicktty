@@ -18,7 +18,8 @@ struct AgentLaunchConfigurationTests {
 
         let configuration = try AgentLaunchConfiguration(
             invocation: invocation,
-            bundledHelperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty"
+            bundledHelperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            executableSearchPath: "/sentinel/runtime/bin:/opt/homebrew/bin"
         )
 
         #expect(
@@ -43,6 +44,7 @@ struct AgentLaunchConfigurationTests {
             configuration.environment[AgentInvocationPayloadEnvironment.helperKey]
                 == "/Applications/QuickTTY.app/Contents/Helpers/quicktty"
         )
+        #expect(configuration.environment["PATH"] == "/sentinel/runtime/bin:/opt/homebrew/bin")
         #expect(encodedPayload.utf8.count <= AgentInvocationPayloadCodec.maximumBase64Size)
     }
 
@@ -152,9 +154,11 @@ struct AgentLaunchConfigurationTests {
         )
         let configuration = try AgentLaunchConfiguration(
             invocation: invocation,
-            bundledHelperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty"
+            bundledHelperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            executableSearchPath: "/sentinel/runtime/bin:/opt/homebrew/bin"
         )
         let paneEnvironment = [
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "QUICKTTY_PANE_ID": "pane-id",
             "QUICKTTY_AGENT_SOCKET": "/tmp/socket",
             "QUICKTTY_INSTANCE_ID": "instance-id",
@@ -171,6 +175,7 @@ struct AgentLaunchConfigurationTests {
         #expect(merged["QUICKTTY_INSTANCE_ID"] == "instance-id")
         #expect(merged["QUICKTTY_PANE_TOKEN"] == "pane-token")
         #expect(merged["CALLER_VALUE"] == "preserved")
+        #expect(merged["PATH"] == "/sentinel/runtime/bin:/opt/homebrew/bin")
         #expect(
             merged[AgentInvocationPayloadEnvironment.payloadKey]
                 == configuration.environment[AgentInvocationPayloadEnvironment.payloadKey]

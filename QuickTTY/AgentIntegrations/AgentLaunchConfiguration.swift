@@ -6,7 +6,8 @@ struct AgentLaunchConfiguration: Equatable, Sendable {
 
     init(
         invocation: ExecutableInvocation,
-        bundledHelperPath: String
+        bundledHelperPath: String,
+        executableSearchPath: String = ApplicationEnvironment.effectiveGUIExecutableSearchPath()
     ) throws {
         guard Self.isValidHelperPath(bundledHelperPath) else {
             throw AgentLaunchConfigurationError.invalidHelperPath
@@ -26,6 +27,7 @@ struct AgentLaunchConfiguration: Equatable, Sendable {
 
         command = Self.quotePOSIXShellArgument(bundledHelperPath) + " internal launch"
         environment = [
+            "PATH": executableSearchPath,
             AgentInvocationPayloadEnvironment.payloadKey: encodedPayload,
             AgentInvocationPayloadEnvironment.helperKey: bundledHelperPath,
         ]

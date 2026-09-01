@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 presentationMode: config.presentationMode,
                 normalWindowFrame: applicationState.normalWindowFrame,
                 quakeConfiguration: quakeConfiguration(for: config),
+                executableSearchPath: executableSearchPath,
                 agentSessionController: agentSessionController,
                 initialWorkspaceStore: Self.initialWorkspaceStore(
                     applicationState: applicationState,

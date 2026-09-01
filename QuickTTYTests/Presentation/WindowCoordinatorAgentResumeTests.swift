@@ -67,11 +67,13 @@ struct WindowCoordinatorAgentResumeTests {
             surfaceConfiguration: GhosttySurfaceConfiguration(
                 environment: [
                     "BASE_VALUE": "preserved",
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                     "QUICKTTY_PANE_ID": "caller-pane",
                     "QUICKTTY_AGENT_HELPER": "caller-helper",
                     AgentInvocationPayloadEnvironment.payloadKey: "caller-payload",
                 ]
             ),
+            executableSearchPath: "/sentinel/runtime/bin:/opt/homebrew/bin",
             agentSessionController: controller,
             initialWorkspaceStore: store,
             agentRestoreCompatibilityResolver: { adapterIDs in
@@ -121,6 +123,10 @@ struct WindowCoordinatorAgentResumeTests {
         #expect(eligibleConfiguration.workingDirectory == "/tmp")
         #expect(eligibleConfiguration.initialInput == nil)
         #expect(eligibleConfiguration.environment["BASE_VALUE"] == "preserved")
+        #expect(
+            eligibleConfiguration.environment["PATH"]
+                == "/sentinel/runtime/bin:/opt/homebrew/bin"
+        )
         #expect(
             eligibleConfiguration.environment["QUICKTTY_PANE_ID"]
                 == eligiblePaneID.rawValue.uuidString
@@ -436,6 +442,10 @@ struct WindowCoordinatorAgentResumeTests {
         var compatibilityResolutionCount = 0
         let coordinator = WindowCoordinator(
             ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+            ),
+            executableSearchPath: "/sentinel/runtime/bin:/opt/homebrew/bin",
             agentSessionController: controller,
             initialWorkspaceStore: store,
             agentRestoreCompatibilityResolver: { adapterIDs in
@@ -470,6 +480,8 @@ struct WindowCoordinatorAgentResumeTests {
         let replacementEnvironment = try #require(
             bridge.surfaceConfigurationForTesting(id: paneID)?.environment
         )
+        #expect(oldEnvironment["PATH"] == "/sentinel/runtime/bin:/opt/homebrew/bin")
+        #expect(replacementEnvironment["PATH"] == "/sentinel/runtime/bin:/opt/homebrew/bin")
         #expect(replacementSurface !== oldSurface)
         #expect(replacementReference.generation > oldReference.generation)
         #expect(replacementReference.attemptID != oldReference.attemptID)
