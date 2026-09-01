@@ -1,6 +1,6 @@
 # QuickTTY
 
-QuickTTY — нативный терминал для macOS с tabs, splits, workspaces, broadcast-вводом и взаимоисключающими режимами normal/Quake. Поведение MVP определяет исходный продуктовый дизайн `docs/plans/2026-07-14-ghostterm-design.md`; идентичность продукта переопределяет `docs/plans/2026-07-22-quicktty-rename-design.md`.
+QuickTTY — нативный терминал для macOS с tabs, splits, workspaces, broadcast-вводом и взаимоисключающими режимами normal/Quake. Поведение MVP определяет исходный продуктовый дизайн из внешнего vault `agents/plans/archive/2026-07-14-ghostterm-design.md`; идентичность продукта переопределяет `agents/plans/archive/2026-07-22-quicktty-rename-design.md`.
 
 ## Стек
 
@@ -46,7 +46,7 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 - `agents/memory/architecture-decisions.md` — принятые решения и отклонённые альтернативы.
 - `agents/memory/tasks-completed.md` — журнал завершённых задач.
 - `agents/memory/handoffs/README.md` — формат передачи контекста между сессиями.
-- `agents/plans/` — agent design и implementation plans, кроме двух канонических product design doc в `docs/plans/`.
+- `agents/plans/active/` — незавершённые agent design и implementation plans; завершённые планы и канонические product design doc находятся в `agents/plans/archive/`.
 - `scripts/style-audit.sh` — read-only проверка стиля Swift.
 - `scripts/pre-deploy-check.sh` — проверка дерева, upstream и `make check` перед выпуском.
 - `agents/scripts/post-commit-reminder.sh` — напоминание об обновлении project memory.
