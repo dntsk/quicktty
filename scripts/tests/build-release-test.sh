@@ -85,6 +85,42 @@ grep -F -x '    -scheme QuickTTY \' "$build_script" >/dev/null \
     || fail 'release build script does not archive the QuickTTY scheme'
 grep -F -x 'QUICKTTY_FORCE_GHOSTTY_REBUILD=1 "$script_dir/build-ghostty.sh"' "$build_script" >/dev/null \
     || fail 'release build script does not force a Ghostty rebuild'
+for required_cli_build_line in \
+    'cli_build_root=$archive_path/QuickTTYCLIBuild' \
+    'cli_products_dir=$cli_build_root/Products' \
+    'cli_intermediates_dir=$cli_build_root/Intermediates.noindex' \
+    '    "CONFIGURATION_BUILD_DIR=$cli_products_dir" \' \
+    '    "OBJROOT=$cli_intermediates_dir" \' \
+    '    "SYMROOT=$cli_products_dir"' \
+    'cli_build_product=$cli_products_dir/$CLI_HELPER_NAME' \
+    'remove_cli_build_root "$archive_path" "$cli_build_root"'
+do
+    grep -F -x "$required_cli_build_line" "$build_script" >/dev/null \
+        || fail "release build script is missing isolated CLI build contract: $required_cli_build_line"
+done
+cli_cleanup_body=$(/usr/bin/awk '
+    /^remove_cli_build_root\(\) \{/ { capture = 1 }
+    /^stage_created=no$/ { capture = 0 }
+    capture { print }
+' "$build_script")
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '    release_assert_generated_path "$release_dir" "$cli_cleanup_archive"' >/dev/null \
+    || fail 'CLI build cleanup must validate its parent archive as a generated release path'
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '    require_directory "$cli_cleanup_archive"' >/dev/null \
+    || fail 'CLI build cleanup must require its parent archive to be a non-symlink directory'
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '    [ "$cli_cleanup_root" = "$cli_cleanup_archive/QuickTTYCLIBuild" ] \' >/dev/null \
+    || fail 'CLI build cleanup must be bounded to the exact archive-owned root'
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '        [ ! -L "$cli_cleanup_root" ] \' >/dev/null \
+    || fail 'CLI build cleanup must reject a symlinked root'
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '        [ -d "$cli_cleanup_root" ] \' >/dev/null \
+    || fail 'CLI build cleanup must require a directory root'
+printf '%s\n' "$cli_cleanup_body" \
+    | grep -F -x '        "$RELEASE_RM_PATH" -rf "$cli_cleanup_root" \' >/dev/null \
+    || fail 'CLI build cleanup must remove only the validated archive-owned root'
 cli_phase_destination_line=$(grep -nF -x \
     '          destination="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/quicktty"' \
     "$project_spec" | /usr/bin/cut -d: -f1)

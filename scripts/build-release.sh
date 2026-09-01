@@ -279,6 +279,24 @@ EOF
     verify_cli_helper_signature "$archive_app"
 }
 
+remove_cli_build_root() {
+    cli_cleanup_archive=$1
+    cli_cleanup_root=$2
+
+    release_assert_generated_path "$release_dir" "$cli_cleanup_archive"
+    require_directory "$cli_cleanup_archive"
+    [ "$cli_cleanup_root" = "$cli_cleanup_archive/QuickTTYCLIBuild" ] \
+        || release_fail "refusing to remove unexpected CLI helper build root: $cli_cleanup_root"
+    if [ -e "$cli_cleanup_root" ] || [ -L "$cli_cleanup_root" ]; then
+        [ ! -L "$cli_cleanup_root" ] \
+            || release_fail "refusing to remove symlinked CLI helper build root: $cli_cleanup_root"
+        [ -d "$cli_cleanup_root" ] \
+            || release_fail "CLI helper build root is not a directory: $cli_cleanup_root"
+        "$RELEASE_RM_PATH" -rf "$cli_cleanup_root" \
+            || release_fail "could not remove CLI helper build root: $cli_cleanup_root"
+    fi
+}
+
 stage_created=no
 archive_pending=no
 dmg_pending=no
@@ -438,9 +456,11 @@ archive_pending=yes
 archive_app=$archive_path/Products/Applications/$PRODUCT_NAME.app
 verify_bundle "$archive_app"
 
-cli_build_dir=$archive_path/QuickTTYCLIProducts
-[ ! -e "$cli_build_dir" ] && [ ! -L "$cli_build_dir" ] \
-    || release_fail "CLI helper build directory must be absent: $cli_build_dir"
+cli_build_root=$archive_path/QuickTTYCLIBuild
+cli_products_dir=$cli_build_root/Products
+cli_intermediates_dir=$cli_build_root/Intermediates.noindex
+[ ! -e "$cli_build_root" ] && [ ! -L "$cli_build_root" ] \
+    || release_fail "CLI helper build root must be absent: $cli_build_root"
 "$xcodebuild_path" build \
     -project "$repo_root/QuickTTY.xcodeproj" \
     -target QuickTTYCLI \
@@ -449,8 +469,10 @@ cli_build_dir=$archive_path/QuickTTYCLIProducts
     ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=NO \
     CODE_SIGNING_ALLOWED=NO \
-    "CONFIGURATION_BUILD_DIR=$cli_build_dir"
-cli_build_product=$cli_build_dir/$CLI_HELPER_NAME
+    "CONFIGURATION_BUILD_DIR=$cli_products_dir" \
+    "OBJROOT=$cli_intermediates_dir" \
+    "SYMROOT=$cli_products_dir"
+cli_build_product=$cli_products_dir/$CLI_HELPER_NAME
 require_regular_file "$cli_build_product"
 [ -x "$cli_build_product" ] || release_fail "built CLI helper is not executable: $cli_build_product"
 
@@ -460,8 +482,7 @@ staged_app=$stage_dir/$PRODUCT_NAME.app
 "$ditto_path" "$archive_app" "$staged_app"
 "$script_dir/copy-cli-helper.sh" \
     "$cli_build_product" "$staged_app/Contents/Helpers/$CLI_HELPER_NAME"
-"$RELEASE_RM_PATH" -rf "$cli_build_dir" \
-    || release_fail "could not remove CLI helper build directory: $cli_build_dir"
+remove_cli_build_root "$archive_path" "$cli_build_root"
 release_verify_sparkle_signing_layout "$staged_app"
 
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
