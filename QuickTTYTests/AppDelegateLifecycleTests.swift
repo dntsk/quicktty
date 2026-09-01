@@ -214,6 +214,64 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func productionInstallerAndRestoreUseSameEffectiveExecutableSearchPath() async throws {
+        let temporaryDirectoryPath = try #require(
+            FileManager.default.temporaryDirectory.path.withCString { realpath($0, nil) }
+        )
+        defer { free(temporaryDirectoryPath) }
+        let canonicalTemporaryDirectory = URL(
+            fileURLWithPath: String(cString: temporaryDirectoryPath), isDirectory: true)
+        let root = canonicalTemporaryDirectory.appending(
+            path: "QuickTTY-AppDelegate-Executable-Path-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        let home = root.appending(path: "home", directoryHint: .isDirectory)
+        let applicationSupport = home.appending(
+            path: "Library/Application Support",
+            directoryHint: .isDirectory
+        )
+        let bin = root.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: applicationSupport,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = bin.appending(path: "pi")
+        try Data("fixture".utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+        let environment = ["HOME": home.path, "PATH": bin.path]
+        let executableSearchPath = ApplicationEnvironment.effectiveGUIExecutableSearchPath(
+            environment: environment
+        )
+        let installers = try AppDelegate.makeProductionAgentIntegrationInstallers(
+            environment: environment,
+            executableSearchPath: executableSearchPath
+        )
+        let installerStatuses = try await installers.agentIntegrationInstaller.status(
+            selectedAdapterIDs: ["pi"]
+        )
+        let piID = try AgentAdapterID(rawValue: "pi")
+        let resolver = AgentRestoreCompatibilityResolver { _, _ in
+            .exited(status: 0, output: Data("0.84.4\n".utf8))
+        }
+
+        let compatibility = await AppDelegate.resolveAgentRestoreCompatibility(
+            adapterIDs: [piID],
+            path: executableSearchPath,
+            resolver: resolver
+        )
+
+        #expect(installerStatuses.first?.status == .available)
+        #expect(compatibility[piID]?.status == .compatible(version: "0.84.4"))
+        #expect(compatibility[piID]?.resolvedExecutablePath != nil)
+    }
+
+    @Test
     func cancellingCompatibilityPreflightPreventsLaunchContinuation() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(
             path: "QuickTTY-AppDelegate-Cancellation-\(UUID().uuidString)",

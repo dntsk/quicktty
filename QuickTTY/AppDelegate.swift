@@ -46,15 +46,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.applicationState = applicationState
         let adapterIDs = Self.agentAdapterIDs(in: applicationState.workspaceStore)
-        let path = ProcessInfo.processInfo.environment["PATH"]
+        let executableSearchPath = ApplicationEnvironment.effectiveGUIExecutableSearchPath()
         startupTask = Task { [weak self] in
             await Self.runAgentRestoreCompatibilityPreflight(
                 adapterIDs: adapterIDs,
-                path: path
+                path: executableSearchPath
             ) { [weak self] compatibility in
                 self?.completeLaunch(
                     applicationState: applicationState,
-                    agentRestoreCompatibility: compatibility
+                    agentRestoreCompatibility: compatibility,
+                    executableSearchPath: executableSearchPath
                 )
             }
         }
@@ -62,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func completeLaunch(
         applicationState: ApplicationState,
-        agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility]
+        agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility],
+        executableSearchPath: String
     ) {
         do {
             let ghosttyBridge = try GhosttyBridge()
@@ -107,7 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             self.windowCoordinator = windowCoordinator
             do {
-                let installers = try Self.makeProductionAgentIntegrationInstallers()
+                let installers = try Self.makeProductionAgentIntegrationInstallers(
+                    executableSearchPath: executableSearchPath
+                )
                 windowCoordinator.installAgentIntegrations(
                     installer: .live(installers.agentIntegrationInstaller),
                     launcherInstaller: .live(installers.commandLineLauncherInstaller)
@@ -421,7 +425,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func makeProductionAgentIntegrationInstallers(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        bundle: Bundle = .main
+        bundle: Bundle = .main,
+        executableSearchPath: String? = nil
     ) throws -> (
         agentIntegrationInstaller: AgentIntegrationInstaller,
         commandLineLauncherInstaller: CommandLineLauncherInstaller
@@ -444,7 +449,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             homeDirectory: homeDirectory,
             applicationSupportDirectory: applicationSupportDirectory,
             resourceRoot: resourceRoot,
-            helperExecutable: helperExecutable
+            helperExecutable: helperExecutable,
+            executableSearchPath: executableSearchPath
+                ?? ApplicationEnvironment.effectiveGUIExecutableSearchPath(
+                    environment: environment
+                )
         )
     }
 
@@ -452,7 +461,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         homeDirectory: URL,
         applicationSupportDirectory: URL,
         resourceRoot: URL,
-        helperExecutable: URL
+        helperExecutable: URL,
+        executableSearchPath: String =
+            ApplicationEnvironment
+            .effectiveGUIExecutableSearchPath()
     ) throws -> (
         agentIntegrationInstaller: AgentIntegrationInstaller,
         commandLineLauncherInstaller: CommandLineLauncherInstaller
@@ -462,7 +474,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 homeDirectory: homeDirectory,
                 applicationSupportDirectory: applicationSupportDirectory,
                 resourceRoot: resourceRoot,
-                helperExecutable: helperExecutable
+                helperExecutable: helperExecutable,
+                executableAvailable: { executable in
+                    ApplicationEnvironment.isExecutableAvailable(
+                        executable,
+                        searchPath: executableSearchPath
+                    )
+                }
             ),
             try CommandLineLauncherInstaller(
                 homeDirectory: homeDirectory,
