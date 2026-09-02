@@ -18,6 +18,7 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 - Сборка: `make build`
 - Тесты: `make test`
 - Полная проверка: `make check`
+- Прямые/focused Xcode-вызовы: `./scripts/xcodebuild.sh …` (перед каждым `test` всё равно требуется отдельное явное разрешение)
 
 ## Критические правила
 

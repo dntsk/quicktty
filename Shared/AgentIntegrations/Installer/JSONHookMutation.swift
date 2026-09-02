@@ -60,6 +60,15 @@ public struct JSONHookMutation: Sendable {
 
     var operationIDs: Set<String> { Set(hooks.map(\.operationID)) }
 
+    func matchesOwnershipIdentity(_ record: AgentIntegrationOwnershipRecord) -> Bool {
+        guard record.path == path, record.kind == .jsonHook, record.markerVersion == nil else {
+            return false
+        }
+        return hooks.contains {
+            $0.operationID == record.operationID && $0.jsonPointer == record.jsonPointer
+        }
+    }
+
     public func prepareInstall(
         fileSystem: AgentIntegrationFileSystem,
         ownership: [AgentIntegrationOwnershipRecord]
@@ -67,6 +76,16 @@ public struct JSONHookMutation: Sendable {
         let before = try fileSystem.read(path)
         var root = try Self.object(from: before ?? Data("{}".utf8))
         var installedRecords: [AgentIntegrationOwnershipRecord] = []
+        let relevantRecords = ownership.filter {
+            $0.path == path && operationIDs.contains($0.operationID)
+        }
+        guard relevantRecords.allSatisfy(matchesOwnershipIdentity) else {
+            throw AgentIntegrationInstallerError.ownershipMismatch
+        }
+        let baseline = try Self.groupedBaseline(
+            in: relevantRecords,
+            whenEmpty: before.map(AgentIntegrationHash.digest)
+        )
 
         for hook in hooks {
             let desired = try JSONSerialization.jsonObject(
@@ -102,15 +121,18 @@ public struct JSONHookMutation: Sendable {
                     operationID: hook.operationID,
                     kind: .jsonHook,
                     jsonPointer: hook.jsonPointer,
-                    beforeHash: records.first?.beforeHash
-                        ?? before.map(AgentIntegrationHash.digest),
+                    beforeHash: baseline,
                     ownedHash: AgentIntegrationHash.digest(desiredCanonical)
                 ))
         }
 
         let after = try Self.canonical(root)
         return AgentIntegrationMutationPlan(
-            write: try fileSystem.prepareWrite(path: path, data: after, kind: .jsonHook),
+            write: try fileSystem.prepareWrite(
+                path: path,
+                data: after,
+                kind: .jsonHook
+            ),
             ownershipRecords: installedRecords
         )
     }
@@ -129,6 +151,7 @@ public struct JSONHookMutation: Sendable {
         guard let before = try fileSystem.read(path), records.count == hooks.count else {
             throw AgentIntegrationInstallerError.ownershipMismatch
         }
+        let baseline = try Self.groupedBaseline(in: records, whenEmpty: nil)
         var root = try Self.object(from: before)
         for hook in hooks {
             guard let record = records.first(where: { $0.operationID == hook.operationID }),
@@ -147,7 +170,7 @@ public struct JSONHookMutation: Sendable {
                 Self.pruneEmptyPath(in: &root, components: components[...])
             }
         }
-        if root.isEmpty, records.allSatisfy({ $0.beforeHash == nil }) {
+        if root.isEmpty, baseline == nil {
             return AgentIntegrationMutationPlan(
                 write: try fileSystem.prepareRemoval(path: path, kind: .jsonHook),
                 ownershipRecord: nil
@@ -161,6 +184,17 @@ public struct JSONHookMutation: Sendable {
             ),
             ownershipRecord: nil
         )
+    }
+
+    private static func groupedBaseline(
+        in records: [AgentIntegrationOwnershipRecord],
+        whenEmpty emptyBaseline: @autoclosure () -> String?
+    ) throws -> String? {
+        guard let first = records.first else { return emptyBaseline() }
+        guard records.dropFirst().allSatisfy({ $0.beforeHash == first.beforeHash }) else {
+            throw AgentIntegrationInstallerError.ownershipMismatch
+        }
+        return first.beforeHash
     }
 
     private static func object(from data: Data) throws -> [String: Any] {

@@ -97,9 +97,9 @@ lint: release-contract notarize-contract beta-feed-contract callback-contract ag
 	swift format lint --recursive $(SWIFT_SOURCES)
 
 build: generate
-	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) build
+	./scripts/xcodebuild.sh -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) build
 
 test: generate
-	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) test
+	./scripts/xcodebuild.sh -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) test
 
 check: ghostty-resources-test cli-helper-contract agent-launch-contract agent-wrapper-contract lint build test

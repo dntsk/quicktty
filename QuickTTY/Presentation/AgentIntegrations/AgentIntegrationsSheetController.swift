@@ -37,17 +37,37 @@ final class AgentIntegrationsSheetController: NSObject, NSWindowDelegate {
     }
 
     func present(on window: NSWindow) {
+        _ = present(on: window, reloadStatus: true)
+    }
+
+    @discardableResult
+    func presentPreparedOffer(on window: NSWindow) -> Bool {
+        guard !isPresented, window.attachedSheet == nil else { return false }
+        return present(on: window, reloadStatus: false)
+    }
+
+    @discardableResult
+    private func present(on window: NSWindow, reloadStatus: Bool) -> Bool {
         if isPresented {
             if parentWindow !== window {
                 reattach(to: window)
             }
             sheetWindow.makeKeyAndOrderFront(nil)
-            return
+            return true
         }
         parentWindow = window
         isPresented = true
-        viewController.reload()
+        if reloadStatus {
+            viewController.reload()
+        }
         window.beginSheet(sheetWindow)
+        guard sheetWindow.sheetParent === window else {
+            isPresented = false
+            parentWindow = nil
+            sheetWindow.orderOut(nil)
+            return false
+        }
+        return true
     }
 
     @discardableResult

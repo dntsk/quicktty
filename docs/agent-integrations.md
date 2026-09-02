@@ -85,14 +85,19 @@ The installer core:
 - creates a uniquely named `.quicktty-backup-…` copy before changing an existing file;
 - uses compare-before-swap checks and refuses symlink/path, duplicate-key, ownership, marker, or changed-after-preview conflicts;
 - records only QuickTTY-owned mutations in `~/Library/Application Support/QuickTTY/agent-integration-ownership.json`;
+- treats a trusted nonempty subset of the current integration policy as an older installed policy and offers the missing owned operations as an update;
+- validates every existing ownership record against the exact current path, operation ID, mutation kind, and mutation-specific metadata before preparing an update;
+- leaves foreign, malformed, or mismatched content as a conflict instead of overwriting it;
 - uninstalls only content that still matches that ownership record and leaves unrelated user configuration intact;
 - skips blocked or missing executables instead of writing their configuration.
 
-There are no silent configuration writes. Installation and uninstallation always require an explicit preview/apply flow.
+There are no silent configuration writes. Installation, update, and uninstallation always require an explicit preview/apply flow.
 
 ## Agent Integrations sheet
 
 Open **QuickTTY → Agent Integrations…**. The sheet uses the same installer core, ordered registry, capabilities, statuses, previews, backups, ownership checks, and uninstall rules as the CLI; it does not spawn the CLI. Select Install or Uninstall, select eligible entries, review the paths and mutation kinds, and confirm before Apply. The sheet can also explicitly install or uninstall the launcher symlink `~/.local/bin/quicktty`; an unrelated file or symlink at that path is a conflict and is never overwritten.
+
+Once per application build, startup may check for `updateAvailable` integrations and open this same sheet with only those integrations selected in registry order. QuickTTY records the offer only after the sheet is displayed, so dismissing it or an update error does not prompt again in that build. Detection, selection, and presentation are automatic; filesystem changes are not. Every update still shows the bounded preview and requires explicit confirmation before apply. A missing window, cancelled or failed status check, or no available updates causes no prompt, record, or configuration write.
 
 The pane section shows only the known agent name and `Active`, `Restoring`, `Unverified`, or `Failed`. It never renders raw session IDs. **Retry** re-runs compatibility checks, rotates pane credentials, and attempts the saved binding again. **Forget** removes the binding and creates a fresh shell. Diagnostics are bounded and redacted; prompts, transcripts, commands, terminal text, environment values, and session IDs are not displayed.
 

@@ -27,6 +27,11 @@ public struct MarkerBlockMutation: Sendable {
         self.body = body
     }
 
+    func matchesOwnershipIdentity(_ record: AgentIntegrationOwnershipRecord) -> Bool {
+        record.path == path && record.operationID == operationID && record.kind == .markerBlock
+            && record.markerVersion == markerVersion && record.jsonPointer == nil
+    }
+
     public func prepareInstall(
         fileSystem: AgentIntegrationFileSystem,
         ownership: [AgentIntegrationOwnershipRecord]

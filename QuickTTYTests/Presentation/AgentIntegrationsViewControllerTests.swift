@@ -98,6 +98,256 @@ struct AgentIntegrationsViewControllerTests {
     }
 
     @Test
+    func updateOfferRefreshSelectsOnlyUpdatesInRegistryOrder() async {
+        let statuses = integrationStatuses(overrides: [
+            "claude": .updateAvailable,
+            "codex": .conflict,
+            "amp": .available,
+            "pi": .updateAvailable,
+        ])
+        let viewController = makeViewController(
+            recorder: IntegrationInstallerRecorder(statuses: statuses),
+            launcherRecorder: LauncherInstallerRecorder()
+        )
+        viewController.loadView()
+
+        let shouldOffer = await viewController.prepareUpdateOffer()
+
+        #expect(shouldOffer)
+        #expect(
+            viewController.orderedAdapterIDs.filter(viewController.selectedAdapterIDs.contains)
+                == ["claude", "pi"]
+        )
+        #expect(viewController.integrationButtonForTesting.title == "Update Selected")
+    }
+
+    @Test
+    func launcherStatusFailureDoesNotSuppressUpdateOfferButManualReloadStillChecksLauncher() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let launcherRecorder = LauncherInstallerRecorder(failsStatus: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder
+        )
+        viewController.loadView()
+
+        #expect(await viewController.prepareUpdateOffer())
+        #expect(await launcherRecorder.statusRequestCount == 0)
+        #expect(viewController.selectedAdapterIDs == Set(["claude"]))
+
+        await viewController.reloadStatus()
+
+        #expect(await launcherRecorder.statusRequestCount == 1)
+    }
+
+    @Test
+    func updateOfferWithoutUpdatesReturnsFalseAndClearsSelection() async {
+        let viewController = makeViewController(
+            recorder: IntegrationInstallerRecorder(statuses: integrationStatuses()),
+            launcherRecorder: LauncherInstallerRecorder()
+        )
+        viewController.loadView()
+        viewController.setSelected("claude", selected: true)
+
+        let shouldOffer = await viewController.prepareUpdateOffer()
+
+        #expect(!shouldOffer)
+        #expect(viewController.selectedAdapterIDs.isEmpty)
+    }
+
+    @Test
+    func updateOnlySelectionUsesUpdateCopyAndAppliesOnlyAfterConfirmation() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(confirmations.requests.first?.title == "Update selected integrations?")
+        #expect(confirmations.requests.first?.confirmTitle == "Update")
+        #expect(confirmations.requests.first?.previewText.contains("Update — claude") == true)
+        #expect(await recorder.appliedPlanIDs == ["prepared-plan"])
+        #expect(viewController.messageForTesting == "Integration update finished.")
+    }
+
+    @Test
+    func updateProgressUsesExactCopyWhileApplyIsPending() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable]),
+            gateApply: true
+        )
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await recorder.waitUntilApplyStarts()
+
+        #expect(viewController.messageForTesting == "Updating integrations…")
+        await recorder.resumeApply()
+        await viewController.waitForApplyTaskForTesting()
+        #expect(viewController.messageForTesting == "Integration update finished.")
+    }
+
+    @Test
+    func updateApplyFailureUsesExactRollbackCopy() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable]),
+            failure: .apply
+        )
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(
+            viewController.messageForTesting
+                == "Update failed and was rolled back where required."
+        )
+    }
+
+    @Test
+    func updatePostApplyStatusFailureUsesExactUnavailableCopy() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable]),
+            failure: .postApplyStatus
+        )
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(
+            viewController.messageForTesting
+                == "Update applied, but integration status is unavailable."
+        )
+    }
+
+    @Test
+    func rejectedUpdateConfirmationDoesNotApply() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmations = ConfirmationRecorder(result: false)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+        #expect(viewController.messageForTesting == "Update cancelled.")
+    }
+
+    @Test
+    func mixedAvailableAndUpdateSelectionKeepsInstallCopy() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmations = ConfirmationRecorder(result: false)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: LauncherInstallerRecorder(),
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("claude", selected: true)
+        viewController.setSelected("codex", selected: true)
+
+        #expect(viewController.integrationButtonForTesting.title == "Install Selected")
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(confirmations.requests.first?.title == "Install selected integrations?")
+        #expect(confirmations.requests.first?.confirmTitle == "Install")
+        #expect(viewController.messageForTesting == "Installation cancelled.")
+    }
+
+    @Test
+    func staleGenerationAndCancellationCannotPrepareUpdateOffer() async {
+        let statuses = integrationStatuses(overrides: ["claude": .updateAvailable])
+        let staleInstaller = AgentIntegrationInstallerClient(
+            adapterIDs: AgentIntegrationInstaller.adapterIDs,
+            status: { _ in
+                AgentIntegrationGeneratedResponse(generation: UUID(), value: statuses)
+            },
+            prepare: { generation, _, _ in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: AgentIntegrationPreparedSummary(planID: "unused", adapters: [])
+                )
+            },
+            apply: { generation, _ in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: AgentIntegrationApplySummary(adapters: [])
+                )
+            }
+        )
+        let staleViewController = AgentIntegrationsViewController(
+            installer: staleInstaller,
+            launcherInstaller: LauncherInstallerRecorder().client,
+            bindingProvider: { [] },
+            retryBinding: { _ in },
+            forgetBinding: { _ in }
+        )
+        staleViewController.loadView()
+
+        #expect(await staleViewController.prepareUpdateOffer() == false)
+        #expect(staleViewController.selectedAdapterIDs.isEmpty)
+
+        let cancelledViewController = makeViewController(
+            recorder: IntegrationInstallerRecorder(statuses: statuses),
+            launcherRecorder: LauncherInstallerRecorder()
+        )
+        cancelledViewController.loadView()
+        let task = Task { @MainActor in
+            await cancelledViewController.prepareUpdateOffer()
+        }
+        task.cancel()
+
+        #expect(await task.value == false)
+        #expect(cancelledViewController.selectedAdapterIDs.isEmpty)
+    }
+
+    @Test
     func cancellingConfirmationInvalidatesPreviewWithoutApplying() async throws {
         let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
         let confirmations = ConfirmationRecorder(result: false)
@@ -249,7 +499,9 @@ struct AgentIntegrationsViewControllerTests {
         ["grok", "campfire", "kiro", "rovo-dev", "codebuddy", "ollama"]
     }
 
-    private func integrationStatuses() -> [AgentIntegrationAdapterSummary] {
+    private func integrationStatuses(
+        overrides: [String: AgentIntegrationInstallerStatus] = [:]
+    ) -> [AgentIntegrationAdapterSummary] {
         let wrapperIDs: Set<String> = ["amp", "antigravity", "opencode"]
         return AgentIntegrationInstaller.adapterIDs.map { adapterID in
             let capability: AgentIntegrationInstallerCapability =
@@ -263,7 +515,8 @@ struct AgentIntegrationsViewControllerTests {
             return AgentIntegrationAdapterSummary(
                 adapterID: adapterID,
                 capability: capability,
-                status: blockedIDs.contains(adapterID) ? .blocked : .available,
+                status: blockedIDs.contains(adapterID)
+                    ? .blocked : overrides[adapterID] ?? .available,
                 operations: []
             )
         }
@@ -300,46 +553,71 @@ private final class ConfirmationRecorder {
     }
 }
 
+private enum IntegrationInstallerRecorderFailure: Error, Equatable, Sendable {
+    case apply
+    case postApplyStatus
+}
+
 private actor IntegrationInstallerRecorder {
     let statuses: [AgentIntegrationAdapterSummary]
+    let failure: IntegrationInstallerRecorderFailure?
+    let gateApply: Bool
+    private let applyStarts: AsyncStream<Void>
+    private let applyStartContinuation: AsyncStream<Void>.Continuation
+    private var applyContinuation: CheckedContinuation<Void, Never>?
     private(set) var appliedPlanIDs: [String] = []
 
-    init(statuses: [AgentIntegrationAdapterSummary]) {
+    init(
+        statuses: [AgentIntegrationAdapterSummary],
+        failure: IntegrationInstallerRecorderFailure? = nil,
+        gateApply: Bool = false
+    ) {
         self.statuses = statuses
+        self.failure = failure
+        self.gateApply = gateApply
+        (applyStarts, applyStartContinuation) = AsyncStream.makeStream(of: Void.self)
     }
 
     nonisolated var client: AgentIntegrationInstallerClient {
         AgentIntegrationInstallerClient(
             adapterIDs: AgentIntegrationInstaller.adapterIDs,
-            status: { [statuses] in statuses },
-            prepare: { selected in
-                AgentIntegrationPreparedSummary(
-                    planID: "prepared-plan",
-                    adapters: selected.map { id in
-                        AgentIntegrationAdapterSummary(
-                            adapterID: id,
-                            capability: .nativeLifecycle,
-                            status: .available,
-                            operations: [
-                                AgentIntegrationOperationSummary(
-                                    displayPath: "~/.claude/settings.json",
-                                    kind: .jsonHook,
-                                    createsBackup: true
-                                )
-                            ]
-                        )
-                    }
-                )
-            },
-            apply: { [self] planID in
-                await recordApply(planID)
-                return AgentIntegrationApplySummary(
-                    adapters: [
-                        AgentIntegrationAdapterSummary(
-                            adapterID: "claude",
-                            capability: .nativeLifecycle,
-                            status: .succeeded,
-                            operations: []
+            status: { [self] in try await requestStatus() },
+            prepare: { [self] selected in await prepare(selected) },
+            apply: { [self] planID in try await apply(planID) }
+        )
+    }
+
+    func waitUntilApplyStarts() async {
+        for await _ in applyStarts {
+            return
+        }
+    }
+
+    func resumeApply() {
+        applyContinuation?.resume()
+        applyContinuation = nil
+    }
+
+    private func requestStatus() throws -> [AgentIntegrationAdapterSummary] {
+        if failure == .postApplyStatus, !appliedPlanIDs.isEmpty {
+            throw IntegrationInstallerRecorderFailure.postApplyStatus
+        }
+        return statuses
+    }
+
+    private func prepare(_ selected: [String]) -> AgentIntegrationPreparedSummary {
+        AgentIntegrationPreparedSummary(
+            planID: "prepared-plan",
+            adapters: selected.map { id in
+                AgentIntegrationAdapterSummary(
+                    adapterID: id,
+                    capability: .nativeLifecycle,
+                    status: .available,
+                    operations: [
+                        AgentIntegrationOperationSummary(
+                            displayPath: "~/.claude/settings.json",
+                            kind: .jsonHook,
+                            createsBackup: true
                         )
                     ]
                 )
@@ -347,30 +625,79 @@ private actor IntegrationInstallerRecorder {
         )
     }
 
-    private func recordApply(_ planID: String) {
+    private func apply(_ planID: String) async throws -> AgentIntegrationApplySummary {
+        applyStartContinuation.yield()
+        if gateApply {
+            await withCheckedContinuation { continuation in
+                applyContinuation = continuation
+            }
+        }
+        if failure == .apply {
+            throw IntegrationInstallerRecorderFailure.apply
+        }
         appliedPlanIDs.append(planID)
+        return AgentIntegrationApplySummary(
+            adapters: [
+                AgentIntegrationAdapterSummary(
+                    adapterID: "claude",
+                    capability: .nativeLifecycle,
+                    status: .succeeded,
+                    operations: []
+                )
+            ]
+        )
     }
 }
 
+private enum LauncherInstallerRecorderError: Error {
+    case status
+}
+
 private actor LauncherInstallerRecorder {
+    let failsStatus: Bool
+    private(set) var statusRequestCount = 0
     private(set) var appliedPlanIDs: [String] = []
+
+    init(failsStatus: Bool = false) {
+        self.failsStatus = failsStatus
+    }
 
     nonisolated var client: CommandLineLauncherInstallerClient {
         CommandLineLauncherInstallerClient(
-            prepare: {
-                CommandLineLauncherSummary(
-                    planID: "launcher-plan",
-                    displayPath: "~/.local/bin/quicktty",
-                    kind: "symlinkCreate",
-                    createsBackup: false,
-                    status: .available
+            status: { [self] generation in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: try await requestStatus()
                 )
             },
-            apply: { [self] planID in
+            prepare: { generation, _ in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: CommandLineLauncherSummary(
+                        planID: "launcher-plan",
+                        displayPath: "~/.local/bin/quicktty",
+                        kind: "symlinkCreate",
+                        createsBackup: false,
+                        status: .available
+                    )
+                )
+            },
+            apply: { [self] generation, planID in
                 await recordApply(planID)
-                return .succeeded
+                return AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: .succeeded
+                )
             }
         )
+    }
+
+    private func requestStatus() throws -> CommandLineLauncherStatus {
+        statusRequestCount += 1
+        if failsStatus {
+            throw LauncherInstallerRecorderError.status
+        }
+        return .available
     }
 
     private func recordApply(_ planID: String) {

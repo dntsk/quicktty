@@ -184,15 +184,16 @@ public actor AgentIntegrationInstaller {
             }
             guard case .untrusted = manifestState else {
                 do {
-                    let mutationPlans = try prepareMutations(
+                    let mutationPlans = try Self.prepareMutations(
                         policy: policy,
                         action: action,
-                        ownership: initialRecords
+                        ownership: initialRecords,
+                        fileSystem: fileSystem
                     )
                     let previews = mutationPlans.map(\.write.preview)
                     let preparedStatus = preparedStatus(
                         action: action,
-                        hadOwnership: hasOwnership(for: policy, in: initialRecords),
+                        hadOwnership: hasAnyOwnership(for: policy, in: initialRecords),
                         previews: previews
                     )
                     summaries.append(
@@ -354,9 +355,12 @@ public actor AgentIntegrationInstaller {
 
         switch action {
         case .install:
-            let verified = try policy.mutations.map {
-                try $0.prepareInstall(fileSystem: fileSystem, ownership: expectedOwnership)
-            }
+            let verified = try Self.prepareMutations(
+                policy: policy,
+                action: .install,
+                ownership: expectedOwnership,
+                fileSystem: fileSystem
+            )
             guard verified.allSatisfy({ !$0.write.preview.changesFile }),
                 verified.flatMap(\.ownershipRecords) == expectedRecords
             else { return false }
@@ -404,33 +408,42 @@ public actor AgentIntegrationInstaller {
             let ownedOperationIDs = Set(records.map(\.operationID)).intersection(
                 policy.operationIDs)
             if ownedOperationIDs.isEmpty { return .available }
-            guard ownedOperationIDs == policy.operationIDs else { return .conflict }
             do {
-                let plans = try prepareMutations(
+                let plans = try Self.prepareMutations(
                     policy: policy,
                     action: .install,
-                    ownership: records
+                    ownership: records,
+                    fileSystem: fileSystem
                 )
-                return plans.contains(where: { $0.write.preview.changesFile })
-                    ? .updateAvailable : .installed
+                if plans.contains(where: { $0.write.preview.changesFile }) {
+                    return .updateAvailable
+                }
+                return ownedOperationIDs == policy.operationIDs ? .installed : .updateAvailable
             } catch {
                 return .conflict
             }
         }
     }
 
-    private func hasOwnership(
+    private func hasAnyOwnership(
         for policy: Policy,
         in records: [AgentIntegrationOwnershipRecord]
     ) -> Bool {
-        policy.operationIDs.isSubset(of: Set(records.map(\.operationID)))
+        !policy.operationIDs.isDisjoint(with: Set(records.map(\.operationID)))
     }
 
-    private func prepareMutations(
+    private nonisolated static func prepareMutations(
         policy: Policy,
         action: AgentIntegrationInstallerAction,
-        ownership: [AgentIntegrationOwnershipRecord]
+        ownership: [AgentIntegrationOwnershipRecord],
+        fileSystem: AgentIntegrationFileSystem
     ) throws -> [AgentIntegrationMutationPlan] {
+        for record in ownership where policy.operationIDs.contains(record.operationID) {
+            guard policy.mutations.filter({ $0.matchesOwnershipIdentity(record) }).count == 1 else {
+                throw AgentIntegrationInstallerError.ownershipMismatch
+            }
+        }
+
         switch action {
         case .install:
             return try policy.mutations.map {
@@ -778,6 +791,14 @@ private enum PolicyMutation: Sendable {
         case .owned(let mutation): [mutation.operationID]
         case .json(let mutation): mutation.operationIDs
         case .marker(let mutation): [mutation.operationID]
+        }
+    }
+
+    func matchesOwnershipIdentity(_ record: AgentIntegrationOwnershipRecord) -> Bool {
+        switch self {
+        case .owned(let mutation): mutation.matchesOwnershipIdentity(record)
+        case .json(let mutation): mutation.matchesOwnershipIdentity(record)
+        case .marker(let mutation): mutation.matchesOwnershipIdentity(record)
         }
     }
 

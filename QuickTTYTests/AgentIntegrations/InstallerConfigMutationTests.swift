@@ -113,6 +113,58 @@ struct InstallerConfigMutationTests {
     }
 
     @Test
+    func groupedJSONRejectsInconsistentOwnershipBaselines() throws {
+        let environment = try InstallerTestEnvironment()
+        defer { environment.remove() }
+        let path = try AgentIntegrationPath(root: .home, relativePath: "hooks.json")
+        let mutation = try JSONHookMutation(
+            path: path,
+            hooks: [
+                (
+                    jsonPointer: "/hooks/start",
+                    operationID: "start-hook",
+                    commandNode: Data("{\"command\":\"start\"}".utf8)
+                ),
+                (
+                    jsonPointer: "/hooks/end",
+                    operationID: "end-hook",
+                    commandNode: Data("{\"command\":\"end\"}".utf8)
+                ),
+            ]
+        )
+        let install = try mutation.prepareInstall(
+            fileSystem: environment.fileSystem,
+            ownership: []
+        )
+        _ = try apply(install, using: environment.fileSystem)
+        let records = install.ownershipRecords
+        let endRecord = try #require(records.last)
+        let inconsistentEndRecord = AgentIntegrationOwnershipRecord(
+            path: endRecord.path,
+            operationID: endRecord.operationID,
+            kind: endRecord.kind,
+            markerVersion: endRecord.markerVersion,
+            jsonPointer: endRecord.jsonPointer,
+            beforeHash: AgentIntegrationHash.digest(Data("{}".utf8)),
+            ownedHash: endRecord.ownedHash
+        )
+
+        let inconsistentRecords = [try #require(records.first), inconsistentEndRecord]
+        #expect(throws: AgentIntegrationInstallerError.ownershipMismatch) {
+            try mutation.prepareInstall(
+                fileSystem: environment.fileSystem,
+                ownership: inconsistentRecords
+            )
+        }
+        #expect(throws: AgentIntegrationInstallerError.ownershipMismatch) {
+            try mutation.prepareUninstall(
+                fileSystem: environment.fileSystem,
+                records: inconsistentRecords
+            )
+        }
+    }
+
+    @Test
     func jsonRejectsDuplicateKeysEscapedDuplicatesAndNonObjectRoots() throws {
         let environment = try InstallerTestEnvironment()
         defer { environment.remove() }

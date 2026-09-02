@@ -242,10 +242,12 @@ final class AgentIntegrationsViewController: NSViewController {
     private var preparedSummary: AgentIntegrationPreparedSummary?
     private var preparedSelection: [String] = []
     private var preparedAction: AgentIntegrationInstallerAction?
+    private var preparedIsUpdate = false
     private var launcherPreparedSummary: CommandLineLauncherSummary?
     private var launcherPreparedAction: AgentIntegrationInstallerAction?
     private var launcherStatus: CommandLineLauncherStatus?
     private var resultAction: AgentIntegrationInstallerAction?
+    private var resultIsUpdate = false
     private(set) var summaries: [AgentIntegrationAdapterSummary]
     private(set) var applySummaries: [AgentIntegrationAdapterSummary] = []
     private(set) var bindingSnapshots: [AgentIntegrationBindingSnapshot] = []
@@ -421,6 +423,33 @@ final class AgentIntegrationsViewController: NSViewController {
         renderAll()
     }
 
+    func prepareUpdateOffer() async -> Bool {
+        guard !isBusy, !Task.isCancelled else { return false }
+        isClosed = false
+        isOperationVisible = true
+        selectedAction = .install
+        actionSelector.selectedSegment = 0
+        selectedAdapterIDs.removeAll()
+        let generation = beginStatusRefresh()
+        renderAll()
+        guard await performIntegrationStatusRefresh(generation: generation),
+            accepts(generation: generation)
+        else { return false }
+
+        let statusByID = Dictionary(
+            uniqueKeysWithValues: summaries.map { ($0.adapterID, $0.status) })
+        let updateIDs = orderedAdapterIDs.filter { statusByID[$0] == .updateAvailable }
+        guard !updateIDs.isEmpty else {
+            selectedAdapterIDs.removeAll()
+            renderAll()
+            return false
+        }
+        selectedAdapterIDs = Set(updateIDs)
+        bindingSnapshots = bindingProvider()
+        renderAll()
+        return true
+    }
+
     func setAction(_ action: AgentIntegrationInstallerAction) {
         guard !isBusy, selectedAction != action else { return }
         cancelNonApplyTasks()
@@ -452,6 +481,7 @@ final class AgentIntegrationsViewController: NSViewController {
         guard operationCanStart else { return }
         let selection = orderedAdapterIDs.filter(selectedAdapterIDs.contains)
         guard !selection.isEmpty else { return }
+        let isUpdate = isUpdateOnlySelection
         cancelNonApplyTasks()
         let generation = advanceGeneration()
         invalidatePreparedPlan(clearResults: true)
@@ -465,18 +495,23 @@ final class AgentIntegrationsViewController: NSViewController {
             preparedSummary = prepared
             preparedSelection = selection
             preparedAction = selectedAction
+            preparedIsUpdate = isUpdate
             messageLabel.stringValue =
-                selectedAction == .install
-                ? "Confirm the installation preview before applying changes."
-                : "Confirm the removal preview before applying changes."
+                isUpdate
+                ? "Confirm the update preview before applying changes."
+                : selectedAction == .install
+                    ? "Confirm the installation preview before applying changes."
+                    : "Confirm the removal preview before applying changes."
         } catch is CancellationError {
             return
         } catch {
             guard accepts(generation: generation) else { return }
             messageLabel.stringValue =
-                selectedAction == .install
-                ? "The installation preview could not be prepared."
-                : "The removal preview could not be prepared."
+                isUpdate
+                ? "The update preview could not be prepared."
+                : selectedAction == .install
+                    ? "The installation preview could not be prepared."
+                    : "The removal preview could not be prepared."
             invalidatePreparedPlan(clearResults: true)
         }
         renderAll()
@@ -489,6 +524,7 @@ final class AgentIntegrationsViewController: NSViewController {
             preparedAction == selectedAction,
             preparedSelection == orderedAdapterIDs.filter(selectedAdapterIDs.contains)
         else { return }
+        let isUpdate = preparedIsUpdate
         cancelNonApplyTasks()
         let generation = advanceGeneration()
         applyGeneration = generation
@@ -496,7 +532,11 @@ final class AgentIntegrationsViewController: NSViewController {
         defer {
             if isApplying, applyGeneration == generation {
                 invalidatePreparedPlan(clearResults: true)
-                finishApply(message: "Integration changes were cancelled or became unavailable.")
+                finishApply(
+                    message: isUpdate
+                        ? "Integration update was cancelled or became unavailable."
+                        : "Integration changes were cancelled or became unavailable."
+                )
             }
         }
         resultAction = nil
@@ -504,16 +544,20 @@ final class AgentIntegrationsViewController: NSViewController {
         renderAll()
         progressIndicator.startAnimation(nil)
         messageLabel.stringValue =
-            preparedAction == .install ? "Installing integrations…" : "Removing integrations…"
+            isUpdate
+            ? "Updating integrations…"
+            : preparedAction == .install ? "Installing integrations…" : "Removing integrations…"
 
         do {
             let response = try await installer.apply(generation, preparedSummary.planID)
             guard acceptsApply(response: response, generation: generation) else { return }
             applySummaries = orderedAndBoundedSubset(response.value.adapters)
             resultAction = preparedAction
+            resultIsUpdate = isUpdate
             self.preparedSummary = nil
             preparedSelection = []
             self.preparedAction = nil
+            preparedIsUpdate = false
             selectedAdapterIDs.removeAll()
             renderAll()
 
@@ -522,21 +566,29 @@ final class AgentIntegrationsViewController: NSViewController {
                 guard acceptsApply(response: statusResponse, generation: generation) else { return }
                 guard let fullStatus = validatedFullStatus(statusResponse.value) else {
                     finishApply(
-                        message: "Changes applied, but integration status is unavailable."
+                        message: isUpdate
+                            ? "Update applied, but integration status is unavailable."
+                            : "Changes applied, but integration status is unavailable."
                     )
                     return
                 }
                 summaries = fullStatus
                 finishApply(
-                    message: preparedAction == .install
-                        ? "Integration installation finished."
-                        : "Integration removal finished."
+                    message: isUpdate
+                        ? "Integration update finished."
+                        : preparedAction == .install
+                            ? "Integration installation finished."
+                            : "Integration removal finished."
                 )
             } catch is CancellationError {
                 return
             } catch {
                 guard acceptsApply(generation: generation) else { return }
-                finishApply(message: "Changes applied, but integration status is unavailable.")
+                finishApply(
+                    message: isUpdate
+                        ? "Update applied, but integration status is unavailable."
+                        : "Changes applied, but integration status is unavailable."
+                )
             }
         } catch is CancellationError {
             return
@@ -546,9 +598,11 @@ final class AgentIntegrationsViewController: NSViewController {
             preparedSelection = []
             self.preparedAction = nil
             finishApply(
-                message: preparedAction == .install
-                    ? "Installation failed and was rolled back where required."
-                    : "Removal failed and was rolled back where required."
+                message: isUpdate
+                    ? "Update failed and was rolled back where required."
+                    : preparedAction == .install
+                        ? "Installation failed and was rolled back where required."
+                        : "Removal failed and was rolled back where required."
             )
         }
     }
@@ -558,10 +612,13 @@ final class AgentIntegrationsViewController: NSViewController {
         guard operationCanStart, preparedSummary != nil, !Task.isCancelled else { return }
 
         let action = selectedAction
+        let isUpdate = preparedIsUpdate
         let request = confirmationRequest(
-            title: action == .install
-                ? "Install selected integrations?" : "Uninstall selected integrations?",
-            confirmTitle: action == .install ? "Install" : "Uninstall"
+            title: isUpdate
+                ? "Update selected integrations?"
+                : action == .install
+                    ? "Install selected integrations?" : "Uninstall selected integrations?",
+            confirmTitle: isUpdate ? "Update" : action == .install ? "Install" : "Uninstall"
         )
         isConfirming = true
         renderAll()
@@ -576,7 +633,9 @@ final class AgentIntegrationsViewController: NSViewController {
         guard confirmed else {
             invalidatePreparedPlan(clearResults: true)
             messageLabel.stringValue =
-                action == .install ? "Installation cancelled." : "Removal cancelled."
+                isUpdate
+                ? "Update cancelled."
+                : action == .install ? "Installation cancelled." : "Removal cancelled."
             renderAll()
             return
         }
@@ -748,6 +807,13 @@ final class AgentIntegrationsViewController: NSViewController {
 
     private var isBusy: Bool { isApplying || isConfirming }
 
+    private var isUpdateOnlySelection: Bool {
+        guard selectedAction == .install, !selectedAdapterIDs.isEmpty else { return false }
+        let statusByID = Dictionary(
+            uniqueKeysWithValues: summaries.map { ($0.adapterID, $0.status) })
+        return selectedAdapterIDs.allSatisfy { statusByID[$0] == .updateAvailable }
+    }
+
     private var operationCanStart: Bool {
         !isBusy && isOperationVisible && !isClosed
     }
@@ -794,28 +860,48 @@ final class AgentIntegrationsViewController: NSViewController {
         return generation
     }
 
-    private func performStatusRefresh(generation: UUID) async {
+    @discardableResult
+    private func performStatusRefresh(generation: UUID) async -> Bool {
+        guard await performIntegrationStatusRefresh(generation: generation) else { return false }
+        do {
+            let launcherResponse = try await launcherInstaller.status(generation)
+            guard accepts(response: launcherResponse, generation: generation) else { return false }
+            launcherStatus = launcherResponse.value
+            renderAll()
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            guard accepts(generation: generation) else { return false }
+            messageLabel.stringValue = "Integration status is unavailable."
+            renderAll()
+            return false
+        }
+    }
+
+    @discardableResult
+    private func performIntegrationStatusRefresh(generation: UUID) async -> Bool {
         do {
             let statusResponse = try await installer.status(generation)
-            guard accepts(response: statusResponse, generation: generation) else { return }
-            let launcherResponse = try await launcherInstaller.status(generation)
-            guard accepts(response: launcherResponse, generation: generation) else { return }
+            guard accepts(response: statusResponse, generation: generation) else { return false }
             guard let fullStatus = validatedFullStatus(statusResponse.value) else {
                 messageLabel.stringValue = "Integration status is unavailable."
                 renderAll()
-                return
+                return false
             }
             summaries = fullStatus
-            launcherStatus = launcherResponse.value
             selectedAdapterIDs.formIntersection(selectableAdapterIDs)
             messageLabel.stringValue = ""
+            renderAll()
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
-            guard accepts(generation: generation) else { return }
+            guard accepts(generation: generation) else { return false }
             messageLabel.stringValue = "Integration status is unavailable."
+            renderAll()
+            return false
         }
-        renderAll()
     }
 
     private func finishApply(message: String) {
@@ -996,7 +1082,9 @@ final class AgentIntegrationsViewController: NSViewController {
 
         let isInstall = selectedAction == .install
         let selection = orderedAdapterIDs.filter(selectedAdapterIDs.contains)
-        integrationButton.title = isInstall ? "Install Selected" : "Uninstall Selected"
+        integrationButton.title =
+            isUpdateOnlySelection
+            ? "Update Selected" : isInstall ? "Install Selected" : "Uninstall Selected"
         integrationButton.setAccessibilityLabel(integrationButton.title)
         integrationButton.isEnabled = !isBusy && !selection.isEmpty
         actionSelector.isEnabled = !isBusy
@@ -1109,7 +1197,8 @@ final class AgentIntegrationsViewController: NSViewController {
             action = preparedAction
         }
         guard !displayed.isEmpty, let action else { return [] }
-        let verb = action == .install ? "Installation" : "Removal"
+        let isUpdate = !applySummaries.isEmpty ? resultIsUpdate : preparedIsUpdate
+        let verb = isUpdate ? "Update" : action == .install ? "Installation" : "Removal"
         var lines: [String] = []
         for summary in displayed.prefix(orderedAdapterIDs.count) {
             lines.append("\(verb) — \(summary.adapterID): \(summary.status.rawValue)")
@@ -1184,9 +1273,11 @@ final class AgentIntegrationsViewController: NSViewController {
         preparedSummary = nil
         preparedSelection = []
         preparedAction = nil
+        preparedIsUpdate = false
         if clearResults {
             applySummaries = []
             resultAction = nil
+            resultIsUpdate = false
         }
     }
 

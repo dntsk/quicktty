@@ -21,6 +21,11 @@ public struct OwnedFileMutation: Sendable {
         self.mode = mode
     }
 
+    func matchesOwnershipIdentity(_ record: AgentIntegrationOwnershipRecord) -> Bool {
+        record.path == path && record.operationID == operationID && record.kind == .ownedFile
+            && record.beforeHash == nil && record.markerVersion == nil && record.jsonPointer == nil
+    }
+
     public func prepareInstall(
         fileSystem: AgentIntegrationFileSystem,
         ownership: [AgentIntegrationOwnershipRecord]

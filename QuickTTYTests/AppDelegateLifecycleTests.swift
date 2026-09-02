@@ -185,6 +185,18 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func applicationActivationPrecedesAutomaticIntegrationUpdateOffer() {
+        var events: [String] = []
+
+        AppDelegate.activateApplicationBeforeOfferingAgentIntegrationUpdates(
+            activate: { events.append("activate") },
+            offerUpdates: { events.append("offer updates") }
+        )
+
+        #expect(events == ["activate", "offer updates"])
+    }
+
+    @Test
     func compatibilityPreflightRunsOffMainActor() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(
             path: "QuickTTY-AppDelegate-Compatibility-\(UUID().uuidString)",

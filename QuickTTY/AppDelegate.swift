@@ -115,7 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 windowCoordinator.installAgentIntegrations(
                     installer: .live(installers.agentIntegrationInstaller),
-                    launcherInstaller: .live(installers.commandLineLauncherInstaller)
+                    launcherInstaller: .live(installers.commandLineLauncherInstaller),
+                    updateOfferStore: AgentIntegrationUpdateOfferStore()
                 )
             } catch {
                 logger.error(
@@ -183,7 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installToggleBroadcastMenuItem()
             installTerminalMenuItems()
 
-            NSApp.activate(ignoringOtherApps: true)
+            Self.activateApplicationBeforeOfferingAgentIntegrationUpdates(
+                activate: { NSApp.activate(ignoringOtherApps: true) },
+                offerUpdates: windowCoordinator.offerAgentIntegrationUpdatesIfAvailable
+            )
         } catch {
             freezeAgentLifecycleDelivery()
             stopAgentSocketImmediately()
@@ -390,6 +394,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         guard !isRunningHostedTests else { return false }
         return presentationMode != .quake
+    }
+
+    static func activateApplicationBeforeOfferingAgentIntegrationUpdates(
+        activate: () -> Void,
+        offerUpdates: () -> Void
+    ) {
+        activate()
+        offerUpdates()
     }
 
     static func configurationDiagnosticsPresentation(

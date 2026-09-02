@@ -43,6 +43,363 @@ struct AgentIntegrationsSheetControllerTests {
     }
 
     @Test
+    func preparedOfferPresentationDoesNotReloadStatus() async throws {
+        let recorder = SheetOfferInstallerRecorder(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let viewController = AgentIntegrationsViewController(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            bindingProvider: { [] },
+            retryBinding: { _ in },
+            forgetBinding: { _ in }
+        )
+        viewController.loadView()
+        #expect(await viewController.prepareUpdateOffer())
+        #expect(await recorder.statusRequestCount == 1)
+        let controller = AgentIntegrationsSheetController(
+            viewController: viewController,
+            restoreTerminalFocus: {}
+        )
+        let parent = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+
+        #expect(controller.presentPreparedOffer(on: parent))
+        #expect(await recorder.statusRequestCount == 1)
+        controller.close()
+    }
+
+    @Test
+    func automaticOfferRecordsWhenPresentedAndStillRequiresConfirmation() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let recorder = SheetOfferInstallerRecorder(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmation = SheetOfferConfirmationRecorder(result: false)
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "automatic-offer",
+                defaults: defaultsSuite.defaults
+            )
+        )
+        coordinator.installAgentIntegrations(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store,
+            confirmationPresenter: { request in confirmation.present(request) }
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(!store.shouldOffer)
+        #expect(confirmation.requests.count == 1)
+        #expect(confirmation.requests.first?.title == "Update selected integrations?")
+        #expect(await recorder.prepareRequestCount == 1)
+        #expect(await recorder.applyRequestCount == 0)
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == true
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+        #expect(confirmation.requests.count == 1)
+        coordinator.agentIntegrationsSheetControllerForTesting?.close()
+    }
+
+    @Test
+    func automaticOfferWithoutUpdatesDoesNotPresentOrRecord() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let recorder = SheetOfferInstallerRecorder(statuses: offerStatuses())
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(build: "no-updates", defaults: defaultsSuite.defaults)
+        )
+        coordinator.installAgentIntegrations(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(store.shouldOffer)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == false
+        )
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+    }
+
+    @Test
+    func automaticOfferWithAttachedSheetDoesNotPresentOrRecord() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let activeWindow = try #require(coordinator.activeWindowForTesting)
+        let blockerSheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        activeWindow.beginSheet(blockerSheet, completionHandler: nil)
+        defer {
+            if activeWindow.attachedSheet === blockerSheet {
+                activeWindow.endSheet(blockerSheet)
+            }
+        }
+        #expect(activeWindow.attachedSheet === blockerSheet)
+        let recorder = SheetOfferInstallerRecorder(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmation = SheetOfferConfirmationRecorder(result: true)
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "attached-sheet",
+                defaults: defaultsSuite.defaults
+            )
+        )
+        coordinator.installAgentIntegrations(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store,
+            confirmationPresenter: { request in confirmation.present(request) }
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(await recorder.statusRequestCount == 1)
+        #expect(await recorder.prepareRequestCount == 0)
+        #expect(await recorder.applyRequestCount == 0)
+        #expect(confirmation.requests.isEmpty)
+        #expect(store.shouldOffer)
+        #expect(activeWindow.attachedSheet === blockerSheet)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == false
+        )
+    }
+
+    @Test
+    func automaticStatusFailureDoesNotPresentOrRecord() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let recorder = SheetOfferInstallerRecorder(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable]),
+            failure: .status
+        )
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "status-failure", defaults: defaultsSuite.defaults)
+        )
+        coordinator.installAgentIntegrations(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(store.shouldOffer)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == false
+        )
+    }
+
+    @Test
+    func terminationCancelsPendingAutomaticOfferAndRejectsStaleStatusResponse() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        try coordinator.start()
+        let statusGate = SheetOfferStatusGate(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let confirmation = SheetOfferConfirmationRecorder(result: true)
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "termination-cancellation",
+                defaults: defaultsSuite.defaults
+            )
+        )
+        coordinator.installAgentIntegrations(
+            installer: statusGate.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store,
+            confirmationPresenter: { request in confirmation.present(request) }
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await statusGate.waitUntilFirstRequestStarts()
+        let automaticTask = try #require(
+            coordinator.agentIntegrationUpdateOfferTaskForTesting
+        )
+
+        coordinator.prepareForBridgeShutdownForTesting()
+        await statusGate.resumeFirstRequest()
+        await automaticTask.value
+
+        #expect(await statusGate.statusRequestCount == 1)
+        #expect(await statusGate.prepareRequestCount == 0)
+        #expect(await statusGate.applyRequestCount == 0)
+        #expect(confirmation.requests.isEmpty)
+        #expect(store.shouldOffer)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == false
+        )
+    }
+
+    @Test(arguments: [SheetOfferInstallerFailure.prepare, .apply])
+    func attachedAutomaticOfferRecordsBuildBeforePrepareOrApplyFailure(
+        failure: SheetOfferInstallerFailure
+    ) async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let recorder = SheetOfferInstallerRecorder(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable]),
+            failure: failure
+        )
+        let confirmation = SheetOfferConfirmationRecorder(result: true)
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "attached-failure-\(failure)",
+                defaults: defaultsSuite.defaults
+            )
+        )
+        coordinator.installAgentIntegrations(
+            installer: recorder.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store,
+            confirmationPresenter: { request in confirmation.present(request) }
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(!store.shouldOffer)
+        #expect(await recorder.statusRequestCount == 1)
+        #expect(await recorder.prepareRequestCount == 1)
+        #expect(await recorder.applyRequestCount == (failure == .apply ? 1 : 0))
+        #expect(confirmation.requests.count == (failure == .apply ? 1 : 0))
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == true
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await coordinator.waitForAgentIntegrationUpdateOfferForTesting()
+
+        #expect(await recorder.statusRequestCount == 1)
+        #expect(await recorder.prepareRequestCount == 1)
+        #expect(await recorder.applyRequestCount == (failure == .apply ? 1 : 0))
+        #expect(confirmation.requests.count == (failure == .apply ? 1 : 0))
+        coordinator.agentIntegrationsSheetControllerForTesting?.close()
+    }
+
+    @Test
+    func manualPresentationCancelsPendingAutomaticOfferWithoutRecording() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            hotKeyController: SheetTestHotKeyController()
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        let statusGate = SheetOfferStatusGate(
+            statuses: offerStatuses(overrides: ["claude": .updateAvailable])
+        )
+        let defaultsSuite = try makeDefaults()
+        defer { defaultsSuite.remove() }
+        let store = try #require(
+            AgentIntegrationUpdateOfferStore(
+                build: "manual-cancellation",
+                defaults: defaultsSuite.defaults
+            )
+        )
+        coordinator.installAgentIntegrations(
+            installer: statusGate.client,
+            launcherInstaller: makeLauncherClient(),
+            updateOfferStore: store
+        )
+
+        coordinator.offerAgentIntegrationUpdatesIfAvailable()
+        await statusGate.waitUntilFirstRequestStarts()
+        let automaticTask = try #require(
+            coordinator.agentIntegrationUpdateOfferTaskForTesting
+        )
+        #expect(coordinator.hasPendingAgentIntegrationUpdateOfferForTesting)
+
+        coordinator.presentAgentIntegrations()
+        await statusGate.resumeFirstRequest()
+        await automaticTask.value
+
+        #expect(store.shouldOffer)
+        #expect(
+            coordinator.agentIntegrationsSheetControllerForTesting?.isPresented == true
+        )
+        coordinator.agentIntegrationsSheetControllerForTesting?.close()
+    }
+
+    @Test
     func coordinatorNormalToQuakeThenCloseFocusesCurrentSurface() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -218,6 +575,216 @@ struct AgentIntegrationsSheetControllerTests {
             },
             apply: { _ in .succeeded }
         )
+    }
+
+    private func offerStatuses(
+        overrides: [String: AgentIntegrationInstallerStatus] = [:]
+    ) -> [AgentIntegrationAdapterSummary] {
+        let blocked: Set<String> = [
+            "grok", "campfire", "kiro", "rovo-dev", "codebuddy", "ollama",
+        ]
+        let wrappers: Set<String> = ["amp", "antigravity", "opencode"]
+        return AgentIntegrationInstaller.adapterIDs.map { adapterID in
+            let capability: AgentIntegrationInstallerCapability =
+                if blocked.contains(adapterID) {
+                    .blocked
+                } else if wrappers.contains(adapterID) {
+                    .wrapperLifecycle
+                } else {
+                    .nativeLifecycle
+                }
+            return AgentIntegrationAdapterSummary(
+                adapterID: adapterID,
+                capability: capability,
+                status: blocked.contains(adapterID)
+                    ? .blocked : overrides[adapterID] ?? .available,
+                operations: []
+            )
+        }
+    }
+
+    private func makeDefaults() throws -> SheetDefaultsSuite {
+        let name = "AgentIntegrationsSheetControllerTests.\(UUID().uuidString)"
+        return SheetDefaultsSuite(
+            name: name,
+            defaults: try #require(UserDefaults(suiteName: name))
+        )
+    }
+}
+
+enum SheetOfferInstallerFailure: Error, Equatable, Sendable {
+    case status
+    case prepare
+    case apply
+}
+
+private actor SheetOfferInstallerRecorder {
+    let statuses: [AgentIntegrationAdapterSummary]
+    let failure: SheetOfferInstallerFailure?
+    private(set) var statusRequestCount = 0
+    private(set) var prepareRequestCount = 0
+    private(set) var applyRequestCount = 0
+    private(set) var appliedPlanIDs: [String] = []
+
+    init(
+        statuses: [AgentIntegrationAdapterSummary],
+        failure: SheetOfferInstallerFailure? = nil
+    ) {
+        self.statuses = statuses
+        self.failure = failure
+    }
+
+    nonisolated var client: AgentIntegrationInstallerClient {
+        AgentIntegrationInstallerClient(
+            adapterIDs: AgentIntegrationInstaller.adapterIDs,
+            status: { [self] generation in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: try await requestStatus()
+                )
+            },
+            prepare: { [self] generation, _, selected in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: try await prepare(selected)
+                )
+            },
+            apply: { [self] generation, planID in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: try await apply(planID)
+                )
+            }
+        )
+    }
+
+    private func requestStatus() throws -> [AgentIntegrationAdapterSummary] {
+        statusRequestCount += 1
+        if failure == .status {
+            throw SheetOfferInstallerFailure.status
+        }
+        return statuses
+    }
+
+    private func prepare(_ selected: [String]) throws -> AgentIntegrationPreparedSummary {
+        prepareRequestCount += 1
+        if failure == .prepare {
+            throw SheetOfferInstallerFailure.prepare
+        }
+        return AgentIntegrationPreparedSummary(
+            planID: "sheet-offer-plan",
+            adapters: statuses.filter { selected.contains($0.adapterID) }
+        )
+    }
+
+    private func apply(_ planID: String) throws -> AgentIntegrationApplySummary {
+        applyRequestCount += 1
+        if failure == .apply {
+            throw SheetOfferInstallerFailure.apply
+        }
+        appliedPlanIDs.append(planID)
+        return AgentIntegrationApplySummary(
+            adapters: statuses.filter { $0.status == .updateAvailable }
+        )
+    }
+}
+
+private actor SheetOfferStatusGate {
+    let statuses: [AgentIntegrationAdapterSummary]
+    private let firstRequestStarts: AsyncStream<Void>
+    private let firstRequestStartContinuation: AsyncStream<Void>.Continuation
+    private var firstRequestContinuation: CheckedContinuation<Void, Never>?
+    private(set) var statusRequestCount = 0
+    private(set) var prepareRequestCount = 0
+    private(set) var applyRequestCount = 0
+
+    init(statuses: [AgentIntegrationAdapterSummary]) {
+        self.statuses = statuses
+        (firstRequestStarts, firstRequestStartContinuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    nonisolated var client: AgentIntegrationInstallerClient {
+        AgentIntegrationInstallerClient(
+            adapterIDs: AgentIntegrationInstaller.adapterIDs,
+            status: { [self] generation in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: await requestStatus()
+                )
+            },
+            prepare: { [self] generation, _, selected in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: await prepare(selected)
+                )
+            },
+            apply: { [self] generation, _ in
+                AgentIntegrationGeneratedResponse(
+                    generation: generation,
+                    value: await apply()
+                )
+            }
+        )
+    }
+
+    func waitUntilFirstRequestStarts() async {
+        for await _ in firstRequestStarts {
+            return
+        }
+    }
+
+    func resumeFirstRequest() {
+        firstRequestContinuation?.resume()
+        firstRequestContinuation = nil
+    }
+
+    private func requestStatus() async -> [AgentIntegrationAdapterSummary] {
+        statusRequestCount += 1
+        if statusRequestCount == 1 {
+            firstRequestStartContinuation.yield()
+            await withCheckedContinuation { continuation in
+                firstRequestContinuation = continuation
+            }
+        }
+        return statuses
+    }
+
+    private func prepare(_ selected: [String]) -> AgentIntegrationPreparedSummary {
+        prepareRequestCount += 1
+        return AgentIntegrationPreparedSummary(
+            planID: "manual-cancellation-plan",
+            adapters: statuses.filter { selected.contains($0.adapterID) }
+        )
+    }
+
+    private func apply() -> AgentIntegrationApplySummary {
+        applyRequestCount += 1
+        return AgentIntegrationApplySummary(adapters: statuses)
+    }
+}
+
+@MainActor
+private final class SheetOfferConfirmationRecorder {
+    let result: Bool
+    private(set) var requests: [AgentIntegrationConfirmationRequest] = []
+
+    init(result: Bool) {
+        self.result = result
+    }
+
+    func present(_ request: AgentIntegrationConfirmationRequest) -> Bool {
+        requests.append(request)
+        return result
+    }
+}
+
+@MainActor
+private struct SheetDefaultsSuite {
+    let name: String
+    let defaults: UserDefaults
+
+    func remove() {
+        defaults.removePersistentDomain(forName: name)
     }
 }
 

@@ -63,6 +63,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var workspaceStore: WorkspaceStore
     private var createWorkspaceController: CreateWorkspaceController?
     private var agentIntegrationsSheetController: AgentIntegrationsSheetController?
+    private var agentIntegrationUpdateOfferStore: AgentIntegrationUpdateOfferStore?
+    private var agentIntegrationUpdateOfferTask: Task<Void, Never>?
+    private var agentIntegrationUpdateOfferTaskID: UUID?
+    private var isAgentIntegrationUpdateOfferPresented = false
     private var pendingWorkspaceDeletionID: WorkspaceID?
     private var startupState: StartupState = .notStarted
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
@@ -195,7 +199,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     func installAgentIntegrations(
         installer: AgentIntegrationInstallerClient,
-        launcherInstaller: CommandLineLauncherInstallerClient
+        launcherInstaller: CommandLineLauncherInstallerClient,
+        updateOfferStore: AgentIntegrationUpdateOfferStore? = nil,
+        confirmationPresenter: AgentIntegrationsViewController.ConfirmationPresenter? = nil
     ) {
         guard agentIntegrationsSheetController == nil else { return }
         let viewController = AgentIntegrationsViewController(
@@ -209,8 +215,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             },
             forgetBinding: { [weak self] paneID in
                 self?.forgetAgentResume(paneID)
-            }
+            },
+            confirmationPresenter: confirmationPresenter
         )
+        agentIntegrationUpdateOfferStore = updateOfferStore
         agentIntegrationsSheetController = AgentIntegrationsSheetController(
             viewController: viewController,
             restoreTerminalFocus: { [weak self] in
@@ -225,7 +233,48 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         )
     }
 
+    func offerAgentIntegrationUpdatesIfAvailable() {
+        guard let store = agentIntegrationUpdateOfferStore,
+            let sheetController = agentIntegrationsSheetController,
+            store.shouldOffer
+        else { return }
+
+        cancelAgentIntegrationUpdateOffer(onlyIfPending: false)
+        let taskID = UUID()
+        agentIntegrationUpdateOfferTaskID = taskID
+        isAgentIntegrationUpdateOfferPresented = false
+        agentIntegrationUpdateOfferTask = Task { @MainActor [weak self, sheetController, store] in
+            guard self?.isCurrentAgentIntegrationUpdateOffer(taskID) == true else { return }
+            let hasUpdates = await sheetController.viewController.prepareUpdateOffer()
+            guard let self else { return }
+            defer { finishAgentIntegrationUpdateOffer(taskID) }
+            guard isCurrentAgentIntegrationUpdateOffer(taskID),
+                hasUpdates,
+                store.shouldOffer,
+                case .started = startupState,
+                activeWindow != nil
+            else { return }
+
+            do {
+                try presentationController.showCurrentPresentation()
+            } catch {
+                onError(error)
+                return
+            }
+            guard isCurrentAgentIntegrationUpdateOffer(taskID),
+                store.shouldOffer,
+                let window = activeWindow,
+                sheetController.presentPreparedOffer(on: window)
+            else { return }
+
+            store.recordOffered()
+            isAgentIntegrationUpdateOfferPresented = true
+            await sheetController.viewController.changeSelectedIntegrationsWithConfirmation()
+        }
+    }
+
     func presentAgentIntegrations() {
+        cancelAgentIntegrationUpdateOffer(onlyIfPending: true)
         guard let sheetController = agentIntegrationsSheetController else { return }
         do {
             try presentationController.showCurrentPresentation()
@@ -235,6 +284,25 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         guard let window = activeWindow else { return }
         sheetController.present(on: window)
+    }
+
+    private func isCurrentAgentIntegrationUpdateOffer(_ taskID: UUID) -> Bool {
+        agentIntegrationUpdateOfferTaskID == taskID && !Task.isCancelled
+    }
+
+    private func finishAgentIntegrationUpdateOffer(_ taskID: UUID) {
+        guard agentIntegrationUpdateOfferTaskID == taskID else { return }
+        agentIntegrationUpdateOfferTask = nil
+        agentIntegrationUpdateOfferTaskID = nil
+        isAgentIntegrationUpdateOfferPresented = false
+    }
+
+    private func cancelAgentIntegrationUpdateOffer(onlyIfPending: Bool) {
+        guard !onlyIfPending || !isAgentIntegrationUpdateOfferPresented else { return }
+        agentIntegrationUpdateOfferTask?.cancel()
+        agentIntegrationUpdateOfferTask = nil
+        agentIntegrationUpdateOfferTaskID = nil
+        isAgentIntegrationUpdateOfferPresented = false
     }
 
     private func agentIntegrationBindingSnapshots() -> [AgentIntegrationBindingSnapshot] {
@@ -2688,6 +2756,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func prepareForApplicationTermination() {
+        cancelAgentIntegrationUpdateOffer(onlyIfPending: false)
         terminalActivityController.scheduledEffectHandler = nil
         terminalActivityEffectHandler = nil
         clearTerminalActivity()
@@ -2918,6 +2987,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var agentIntegrationsSheetControllerForTesting: AgentIntegrationsSheetController? {
             agentIntegrationsSheetController
+        }
+
+        func waitForAgentIntegrationUpdateOfferForTesting() async {
+            await agentIntegrationUpdateOfferTask?.value
+        }
+
+        var agentIntegrationUpdateOfferTaskForTesting: Task<Void, Never>? {
+            agentIntegrationUpdateOfferTask
+        }
+
+        var hasPendingAgentIntegrationUpdateOfferForTesting: Bool {
+            agentIntegrationUpdateOfferTask != nil && !isAgentIntegrationUpdateOfferPresented
         }
 
         var agentIntegrationBindingSnapshotsForTesting: [AgentIntegrationBindingSnapshot] {
