@@ -98,7 +98,7 @@ There are no silent configuration writes. Installation, update, and uninstallati
 
 ## Agent Integrations sheet
 
-Open **QuickTTY → Agent Integrations…**. The sheet uses the same installer core, ordered registry, capabilities, statuses, previews, backups, ownership checks, and uninstall rules as the CLI; it does not spawn the CLI. Select Install or Uninstall, select eligible entries, review the paths and mutation kinds, and confirm before Apply. The sheet can also explicitly install or uninstall the launcher symlink `~/.local/bin/quicktty`; an unrelated file or symlink at that path is a conflict and is never overwritten.
+Open **QuickTTY → Agent Integrations…**. The sheet uses the same installer core, ordered registry, capabilities, statuses, previews, backups, ownership checks, and uninstall rules as the CLI; it does not spawn the CLI. Select Install or Uninstall, select eligible entries, review the paths and mutation kinds, and confirm before Apply. Installing Pi includes its lifecycle extension, the English-language QuickTTY terminal SKILL at `~/.pi/agent/skills/quicktty-terminal/SKILL.md`, and the shared launcher `~/.local/bin/quicktty` when it is missing. All changes appear in one preview. A foreign launcher blocks Pi installation before Pi files are changed. If a newly created launcher must be rolled back, QuickTTY removes it only after an exact ownership check. Uninstalling Pi removes its QuickTTY-owned lifecycle extension and SKILL but keeps the shared launcher. The sheet also provides an independent launcher install/uninstall action; an unrelated file or symlink at that path is a conflict and is never overwritten.
 
 Once per application build, startup may check for `updateAvailable` integrations and open this same sheet with only those integrations selected in registry order. QuickTTY records the offer only after the sheet is displayed, so dismissing it or an update error does not prompt again in that build. Detection, selection, and presentation are automatic; filesystem changes are not. Every update still shows the bounded preview and requires explicit confirmation before apply. A missing window, cancelled or failed status check, or no available updates causes no prompt, record, or configuration write.
 
@@ -106,12 +106,13 @@ The pane section shows only the known agent name and `Active`, `Restoring`, `Unv
 
 ## Терминальные задачи: CLI + SKILL
 
-Первая версия использует CLI и поставляемый файл [skills/quicktty-terminal/SKILL.md](../skills/quicktty-terminal/SKILL.md), **не MCP**. [Пользовательский справочник terminal control](agent-terminal-control.md) описывает все 12 операций `quicktty terminal`, точную грамматику, ответы JSON, ограничения, правила повторов и ручной передачи управления. SKILL — инструкция агенту, не его память; копирование skill не устанавливает CLI, lifecycle-интеграцию или разрешения.
+Первая версия использует CLI и англоязычный файл [skills/quicktty-terminal/SKILL.md](../skills/quicktty-terminal/SKILL.md), **не MCP**. [Пользовательский справочник terminal control](agent-terminal-control.md) описывает все 12 операций `quicktty terminal`, точную грамматику, ответы JSON, ограничения, правила повторов и ручной передачи управления. SKILL — инструкция агенту, не его память; установка не выдаёт terminal-control разрешение.
 
 ### Условия доступа
 
-- Нужна сборка QuickTTY, содержащая новые terminal-команды, и launcher `quicktty` на `PATH`. Пользователь отдельно устанавливает `~/.local/bin/quicktty` через **QuickTTY → Agent Integrations…**; старое установленное приложение не обновляется от изменений в checkout или копирования skill. Эта инструкция не изменяет установленное приложение.
-- Локальная lifecycle-интеграция **Pi** должна быть отдельно установлена пользователем через тот же sheet, а сессия Pi — зарегистрирована и активна в исходной панели QuickTTY. `pi` присутствует в `AgentIntegrationRegistry.swift` как native adapter. Одного запуска Pi внутри терминала или загрузки skill недостаточно.
+- Нужна сборка QuickTTY, содержащая terminal-команды. Изменения в checkout не обновляют установленное приложение.
+- Пользователь выбирает **Pi** в **QuickTTY → Agent Integrations…**. Одна подтверждаемая операция устанавливает lifecycle extension, англоязычный SKILL и, если он отсутствует, launcher `~/.local/bin/quicktty`. Каталог launcher должен быть в `PATH` среды агента. Чужой launcher или изменённый managed-файл даёт conflict и не перезаписывается.
+- После установки сессия Pi должна быть зарегистрирована и активна в исходной панели QuickTTY. `pi` присутствует в `AgentIntegrationRegistry.swift` как native adapter. Одной установки файлов или запуска Pi вне origin-панели недостаточно.
 - При первом обращении к terminal-control, включая `list`, QuickTTY запрашивает нативное разрешение для точной origin/сессии, не для каждой CLI-команды. Сервер проверяет credentials, актуальность сессии, действующий grant, ownership и текущий workspace исходной панели. Это не разрешение управлять произвольными пользовательскими панелями и не замена ограничениям пользователя и инструментов.
 - При недоступном окне или занятом sheet возможен `permissionUnavailable`: пользователь должен показать окно и закончить мешающий диалог. Отказ/отзыв нельзя обходить повторами; автоматический regrant сессии не обещается.
 
@@ -123,11 +124,13 @@ The pane section shows only the known agent name and `Active`, `Restoring`, `Unv
 
 `keep` оставляет панель после завершения. `close-on-success` закрывает успешную задачу после захвата итогового снимка; при неудачном захвате панель остаётся для повторного `read`. Failed/unknown-панели не закрываются автоматически. Итоговые снимки доступны только пока записи удерживаются и сессия авторизована: до 8 активных и 32 сохраняемых задач на сессию, с вытеснением завершённых записей. Завершение/смена origin-сессии или завершение QuickTTY отзывают capabilities. После перезапуска managed-панели получают свежие shells без tasks/grants/ownership и без replay managed-команды. Восстановление native-сессии агента остаётся отдельным механизмом и terminal grant не возвращает.
 
-### Ручная загрузка только в Pi
+### Ручная загрузка только в Pi: development fallback
 
-Формат SKILL, пути и команды ниже сверены с **bundled `docs/skills.md` Pi 0.85.1**, версия — с `package.json` локального пакета. Это проверка документации загрузки, **не lifecycle runtime-проверка Pi 0.85.1**. Историческая lifecycle-проверка выше относится к Pi 0.84.4. Автонастройка или совместимость со всеми harness не заявляется.
+Обычный путь — установить Pi через **Agent Integrations…**: QuickTTY безопасно владеет lifecycle extension и SKILL и показывает оба файла в preview. Команды ниже нужны только для разработки из checkout или проверки SKILL без установки интеграции. Ручная копия не становится QuickTTY-owned и может быть показана GUI как conflict; не заменяйте и не удаляйте чужой файл без сравнения.
 
-Сначала просмотрите содержимое skill. Без установки, из корня checkout QuickTTY, пользователь может запустить:
+Формат SKILL, пути и команды ниже сверены с **bundled `docs/skills.md` Pi 0.85.1**, версия — с `package.json` локального пакета. Это проверка документации загрузки, **не lifecycle runtime-проверка Pi 0.85.1**. Историческая lifecycle-проверка выше относится к Pi 0.84.4. Совместимость со всеми harness не заявляется.
+
+Сначала просмотрите содержимое англоязычного SKILL. Без установки, из корня checkout QuickTTY, пользователь может запустить:
 
 ```sh
 pi --skill "$(pwd -P)/skills/quicktty-terminal/SKILL.md"

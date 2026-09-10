@@ -40,6 +40,7 @@ logs=$test_root/logs
 secret='TASK15_FIXTURE_SECRET_DO_NOT_PRINT'
 /bin/mkdir -p "$helper_dir" "$home/Library/Application Support" "$fake_bin" "$logs"
 /bin/cp -R "$repo_root/QuickTTY/Resources/AgentSessionIntegrations" "$helper_dir/AgentSessionIntegrations"
+/bin/cp -R "$repo_root/QuickTTY/Resources/AgentSkills" "$helper_dir/AgentSkills"
 
 /usr/bin/xcrun --sdk macosx swiftc \
     "$repo_root"/Shared/AgentIntegrations/*.swift \
@@ -122,6 +123,12 @@ pi_extension="$home/.pi/agent/extensions/quicktty-session/index.ts"
     || fail 'Pi extension does not subscribe to session_shutdown'
 /usr/bin/grep -F 'spawn(HELPER_PATH, ["internal", "hook", "pi", event]' "$pi_extension" >/dev/null \
     || fail 'Pi extension does not use structured helper argv'
+pi_skill="$home/.pi/agent/skills/quicktty-terminal/SKILL.md"
+[ -f "$pi_skill" ] || fail 'Pi install did not install the QuickTTY terminal skill'
+[ "$(/usr/bin/stat -f '%Lp' "$pi_skill")" = 600 ] \
+    || fail 'Pi terminal skill mode is not 0600'
+/usr/bin/cmp -s "$repo_root/skills/quicktty-terminal/SKILL.md" "$pi_skill" \
+    || fail 'installed Pi terminal skill differs from canonical source'
 
 pi_package=/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent
 pi_types=$pi_package/dist/core/extensions/types.d.ts

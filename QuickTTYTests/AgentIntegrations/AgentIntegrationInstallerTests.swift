@@ -39,12 +39,13 @@ struct AgentIntegrationInstallerTests {
         #expect(operation.operation == .create)
         #expect(operation.mode == .configuration)
         #expect(
-            adapter.operations.contains {
-                $0.kind == .ownershipManifest
-                    && $0.displayPath
-                        == "Application Support/QuickTTY/agent-integration-ownership.json"
-            }
+            adapter.operations.map(\.displayPath) == [
+                "~/.pi/agent/extensions/quicktty-session/index.ts",
+                "~/.pi/agent/skills/quicktty-terminal/SKILL.md",
+                "Application Support/QuickTTY/agent-integration-ownership.json",
+            ]
         )
+        #expect(adapter.operations.map(\.kind) == [.ownedFile, .ownedFile, .ownershipManifest])
 
         let applied = try await installer.apply(planID: prepared.planID)
         #expect(applied.adapters.map(\.status) == [.succeeded])
@@ -65,12 +66,20 @@ struct AgentIntegrationInstallerTests {
             path: "shared-extensions",
             directoryHint: .isDirectory
         )
+        let sharedSkills = environment.home.appending(
+            path: "shared-skills",
+            directoryHint: .isDirectory
+        )
         try FileManager.default.createDirectory(
             at: agentDirectory,
             withIntermediateDirectories: true
         )
         try FileManager.default.createDirectory(
             at: sharedExtensions,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: sharedSkills,
             withIntermediateDirectories: false
         )
         let extensionsLink = agentDirectory.appending(
@@ -80,6 +89,14 @@ struct AgentIntegrationInstallerTests {
         try FileManager.default.createSymbolicLink(
             at: extensionsLink,
             withDestinationURL: sharedExtensions
+        )
+        let skillsLink = agentDirectory.appending(
+            path: "skills",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createSymbolicLink(
+            at: skillsLink,
+            withDestinationURL: sharedSkills
         )
         let installer = try makeInstaller(environment: environment, available: true)
 
@@ -99,6 +116,15 @@ struct AgentIntegrationInstallerTests {
             try FileManager.default.destinationOfSymbolicLink(atPath: extensionsLink.path)
                 == sharedExtensions.path
         )
+        #expect(
+            FileManager.default.fileExists(
+                atPath: sharedSkills.appending(path: "quicktty-terminal/SKILL.md").path
+            )
+        )
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: skillsLink.path)
+                == sharedSkills.path
+        )
 
         let uninstall = try await installer.prepare(
             action: .uninstall,
@@ -115,6 +141,15 @@ struct AgentIntegrationInstallerTests {
         #expect(
             try FileManager.default.destinationOfSymbolicLink(atPath: extensionsLink.path)
                 == sharedExtensions.path
+        )
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: sharedSkills.appending(path: "quicktty-terminal/SKILL.md").path
+            )
+        )
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: skillsLink.path)
+                == sharedSkills.path
         )
     }
 
@@ -140,10 +175,98 @@ struct AgentIntegrationInstallerTests {
         #expect(
             try environment.fileSystem.read(
                 AgentIntegrationPath(
+                    root: .home,
+                    relativePath: ".pi/agent/skills/quicktty-terminal/SKILL.md"
+                )) == nil
+        )
+        #expect(
+            try environment.fileSystem.read(
+                AgentIntegrationPath(
                     root: .applicationSupport,
                     relativePath: "QuickTTY/agent-integration-ownership.json"
                 )) == nil
         )
+    }
+
+    @Test
+    func foreignPiSkillConflictsWithoutWritingLifecycle() async throws {
+        let environment = try InstallerTestEnvironment()
+        defer { environment.remove() }
+        let skillPath = try AgentIntegrationPath(
+            root: .home,
+            relativePath: ".pi/agent/skills/quicktty-terminal/SKILL.md"
+        )
+        try environment.writeFixture(Data("foreign-skill".utf8), to: skillPath)
+        let installer = try makeInstaller(environment: environment, available: true)
+
+        let prepared = try await installer.prepare(
+            action: .install,
+            selectedAdapterIDs: ["pi"]
+        )
+        let adapter = try #require(prepared.adapters.first)
+
+        #expect(adapter.status == .conflict)
+        #expect(adapter.operations.isEmpty)
+        let result = try await installer.apply(planID: prepared.planID)
+        #expect(result.adapters.map(\.status) == [.conflict])
+        #expect(try environment.fileSystem.read(skillPath) == Data("foreign-skill".utf8))
+        #expect(
+            try environment.fileSystem.read(
+                AgentIntegrationPath(
+                    root: .home,
+                    relativePath: ".pi/agent/extensions/quicktty-session/index.ts"
+                )) == nil
+        )
+    }
+
+    @Test
+    func existingPiLifecycleOwnershipOffersTerminalSkillUpdate() async throws {
+        let environment = try InstallerTestEnvironment()
+        defer { environment.remove() }
+        let installer = try makeInstaller(environment: environment, available: true)
+        let install = try await installer.prepare(
+            action: .install,
+            selectedAdapterIDs: ["pi"]
+        )
+        let installed = try await installer.apply(planID: install.planID)
+        try #require(installed.adapters.map(\.status) == [.succeeded])
+        let skillPath = try AgentIntegrationPath(
+            root: .home,
+            relativePath: ".pi/agent/skills/quicktty-terminal/SKILL.md"
+        )
+        try FileManager.default.removeItem(at: environment.url(for: skillPath))
+        let store = try AgentIntegrationOwnershipStore(fileSystem: environment.fileSystem)
+        guard case .trusted(let records) = try store.load() else {
+            Issue.record("Expected trusted Pi ownership")
+            return
+        }
+        let oldRecords = records.filter { $0.operationID != "agent-pi-v1-terminal-skill" }
+        let manifestWrite = try store.prepareSave(oldRecords)
+        _ = try environment.fileSystem.apply(
+            [manifestWrite],
+            matching: [manifestWrite.preview]
+        )
+
+        let statuses = try await installer.status(selectedAdapterIDs: ["pi"])
+        #expect(statuses.map(\.status) == [.updateAvailable])
+        let update = try await installer.prepare(
+            action: .install,
+            selectedAdapterIDs: ["pi"]
+        )
+        let adapter = try #require(update.adapters.first)
+        #expect(adapter.status == .updateAvailable)
+        #expect(
+            adapter.operations.contains(where: { operation in
+                operation.displayPath == "~/.pi/agent/skills/quicktty-terminal/SKILL.md"
+                    && operation.operation == .create
+            })
+        )
+
+        let updated = try await installer.apply(planID: update.planID)
+        #expect(updated.adapters.map(\.status) == [.succeeded])
+        #expect(try environment.fileSystem.read(skillPath) != nil)
+        let finalStatuses = try await installer.status(selectedAdapterIDs: ["pi"])
+        #expect(finalStatuses.map(\.status) == [.installed])
     }
 
     @Test
@@ -227,6 +350,13 @@ struct AgentIntegrationInstallerTests {
 
         #expect(result.adapters.map(\.status) == [.failed])
         #expect(try environment.fileSystem.read(installedPath) == nil)
+        #expect(
+            try environment.fileSystem.read(
+                AgentIntegrationPath(
+                    root: .home,
+                    relativePath: ".pi/agent/skills/quicktty-terminal/SKILL.md"
+                )) == nil
+        )
         #expect(
             try environment.fileSystem.read(
                 AgentIntegrationPath(

@@ -26,6 +26,7 @@ targets:
         excludes:
           - AgentIntegrations
           - AgentSessionIntegrations
+          - AgentSkills
           - Info.plist
         buildPhase: resources
         group: Resources
@@ -34,6 +35,10 @@ targets:
         buildPhase: resources
         group: Resources
       - path: QuickTTY/Resources/AgentSessionIntegrations
+        type: folder
+        buildPhase: resources
+        group: Resources
+      - path: QuickTTY/Resources/AgentSkills
         type: folder
         buildPhase: resources
         group: Resources

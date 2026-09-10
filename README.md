@@ -44,9 +44,9 @@ QuickTTY can check for stable updates in the app. An opt-in beta channel is also
 
 ## Documentation
 
-The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, search, workspaces, and coding-agent integrations. Agent integrations are installed only through an explicit preview and confirmation flow; QuickTTY does not silently write third-party configuration or persist arbitrary restore commands.
+The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, search, workspaces, and coding-agent integrations. Agent integrations are installed only through an explicit preview and confirmation flow; QuickTTY does not silently write third-party configuration or persist arbitrary restore commands. Installing Pi through **Agent Integrations…** also installs the QuickTTY terminal SKILL and the shared `quicktty` launcher when it is missing.
 
-[Agent terminal control](docs/agent-terminal-control.md) (Russian reference) lets registered origin sessions create and control their own terminal tasks through the CLI and a shipped SKILL, with session-scoped native permission—not MCP or access to arbitrary user panes. It requires a build containing the terminal commands; copying the skill does not update the app or grant access.
+[Agent terminal control](docs/agent-terminal-control.md) (Russian reference) lets registered origin sessions create and control their own terminal tasks through the CLI and an English-language SKILL, with session-scoped native permission—not MCP or access to arbitrary user panes. It requires a build containing the terminal commands; the integration installer does not update the app or grant terminal-control permission.
 
 QuickTTY reads its user configuration from:
 

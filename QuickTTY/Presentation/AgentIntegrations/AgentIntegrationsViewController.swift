@@ -492,16 +492,24 @@ final class AgentIntegrationsViewController: NSViewController {
             let response = try await installer.prepare(generation, selectedAction, selection)
             guard accepts(response: response, generation: generation) else { return }
             let prepared = bounded(response.value, selectedAdapterIDs: Set(selection))
+            if selectedAction == .install, selection.contains("pi") {
+                let launcherResponse = try await launcherInstaller.prepare(generation, .install)
+                guard accepts(response: launcherResponse, generation: generation) else { return }
+                launcherPreparedSummary = bounded(launcherResponse.value)
+                launcherPreparedAction = .install
+            }
             preparedSummary = prepared
             preparedSelection = selection
             preparedAction = selectedAction
             preparedIsUpdate = isUpdate
             messageLabel.stringValue =
-                isUpdate
-                ? "Confirm the update preview before applying changes."
-                : selectedAction == .install
-                    ? "Confirm the installation preview before applying changes."
-                    : "Confirm the removal preview before applying changes."
+                launcherPreparedSummary?.status == .conflict
+                ? "Resolve the command-line tool conflict before installing Pi."
+                : isUpdate
+                    ? "Confirm the update preview before applying changes."
+                    : selectedAction == .install
+                        ? "Confirm the installation preview before applying changes."
+                        : "Confirm the removal preview before applying changes."
         } catch is CancellationError {
             return
         } catch {
@@ -513,6 +521,8 @@ final class AgentIntegrationsViewController: NSViewController {
                     ? "The installation preview could not be prepared."
                     : "The removal preview could not be prepared."
             invalidatePreparedPlan(clearResults: true)
+            launcherPreparedSummary = nil
+            launcherPreparedAction = nil
         }
         renderAll()
     }
@@ -522,16 +532,21 @@ final class AgentIntegrationsViewController: NSViewController {
             let preparedSummary,
             let preparedAction,
             preparedAction == selectedAction,
-            preparedSelection == orderedAdapterIDs.filter(selectedAdapterIDs.contains)
+            preparedSelection == orderedAdapterIDs.filter(selectedAdapterIDs.contains),
+            !bundledLauncherHasConflict
         else { return }
         let isUpdate = preparedIsUpdate
+        let bundledLauncher = bundledLauncherPreparedSummary
         cancelNonApplyTasks()
         let generation = advanceGeneration()
         applyGeneration = generation
         isApplying = true
+        var launcherWasCreated = false
         defer {
             if isApplying, applyGeneration == generation {
                 invalidatePreparedPlan(clearResults: true)
+                launcherPreparedSummary = nil
+                launcherPreparedAction = nil
                 finishApply(
                     message: isUpdate
                         ? "Integration update was cancelled or became unavailable."
@@ -549,15 +564,54 @@ final class AgentIntegrationsViewController: NSViewController {
             : preparedAction == .install ? "Installing integrations…" : "Removing integrations…"
 
         do {
+            if let bundledLauncher {
+                let launcherResponse = try await launcherInstaller.apply(
+                    generation,
+                    bundledLauncher.planID
+                )
+                launcherWasCreated =
+                    bundledLauncher.status == .available
+                    && launcherResponse.value == .succeeded
+                if launcherWasCreated { launcherStatus = .installed }
+                guard launcherResponse.generation == generation,
+                    acceptsApply(generation: generation)
+                else { throw CancellationError() }
+            }
+
             let response = try await installer.apply(generation, preparedSummary.planID)
-            guard acceptsApply(response: response, generation: generation) else { return }
+            guard response.generation == generation,
+                acceptsApply(generation: generation)
+            else { throw CancellationError() }
             applySummaries = orderedAndBoundedSubset(response.value.adapters)
+            let piInstallationFailed =
+                preparedAction == .install && preparedSelection.contains("pi")
+                && !response.value.adapters.contains {
+                    $0.adapterID == "pi" && $0.status == .succeeded
+                }
+            var piFailureMessage: String?
+            if piInstallationFailed {
+                if launcherWasCreated {
+                    if await rollbackCreatedLauncher(generation: generation) {
+                        launcherStatus = .available
+                        launcherWasCreated = false
+                        piFailureMessage =
+                            "Pi installation failed; the command-line tool was rolled back."
+                    } else {
+                        piFailureMessage =
+                            "Pi installation failed; command-line tool cleanup requires attention."
+                    }
+                } else {
+                    piFailureMessage = "Pi installation failed."
+                }
+            }
             resultAction = preparedAction
             resultIsUpdate = isUpdate
             self.preparedSummary = nil
             preparedSelection = []
             self.preparedAction = nil
             preparedIsUpdate = false
+            launcherPreparedSummary = nil
+            launcherPreparedAction = nil
             selectedAdapterIDs.removeAll()
             renderAll()
 
@@ -566,43 +620,61 @@ final class AgentIntegrationsViewController: NSViewController {
                 guard acceptsApply(response: statusResponse, generation: generation) else { return }
                 guard let fullStatus = validatedFullStatus(statusResponse.value) else {
                     finishApply(
-                        message: isUpdate
-                            ? "Update applied, but integration status is unavailable."
-                            : "Changes applied, but integration status is unavailable."
+                        message: piFailureMessage
+                            ?? (isUpdate
+                                ? "Update applied, but integration status is unavailable."
+                                : "Changes applied, but integration status is unavailable.")
                     )
                     return
                 }
                 summaries = fullStatus
                 finishApply(
-                    message: isUpdate
-                        ? "Integration update finished."
-                        : preparedAction == .install
-                            ? "Integration installation finished."
-                            : "Integration removal finished."
+                    message: piFailureMessage
+                        ?? (isUpdate
+                            ? "Integration update finished."
+                            : preparedAction == .install
+                                ? "Integration installation finished."
+                                : "Integration removal finished.")
                 )
             } catch is CancellationError {
                 return
             } catch {
                 guard acceptsApply(generation: generation) else { return }
                 finishApply(
-                    message: isUpdate
-                        ? "Update applied, but integration status is unavailable."
-                        : "Changes applied, but integration status is unavailable."
+                    message: piFailureMessage
+                        ?? (isUpdate
+                            ? "Update applied, but integration status is unavailable."
+                            : "Changes applied, but integration status is unavailable.")
                 )
             }
         } catch is CancellationError {
+            if launcherWasCreated, await rollbackCreatedLauncher(generation: generation) {
+                launcherStatus = .available
+            }
             return
         } catch {
+            var launcherRollbackFailed = false
+            if launcherWasCreated {
+                if await rollbackCreatedLauncher(generation: generation) {
+                    launcherStatus = .available
+                } else {
+                    launcherRollbackFailed = true
+                }
+            }
             guard acceptsApply(generation: generation) else { return }
             self.preparedSummary = nil
             preparedSelection = []
             self.preparedAction = nil
+            launcherPreparedSummary = nil
+            launcherPreparedAction = nil
             finishApply(
-                message: isUpdate
-                    ? "Update failed and was rolled back where required."
-                    : preparedAction == .install
-                        ? "Installation failed and was rolled back where required."
-                        : "Removal failed and was rolled back where required."
+                message: launcherRollbackFailed
+                    ? "Installation failed; command-line tool cleanup requires attention."
+                    : isUpdate
+                        ? "Update failed and was rolled back where required."
+                        : preparedAction == .install
+                            ? "Installation failed and was rolled back where required."
+                            : "Removal failed and was rolled back where required."
             )
         }
     }
@@ -610,6 +682,12 @@ final class AgentIntegrationsViewController: NSViewController {
     func changeSelectedIntegrationsWithConfirmation() async {
         await prepareSelection()
         guard operationCanStart, preparedSummary != nil, !Task.isCancelled else { return }
+        guard !bundledLauncherHasConflict else {
+            messageLabel.stringValue =
+                "Resolve the command-line tool conflict before installing Pi."
+            renderAll()
+            return
+        }
 
         let action = selectedAction
         let isUpdate = preparedIsUpdate
@@ -913,6 +991,31 @@ final class AgentIntegrationsViewController: NSViewController {
         renderAll()
     }
 
+    private func rollbackCreatedLauncher(generation: UUID) async -> Bool {
+        let launcherInstaller = launcherInstaller
+        return await Task.detached {
+            do {
+                let prepared = try await launcherInstaller.prepare(generation, .uninstall)
+                guard prepared.generation == generation else { return false }
+                switch prepared.value.status {
+                case .noOp:
+                    return true
+                case .installed:
+                    let applied = try await launcherInstaller.apply(
+                        generation,
+                        prepared.value.planID
+                    )
+                    return applied.generation == generation
+                        && (applied.value == .succeeded || applied.value == .noOp)
+                default:
+                    return false
+                }
+            } catch {
+                return false
+            }
+        }.value
+    }
+
     @discardableResult
     private func advanceGeneration() -> UUID {
         let generation = UUID()
@@ -1178,7 +1281,8 @@ final class AgentIntegrationsViewController: NSViewController {
     private var visiblePreviewLines: [String] {
         if let launcherPreparedSummary,
             let launcherPreparedAction,
-            launcherPreparedAction == selectedAction
+            launcherPreparedAction == selectedAction,
+            bundledLauncherPreparedSummary == nil
         {
             let verb = launcherPreparedAction == .install ? "Installation" : "Removal"
             let backup = launcherPreparedSummary.createsBackup ? ", backup" : ""
@@ -1200,6 +1304,12 @@ final class AgentIntegrationsViewController: NSViewController {
         let isUpdate = !applySummaries.isEmpty ? resultIsUpdate : preparedIsUpdate
         let verb = isUpdate ? "Update" : action == .install ? "Installation" : "Removal"
         var lines: [String] = []
+        if let launcher = bundledLauncherPreparedSummary, launcher.status != .noOp {
+            let backup = launcher.createsBackup ? ", backup" : ""
+            lines.append(
+                "Installation — Command Line Tool: \(launcher.displayPath), \(launcher.kind), \(launcher.status.rawValue)\(backup)"
+            )
+        }
         for summary in displayed.prefix(orderedAdapterIDs.count) {
             lines.append("\(verb) — \(summary.adapterID): \(summary.status.rawValue)")
             for operation in summary.operations.prefix(Self.maximumRenderedOperations) {
@@ -1269,11 +1379,28 @@ final class AgentIntegrationsViewController: NSViewController {
         }
     }
 
+    private var bundledLauncherPreparedSummary: CommandLineLauncherSummary? {
+        guard preparedAction == .install,
+            preparedSelection.contains("pi"),
+            launcherPreparedAction == .install
+        else { return nil }
+        return launcherPreparedSummary
+    }
+
+    private var bundledLauncherHasConflict: Bool {
+        bundledLauncherPreparedSummary?.status == .conflict
+    }
+
     private func invalidatePreparedPlan(clearResults: Bool) {
+        let hadBundledLauncher = preparedAction == .install && preparedSelection.contains("pi")
         preparedSummary = nil
         preparedSelection = []
         preparedAction = nil
         preparedIsUpdate = false
+        if hadBundledLauncher {
+            launcherPreparedSummary = nil
+            launcherPreparedAction = nil
+        }
         if clearResults {
             applySummaries = []
             resultAction = nil

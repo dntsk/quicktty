@@ -245,8 +245,18 @@ assert_file_equals "$tmp_root/codex-events-expected" "$tmp_root/codex-events"
     || fail 'AgentIntegrations is not configured as a folder resource'
 /usr/bin/grep -F -x '          - AgentSessionIntegrations' "$project_spec" >/dev/null \
     || fail 'native lifecycle resources are not excluded from the flattened resource entry'
+/usr/bin/grep -F -x '          - AgentSkills' "$project_spec" >/dev/null \
+    || fail 'agent skills are not excluded from the flattened resource entry'
 /usr/bin/grep -F -x '      - path: QuickTTY/Resources/AgentSessionIntegrations' "$project_spec" >/dev/null \
     || fail 'native lifecycle resources are not included explicitly'
+/usr/bin/grep -F -x '      - path: QuickTTY/Resources/AgentSkills' "$project_spec" >/dev/null \
+    || fail 'agent skills are not included explicitly'
+canonical_skill=$repo_root/skills/quicktty-terminal/SKILL.md
+bundled_skill=$repo_root/QuickTTY/Resources/AgentSkills/quicktty-terminal/SKILL.md
+[ -f "$canonical_skill" ] && [ -f "$bundled_skill" ] \
+    || fail 'QuickTTY terminal skill source or bundle resource is missing'
+/usr/bin/cmp -s "$canonical_skill" "$bundled_skill" \
+    || fail 'bundled QuickTTY terminal skill differs from canonical source'
 
 expected_native_ids='claude codex pi omp cursor gemini hermes copilot droid qoder kimi'
 expected_wrapper_ids='amp antigravity opencode'

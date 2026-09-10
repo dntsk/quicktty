@@ -22,16 +22,28 @@
 
 1. Получить явное разрешение на commit, push, signing, notarization, tag и публикацию.
 2. Выбрать marketing version, build number и release label. Обновить одновременно XcodeGen metadata, release helpers, release verification, contract tests и README. Исторические release docs и handoffs не переписывать.
-3. Выполнить contract checks для изменённых release scripts.
+3. По умолчанию выполнить contract checks для изменённых release scripts.
 4. Создать один release commit и push в `origin/master`.
 5. Убедиться, что дерево чистое и `HEAD` совпадает с `@{upstream}`.
-6. Выполнить **один** полный gate для этого commit:
+6. По умолчанию выполнить **один** полный gate для этого commit:
 
    ```sh
    scripts/pre-deploy-check.sh
    ```
 
    Не запускать отдельный `make check` до или после этого gate. Если gate не прошёл, не создавать tag; исправить причину новым commit и повторить только этот gate.
+
+### Evidence reuse вместо повторного gate
+
+Пользователь может явно потребовать выпуск без повторных tests/contracts/pre-deploy и, отдельно, без update smoke. Такое исключение допустимо только для непосредственно следующего release в той же сессии, когда:
+
+- полный `make check` уже успешно прошёл на точных product source, resources и tests;
+- после этого gate product source, resources и tests не менялись;
+- последующие изменения ограничены этим runbook/rules, version/build metadata, release pipeline constants, соответствующими contract fixtures, README и временными release notes;
+- feature tree фиксируется без изменения проверенных bytes, а release commit содержит только перечисленный release-only scope;
+- handoff/evidence фиксирует reused gate, его log/xcresult, exact release-only diff scope и явный user waiver.
+
+При evidence reuse не запускаются focused contracts, `scripts/pre-deploy-check.sh`, `make check` или другие test suites. Это не отменяет clean tree/upstream checks, штатный signed-release pipeline, strict codesign, hardened runtime, Apple notarization, stapling, Gatekeeper, exact appcast/DMG verification, draft comparison, anonymous public verification, immutability и beta-feed promotion.
 
 ## 2. Build, signing и notarization
 
@@ -104,7 +116,7 @@ grep 'enclosure' "$APPCAST"
 1. Для stable release `releases/latest/download/appcast.xml` отвечает и содержит текущий version, build number, final enclosure name и final length. Prerelease не меняет этот URL.
 2. Absolute enclosure URL отвечает и ведёт к public DMG текущего release.
 3. Анонимно скачать DMG, сверить его size и SHA-256 с local final artifact.
-4. Для stable release проверить в приложении предыдущего stable release ручной `Check for Updates…`: найдено именно новое обновление, download и Sparkle validation не показывают error. Prerelease не предлагается stable-каналу.
+4. Для stable release проверить в приложении предыдущего stable release ручной `Check for Updates…`: найдено именно новое обновление, download и Sparkle validation не показывают error. Prerelease не предлагается stable-каналу. Этот пункт и channel smoke matrix можно пропустить только по явному user waiver в допустимом evidence-reuse выпуске; waiver фиксируется в evidence.
 
 До завершения всех применимых пунктов release считается незавершённым.
 
@@ -149,4 +161,4 @@ Beta channel — это поток «самый новый stable или beta bu
 - менять или перемещать published tag;
 - генерировать appcast из DMG до stapling;
 - использовать guessed Keychain profile;
-- объявлять release готовым до anonymous download и ручного update smoke test.
+- объявлять release готовым до anonymous download и применимого ручного update smoke test либо документированного evidence-reuse waiver.

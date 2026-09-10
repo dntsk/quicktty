@@ -637,7 +637,7 @@ public actor AgentIntegrationInstaller {
                         helperExecutablePath: helperExecutable.path
                     )
                 }
-                mutations = [
+                var ownedMutations: [PolicyMutation] = [
                     .owned(
                         try OwnedFileMutation(
                             path: AgentIntegrationPath(root: .home, relativePath: relativePath),
@@ -645,6 +645,22 @@ public actor AgentIntegrationInstaller {
                             contents: contents
                         ))
                 ]
+                if id == "pi" {
+                    let skillRoot = resourceRoot.deletingLastPathComponent().appending(
+                        path: "AgentSkills", directoryHint: .isDirectory)
+                    let skill = try boundedResource(skillRoot, "quicktty-terminal", "SKILL.md")
+                    ownedMutations.append(
+                        .owned(
+                            try OwnedFileMutation(
+                                path: AgentIntegrationPath(
+                                    root: .home,
+                                    relativePath: ".pi/agent/skills/quicktty-terminal/SKILL.md"
+                                ),
+                                operationID: "\(operationID)-terminal-skill",
+                                contents: skill
+                            )))
+                }
+                mutations = ownedMutations
             case .wrapper(let executableName, let pluginPath, let pluginResource):
                 let wrapper = try boundedResource(
                     resourceRoot, id, "wrapper/\(executableName)")

@@ -67,6 +67,205 @@ struct AgentIntegrationsViewControllerTests {
     }
 
     @Test
+    func piInstallPreviewsAndAppliesLauncherWithLifecycleAndSkill() async throws {
+        let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
+        let launcherRecorder = LauncherInstallerRecorder()
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        let preview = try #require(confirmations.requests.first?.previewText)
+        #expect(preview.contains("~/.local/bin/quicktty"))
+        #expect(preview.contains("~/.pi/agent/skills/quicktty-terminal/SKILL.md"))
+        #expect(await launcherRecorder.preparedActions == [.install])
+        #expect(await launcherRecorder.appliedPlanIDs == ["launcher-plan"])
+        #expect(await recorder.appliedPlanIDs == ["prepared-plan"])
+        #expect(viewController.launcherStatusForTesting == .installed)
+        #expect(viewController.messageForTesting == "Integration installation finished.")
+    }
+
+    @Test
+    func piInstallStopsBeforeConfirmationWhenLauncherConflicts() async {
+        let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
+        let launcherRecorder = LauncherInstallerRecorder(status: .conflict)
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(confirmations.requests.isEmpty)
+        #expect(await launcherRecorder.appliedPlanIDs.isEmpty)
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+        #expect(
+            viewController.messageForTesting
+                == "Resolve the command-line tool conflict before installing Pi."
+        )
+    }
+
+    @Test
+    func piInstallDoesNotApplyIntegrationWhenLauncherApplyFails() async {
+        let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
+        let launcherRecorder = LauncherInstallerRecorder(failsInstallApply: true)
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await recorder.appliedPlanIDs.isEmpty)
+        #expect(await launcherRecorder.appliedPlanIDs == ["launcher-plan"])
+        #expect(
+            viewController.messageForTesting
+                == "Installation failed and was rolled back where required."
+        )
+    }
+
+    @Test
+    func piInstallRollsBackNewLauncherWhenIntegrationApplyFails() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(),
+            failure: .apply
+        )
+        let launcherRecorder = LauncherInstallerRecorder()
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await launcherRecorder.preparedActions == [.install, .uninstall])
+        #expect(
+            await launcherRecorder.appliedPlanIDs
+                == ["launcher-plan", "launcher-uninstall-plan"]
+        )
+        #expect(viewController.launcherStatusForTesting == .available)
+        #expect(
+            viewController.messageForTesting
+                == "Installation failed and was rolled back where required."
+        )
+    }
+
+    @Test
+    func conflictedPiApplyResultRollsBackNewLauncher() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(),
+            failure: .piResult
+        )
+        let launcherRecorder = LauncherInstallerRecorder()
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await recorder.appliedPlanIDs == ["prepared-plan"])
+        #expect(await launcherRecorder.preparedActions == [.install, .uninstall])
+        #expect(
+            await launcherRecorder.appliedPlanIDs
+                == ["launcher-plan", "launcher-uninstall-plan"]
+        )
+        #expect(
+            viewController.messageForTesting
+                == "Pi installation failed; the command-line tool was rolled back."
+        )
+    }
+
+    @Test
+    func cancelledPiInstallRollsBackNewLauncher() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(),
+            failure: .cancellation
+        )
+        let launcherRecorder = LauncherInstallerRecorder()
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await launcherRecorder.preparedActions == [.install, .uninstall])
+        #expect(
+            await launcherRecorder.appliedPlanIDs
+                == ["launcher-plan", "launcher-uninstall-plan"]
+        )
+        #expect(viewController.launcherStatusForTesting == .available)
+        #expect(
+            viewController.messageForTesting
+                == "Integration changes were cancelled or became unavailable."
+        )
+    }
+
+    @Test
+    func piUninstallKeepsSharedLauncher() async {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["pi": .installed])
+        )
+        let launcherRecorder = LauncherInstallerRecorder(status: .installed)
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder,
+            launcherRecorder: launcherRecorder,
+            confirmationPresenter: { request in confirmations.present(request) }
+        )
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setAction(.uninstall)
+        viewController.setSelected("pi", selected: true)
+
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await recorder.appliedPlanIDs == ["prepared-plan"])
+        #expect(await launcherRecorder.preparedActions.isEmpty)
+        #expect(await launcherRecorder.appliedPlanIDs.isEmpty)
+    }
+
+    @Test
     func primaryButtonsPrepareConfirmAndApplyWithoutSelfCancellation() async throws {
         let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
         let launcherRecorder = LauncherInstallerRecorder()
@@ -555,6 +754,8 @@ private final class ConfirmationRecorder {
 
 private enum IntegrationInstallerRecorderFailure: Error, Equatable, Sendable {
     case apply
+    case cancellation
+    case piResult
     case postApplyStatus
 }
 
@@ -565,6 +766,7 @@ private actor IntegrationInstallerRecorder {
     private let applyStarts: AsyncStream<Void>
     private let applyStartContinuation: AsyncStream<Void>.Continuation
     private var applyContinuation: CheckedContinuation<Void, Never>?
+    private var preparedAdapterIDs: [String] = []
     private(set) var appliedPlanIDs: [String] = []
 
     init(
@@ -606,7 +808,8 @@ private actor IntegrationInstallerRecorder {
     }
 
     private func prepare(_ selected: [String]) -> AgentIntegrationPreparedSummary {
-        AgentIntegrationPreparedSummary(
+        preparedAdapterIDs = selected
+        return AgentIntegrationPreparedSummary(
             planID: "prepared-plan",
             adapters: selected.map { id in
                 AgentIntegrationAdapterSummary(
@@ -615,9 +818,11 @@ private actor IntegrationInstallerRecorder {
                     status: .available,
                     operations: [
                         AgentIntegrationOperationSummary(
-                            displayPath: "~/.claude/settings.json",
-                            kind: .jsonHook,
-                            createsBackup: true
+                            displayPath: id == "pi"
+                                ? "~/.pi/agent/skills/quicktty-terminal/SKILL.md"
+                                : "~/.claude/settings.json",
+                            kind: id == "pi" ? .ownedFile : .jsonHook,
+                            createsBackup: id != "pi"
                         )
                     ]
                 )
@@ -635,31 +840,46 @@ private actor IntegrationInstallerRecorder {
         if failure == .apply {
             throw IntegrationInstallerRecorderFailure.apply
         }
+        if failure == .cancellation {
+            throw CancellationError()
+        }
         appliedPlanIDs.append(planID)
         return AgentIntegrationApplySummary(
-            adapters: [
+            adapters: preparedAdapterIDs.map { adapterID in
                 AgentIntegrationAdapterSummary(
-                    adapterID: "claude",
+                    adapterID: adapterID,
                     capability: .nativeLifecycle,
-                    status: .succeeded,
+                    status: failure == .piResult && adapterID == "pi" ? .conflict : .succeeded,
                     operations: []
                 )
-            ]
+            }
         )
     }
 }
 
 private enum LauncherInstallerRecorderError: Error {
     case status
+    case installApply
 }
 
 private actor LauncherInstallerRecorder {
     let failsStatus: Bool
+    let failsInstallApply: Bool
+    private var currentStatus: CommandLineLauncherStatus
+    private var pendingAction: CommandLineLauncherAction?
+    private var pendingStatus: CommandLineLauncherStatus?
     private(set) var statusRequestCount = 0
+    private(set) var preparedActions: [CommandLineLauncherAction] = []
     private(set) var appliedPlanIDs: [String] = []
 
-    init(failsStatus: Bool = false) {
+    init(
+        failsStatus: Bool = false,
+        failsInstallApply: Bool = false,
+        status: CommandLineLauncherStatus = .available
+    ) {
         self.failsStatus = failsStatus
+        self.failsInstallApply = failsInstallApply
+        currentStatus = status
     }
 
     nonisolated var client: CommandLineLauncherInstallerClient {
@@ -670,23 +890,16 @@ private actor LauncherInstallerRecorder {
                     value: try await requestStatus()
                 )
             },
-            prepare: { generation, _ in
+            prepare: { [self] generation, action in
                 AgentIntegrationGeneratedResponse(
                     generation: generation,
-                    value: CommandLineLauncherSummary(
-                        planID: "launcher-plan",
-                        displayPath: "~/.local/bin/quicktty",
-                        kind: "symlinkCreate",
-                        createsBackup: false,
-                        status: .available
-                    )
+                    value: await prepare(action)
                 )
             },
             apply: { [self] generation, planID in
-                await recordApply(planID)
-                return AgentIntegrationGeneratedResponse(
+                AgentIntegrationGeneratedResponse(
                     generation: generation,
-                    value: .succeeded
+                    value: try await apply(planID)
                 )
             }
         )
@@ -697,11 +910,48 @@ private actor LauncherInstallerRecorder {
         if failsStatus {
             throw LauncherInstallerRecorderError.status
         }
-        return .available
+        return currentStatus
     }
 
-    private func recordApply(_ planID: String) {
+    private func prepare(_ action: CommandLineLauncherAction) -> CommandLineLauncherSummary {
+        preparedActions.append(action)
+        let status: CommandLineLauncherStatus
+        switch (action, currentStatus) {
+        case (.install, .available): status = .available
+        case (.install, .installed), (.uninstall, .available): status = .noOp
+        case (.uninstall, .installed): status = .installed
+        default: status = .conflict
+        }
+        pendingAction = action
+        pendingStatus = status
+        return CommandLineLauncherSummary(
+            planID: action == .install ? "launcher-plan" : "launcher-uninstall-plan",
+            displayPath: "~/.local/bin/quicktty",
+            kind: action == .install ? "symlinkCreate" : "symlinkRemove",
+            createsBackup: false,
+            status: status
+        )
+    }
+
+    private func apply(_ planID: String) throws -> CommandLineLauncherStatus {
+        let action = pendingAction
+        let status = pendingStatus
+        pendingAction = nil
+        pendingStatus = nil
         appliedPlanIDs.append(planID)
+        switch (action, status) {
+        case (.install, .available):
+            if failsInstallApply { throw LauncherInstallerRecorderError.installApply }
+            currentStatus = .installed
+            return .succeeded
+        case (.uninstall, .installed):
+            currentStatus = .available
+            return .succeeded
+        case (_, .noOp):
+            return .noOp
+        default:
+            throw AgentIntegrationInstallerError.conflict
+        }
     }
 }
 
