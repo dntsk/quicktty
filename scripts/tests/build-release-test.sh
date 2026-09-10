@@ -67,7 +67,7 @@ sh -n "$ghostty_build_script"
 grep -F -x 'PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$build_script" >/dev/null \
     || fail 'release build script does not set the trusted PATH'
 for required_build_setting in \
-    'BUILD_NUMBER=13' \
+    'BUILD_NUMBER=14' \
     'BUNDLE_IDENTIFIER=com.dntsk.QuickTTY' \
     'MARKETING_VERSION=0.1.4' \
     'PRODUCT_NAME=QuickTTY'
@@ -225,8 +225,8 @@ outer_app_verification_line=$(grep -nF -x 'verify_signed_app_bundle "$staged_app
     && [ "$sparkle_sign_line" -lt "$outer_app_sign_line" ] \
     && [ "$outer_app_sign_line" -lt "$outer_app_verification_line" ] \
     || fail 'signing order must be CLI helper, Sparkle, outer app, then verification'
-grep -F -x '        CURRENT_PROJECT_VERSION: 13' "$project_spec" >/dev/null \
-    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 13'
+grep -F -x '        CURRENT_PROJECT_VERSION: 14' "$project_spec" >/dev/null \
+    || fail 'project spec does not set CURRENT_PROJECT_VERSION to 14'
 grep -F -x '        GENERATE_INFOPLIST_FILE: NO' "$project_spec" >/dev/null \
     || fail 'project spec does not disable generated app Info.plist'
 grep -F -x '        GENERATE_INFOPLIST_FILE: YES' "$project_spec" >/dev/null \
@@ -321,14 +321,14 @@ unset APPLE_ID
 
 . "$helpers"
 
-assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.4.beta-1
+assert_equals "$RELEASE_LABEL_DEFAULT" 0.1.4.beta-2
 assert_equals "$RELEASE_ARCHIVE_NAME" QuickTTY.xcarchive
-assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.4.beta-1-arm64.dmg
-assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.4.beta-1-stage
+assert_equals "$RELEASE_DMG_NAME" QuickTTY-0.1.4.beta-2-arm64.dmg
+assert_equals "$RELEASE_STAGE_NAME" QuickTTY-0.1.4.beta-2-stage
 assert_equals "$RELEASE_APPCAST_DIRECTORY_NAME" appcast
 assert_equals "$RELEASE_APPCAST_NAME" appcast.xml
 assert_equals "$(release_appcast_download_url_prefix)" \
-    https://github.com/dntsk/quicktty/releases/download/v0.1.4.beta-1/
+    https://github.com/dntsk/quicktty/releases/download/v0.1.4.beta-2/
 release_validate_label "$RELEASE_LABEL_DEFAULT"
 release_validate_team N8FS9YUZQA
 release_validate_identity 'Developer ID Application: Dmitriy Lialiuev (N8FS9YUZQA)'
@@ -735,6 +735,8 @@ reset_integration_fixture() {
     mkdir -p "$integration_fixture_resources"
     cp -R "$repo_root/QuickTTY/Resources/AgentSessionIntegrations" \
         "$integration_fixture_resources/AgentSessionIntegrations"
+    cp -R "$repo_root/QuickTTY/Resources/AgentSkills" \
+        "$integration_fixture_resources/AgentSkills"
 }
 expect_integration_fixture_failure() {
     if (verify_agent_session_integrations "$integration_fixture_resources") \
@@ -746,6 +748,19 @@ expect_integration_fixture_failure() {
 
 reset_integration_fixture
 verify_agent_session_integrations "$integration_fixture_resources"
+rm -rf "$integration_fixture_resources/AgentSkills"
+expect_integration_fixture_failure
+reset_integration_fixture
+printf 'corrupted\n' >"$integration_fixture_resources/AgentSkills/quicktty-terminal/SKILL.md"
+expect_integration_fixture_failure
+reset_integration_fixture
+rm "$integration_fixture_resources/AgentSkills/quicktty-terminal/SKILL.md"
+ln -s /usr/bin/true "$integration_fixture_resources/AgentSkills/quicktty-terminal/SKILL.md"
+expect_integration_fixture_failure
+reset_integration_fixture
+touch "$integration_fixture_resources/AgentSkills/unknown-resource"
+expect_integration_fixture_failure
+reset_integration_fixture
 rm -rf "$integration_fixture_resources/AgentSessionIntegrations"
 expect_integration_fixture_failure
 reset_integration_fixture

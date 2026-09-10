@@ -20,7 +20,7 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/release-helpers.sh"
 
 MARKETING_VERSION=0.1.4
-BUILD_NUMBER=13
+BUILD_NUMBER=14
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY
@@ -124,6 +124,24 @@ verify_agent_session_integrations() {
         [ "$("$stat_path" -f '%Lp' "$integrations_dir/$configuration_resource")" = 644 ] \
             || release_fail "integration resource mode must be 0644: $integrations_dir/$configuration_resource"
     done
+
+    skills_dir=$resources_dir/AgentSkills
+    source_skill=$repo_root/skills/quicktty-terminal/SKILL.md
+    bundled_skill=$skills_dir/quicktty-terminal/SKILL.md
+    require_directory "$skills_dir"
+    require_directory "$skills_dir/quicktty-terminal"
+    require_regular_file "$bundled_skill"
+    /usr/bin/cmp -s "$source_skill" "$bundled_skill" \
+        || release_fail "bundled QuickTTY terminal skill differs from canonical source"
+    skill_entry_count=$("$RELEASE_FIND_PATH" "$skills_dir" -mindepth 1 -print \
+        | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [ "$skill_entry_count" = 2 ] \
+        || release_fail "AgentSkills resource set is not exact: $skills_dir"
+    if "$RELEASE_FIND_PATH" "$skills_dir" -mindepth 1 -type l -print | /usr/bin/grep . >/dev/null; then
+        release_fail "AgentSkills must not contain symlinks: $skills_dir"
+    fi
+    [ "$("$stat_path" -f '%Lp' "$bundled_skill")" = 644 ] \
+        || release_fail "terminal skill resource mode must be 0644: $bundled_skill"
 }
 
 plist_value() {
