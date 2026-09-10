@@ -4,12 +4,12 @@
         <title>QuickTTY</title>
         <item>
             <title>0.1.4</title>
-            <pubDate>Thu, 10 Sep 2026 15:00:34 +0300</pubDate>
-            <sparkle:version>13</sparkle:version>
+            <pubDate>Thu, 10 Sep 2026 18:00:36 +0300</pubDate>
+            <sparkle:version>14</sparkle:version>
             <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/dntsk/quicktty/releases/download/v0.1.4.beta-1/QuickTTY-0.1.4.beta-1-arm64.dmg" length="11538108" type="application/octet-stream" sparkle:edSignature="CAaiBIG/cnekeDaieDT8PHDdyyyXVbDyD+WzC9zJwUtgnPspqJxjpEg65Xtr5aVNNx9q21h+X1gWI+KK3VVpCQ=="/>
+            <enclosure url="https://github.com/dntsk/quicktty/releases/download/v0.1.4.beta-2/QuickTTY-0.1.4.beta-2-arm64.dmg" length="11549278" type="application/octet-stream" sparkle:edSignature="QRahTo4B5rf4sNFo7gBd2l6JhzwoVAb3EuI7PWfk2UsEbu2mjLRhjoPg1T4ikihtCS0TxnfaWnf8PzvYByobCw=="/>
         </item>
     </channel>
 </rss>
