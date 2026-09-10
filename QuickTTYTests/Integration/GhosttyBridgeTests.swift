@@ -1,4 +1,5 @@
 import Foundation
+import GhosttyKit
 import Testing
 
 @testable import QuickTTY
@@ -356,6 +357,17 @@ struct GhosttyBridgeTests {
     }
 
     @Test
+    func processExitPayloadMatchesPinnedHeader() {
+        #expect(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue == 55)
+        #expect(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue == 58)
+        #expect(MemoryLayout<ghostty_surface_message_childexited_s>.size == 16)
+        #expect(MemoryLayout<ghostty_surface_message_childexited_s>.stride == 16)
+        #expect(MemoryLayout<ghostty_surface_message_childexited_s>.alignment == 8)
+        #expect(MemoryLayout<ghostty_surface_message_childexited_s>.offset(of: \.exit_code) == 0)
+        #expect(MemoryLayout<ghostty_surface_message_childexited_s>.offset(of: \.timetime_ms) == 8)
+    }
+
+    @Test
     func realCOpenURLActionCopiesStrictPayloadAndPreservesKinds() {
         let cases: [(GhosttyOpenURL.Kind, String)] = [
             (.unknown, "custom-scheme:value"),
@@ -626,6 +638,240 @@ struct GhosttyBridgeTests {
         #expect(hardReload == .reloadConfig(soft: false))
         #expect(softReload == .reloadConfig(soft: true))
     }
+
+    @Test
+    func terminalAutomationABIMatchesPinnedHeader() {
+        #expect(GhosttyInput.keyABIMatchesPinnedHeader)
+        #expect(GhosttyBridge.terminalAutomationABIMatchesPinnedHeader)
+    }
+
+    @Test
+    func renderedTextPassesByteBoundAndNativeTruncationWithoutScrollbarSelection() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let size = try #require(surface.sizeSnapshotForTesting)
+        let scrollbarTotal: UInt64 = 400
+        let limit = 1024
+        let spy = TerminalAutomationClientSpy(payload: [])
+        spy.isTruncated = true
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+
+        #expect(
+            surface.scheduleScrollbarCallbackForTesting(
+                total: scrollbarTotal,
+                offset: scrollbarTotal - UInt64(size.rows),
+                len: UInt64(size.rows)
+            )
+        )
+
+        let rendered = try bridge.readRenderedText(
+            id: surface.paneID,
+            maximumUTF8Bytes: limit
+        )
+        let request = try #require(spy.lastRequest)
+        #expect(rendered == GhosttyRenderedText(text: "", isTruncated: true))
+        #expect(spy.readCount == 1)
+        #expect(spy.freeCount == 1)
+        #expect(request.maximumUTF8Bytes == limit)
+        spy.isTruncated = false
+        #expect(
+            try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: limit)
+                == GhosttyRenderedText(text: "", isTruncated: false))
+        #expect(spy.readCount == 2 && spy.freeCount == 2)
+    }
+
+    @Test
+    func renderedTextAcceptsEmptyAndExactLimitPayloadsAndFreesOnce() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let spy = TerminalAutomationClientSpy(payload: [])
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+
+        let empty = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 1)
+        spy.payload = Array(repeating: 0x61, count: TerminalControlProtocol.maximumSnapshotSize)
+        let exact = try bridge.readRenderedText(
+            id: surface.paneID,
+            maximumUTF8Bytes: TerminalControlProtocol.maximumSnapshotSize
+        )
+
+        #expect(empty == GhosttyRenderedText(text: "", isTruncated: false))
+        #expect(exact.text.utf8.count == TerminalControlProtocol.maximumSnapshotSize)
+        #expect(!exact.isTruncated)
+        #expect(spy.readCount == 2)
+        #expect(spy.freeCount == 2)
+    }
+
+    @Test
+    func renderedTextTailTruncatesOnUnicodeScalarBoundariesAndRespectsByteLimit() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let cases: [(String, Int, String)] = [
+            ("ae\u{301}b", 3, "\u{301}b"),
+            ("x👨‍👩‍👧‍👦y", 5, "👦y"),
+            ("猫", 1, ""),
+            // WHY: Combining scalars invalidate a strict four-bytes-per-cell allocation bound.
+            (
+                String(repeating: "e\u{301}", count: 30_000), 65_536,
+                String(repeating: "e\u{301}", count: 21_845)
+            ),
+        ]
+
+        for (index, testCase) in cases.enumerated() {
+            let spy = TerminalAutomationClientSpy(payload: Array(testCase.0.utf8))
+            bridge.setTerminalAutomationClientForTesting(spy.client)
+
+            let rendered = try bridge.readRenderedText(
+                id: surface.paneID,
+                maximumUTF8Bytes: testCase.1
+            )
+
+            #expect(rendered == GhosttyRenderedText(text: testCase.2, isTruncated: true))
+            #expect(rendered.text.utf8.count <= testCase.1)
+            #expect(rendered.text.utf8.count == testCase.2.utf8.count)
+            #expect(spy.readCount == 1, "Case \(index) was not read exactly once")
+            #expect(spy.freeCount == 1, "Case \(index) was not freed exactly once")
+        }
+    }
+
+    @Test
+    func renderedTextReadFailureThrowsWithoutFreeingAnUnownedBuffer() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let spy = TerminalAutomationClientSpy(payload: [])
+        spy.shouldReadSucceed = false
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+
+        #expect(throws: GhosttyBridgeError.renderedTextReadFailed(surface.paneID)) {
+            try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 1024)
+        }
+        #expect(spy.readCount == 1)
+        #expect(spy.freeCount == 0)
+    }
+
+    @Test
+    func outputStateDefaultsToNativeAndFailsClosedAfterReentrantClose() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        // WHY: Legacy surfaces cannot provide managed EOF, even while current text is readable.
+        #expect(surface.outputState() == .failed)
+        #expect(bridge.outputState(id: surface.paneID) == .failed)
+        var client = GhosttyTerminalAutomationClient.live
+        client.outputState = { _ in
+            bridge.closeSurface(id: surface.paneID)
+            return .complete
+        }
+        bridge.setTerminalAutomationClientForTesting(client)
+        #expect(bridge.outputState(id: surface.paneID) == .failed)
+        #expect(surface.outputState(client: client) == .failed)
+        #expect(bridge.outputState(id: PaneID()) == .failed)
+    }
+
+    @Test
+    func renderedTextRejectsInvalidUTF8AndFreesOnce() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let spy = TerminalAutomationClientSpy(payload: [0xFF])
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+
+        do {
+            _ = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 1)
+            Issue.record("Invalid UTF-8 payload was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .invalidRenderedTextEncoding(surface.paneID))
+        } catch {
+            Issue.record("Unexpected rendered text error: \(error)")
+        }
+        #expect(spy.readCount == 1)
+        #expect(spy.freeCount == 1)
+    }
+
+    @Test
+    func renderedTextRejectsInvalidBoundsBeforeCallingClient() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let spy = TerminalAutomationClientSpy(payload: Array("unused".utf8))
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+
+        do {
+            _ = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 0)
+            Issue.record("Zero rendered text limit was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .invalidRenderedTextLimit)
+        } catch {
+            Issue.record("Unexpected rendered text error: \(error)")
+        }
+        do {
+            _ = try bridge.readRenderedText(
+                id: surface.paneID,
+                maximumUTF8Bytes: TerminalControlProtocol.maximumSnapshotSize + 1
+            )
+            Issue.record("Oversized rendered text limit was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .invalidRenderedTextLimit)
+        } catch {
+            Issue.record("Unexpected rendered text error: \(error)")
+        }
+        #expect(spy.readCount == 0)
+        #expect(spy.freeCount == 0)
+    }
+
+    @Test
+    func closedSurfaceReturnsStableAutomationErrors() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let paneID = PaneID()
+        _ = try bridge.makeSurface(
+            id: paneID,
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+
+        bridge.closeSurface(id: paneID)
+
+        do {
+            _ = try bridge.readRenderedText(id: paneID, maximumUTF8Bytes: 1)
+            Issue.record("Closed pane rendered text read was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .surfaceUnavailable(paneID))
+        } catch {
+            Issue.record("Unexpected rendered text error: \(error)")
+        }
+        do {
+            try bridge.sendAutomationText(id: paneID, text: "x")
+            Issue.record("Closed pane automation text was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .surfaceUnavailable(paneID))
+        } catch {
+            Issue.record("Unexpected automation text error: \(error)")
+        }
+        do {
+            try bridge.sendAutomationKey(id: paneID, key: .enter)
+            Issue.record("Closed pane automation key was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .surfaceUnavailable(paneID))
+        } catch {
+            Issue.record("Unexpected automation key error: \(error)")
+        }
+    }
 }
 
 private enum RuntimeActionTestError: Error {
@@ -700,5 +946,40 @@ private struct TemporaryConfig {
 
     func remove() {
         try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
+
+@MainActor
+private final class TerminalAutomationClientSpy {
+    var payload: [UInt8]
+    var shouldReadSucceed = true
+    var isTruncated = false
+    private(set) var readCount = 0
+    private(set) var freeCount = 0
+    private(set) var lastRequest: GhosttyTerminalAutomationReadRequest?
+
+    init(payload: [UInt8]) {
+        self.payload = payload
+    }
+
+    var client: GhosttyTerminalAutomationClient {
+        GhosttyTerminalAutomationClient(
+            readText: { [self] request, _ in
+                readCount += 1
+                lastRequest = request
+                guard shouldReadSucceed else { return .failure }
+                return .success(
+                    GhosttyTerminalAutomationReadBuffer(
+                        bytes: Data(payload),
+                        isTruncated: isTruncated,
+                        release: {}
+                    )
+                )
+            },
+            freeText: { [self] buffer in
+                freeCount += 1
+                buffer.release()
+            }
+        )
     }
 }

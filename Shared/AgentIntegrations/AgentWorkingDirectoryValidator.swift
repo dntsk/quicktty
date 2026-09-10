@@ -1,13 +1,13 @@
 import Foundation
 
 enum AgentWorkingDirectoryValidator {
-    private static let maximumUTF8ByteCount = 4_096
+    static let maximumPathSize = 4_096
     private static let slash = UInt8(ascii: "/")
     private static let dot = UInt8(ascii: ".")
 
     static func isCanonicalAbsolutePath(_ path: String) -> Bool {
         let bytes = Array(path.utf8)
-        guard (1...maximumUTF8ByteCount).contains(bytes.count),
+        guard (1...maximumPathSize).contains(bytes.count),
             bytes[0] == slash,
             !containsControlByteSequence(bytes),
             path.precomposedStringWithCanonicalMapping.utf8.elementsEqual(bytes)

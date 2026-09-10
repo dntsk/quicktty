@@ -255,17 +255,58 @@ invalid_force_output=$(QUICKTTY_FORCE_GHOSTTY_REBUILD=invalid /bin/sh "$ghostty_
 printf '%s\n' "$invalid_force_output" \
     | grep -F -x 'error: QUICKTTY_FORCE_GHOSTTY_REBUILD must be unset, 0, or 1' >/dev/null \
     || fail "unexpected invalid force-rebuild failure: $invalid_force_output"
-ghostty_cache_reuse_exit_line=$(grep -nF -x '    exit 0' "$ghostty_build_script" \
-    | /usr/bin/cut -d: -f1)
-ghostty_cache_cleanup_line=$(grep -nF -x 'remove_zig_cache_before_rebuild' "$ghostty_build_script" \
-    | /usr/bin/cut -d: -f1)
-ghostty_zig_build_line=$(grep -nF -x '    zig build "$@"' "$ghostty_build_script" \
-    | /usr/bin/cut -d: -f1)
-[ -n "$ghostty_cache_reuse_exit_line" ] && [ -n "$ghostty_cache_cleanup_line" ] \
-    && [ -n "$ghostty_zig_build_line" ] \
-    && [ "$ghostty_cache_reuse_exit_line" -lt "$ghostty_cache_cleanup_line" ] \
-    && [ "$ghostty_cache_cleanup_line" -lt "$ghostty_zig_build_line" ] \
-    || fail 'Ghostty Zig cache cleanup must run after successful cache reuse exits and before a real zig build'
+(
+    ghostty_source_line() {
+        anchor_line=$(grep -nF -x "$1" "$ghostty_build_script" | /usr/bin/cut -d: -f1)
+        case "$anchor_line" in
+            '' | *[!0-9]*) fail "Ghostty source anchor must occur exactly once: $1" ;;
+        esac
+        printf '%s\n' "$anchor_line"
+    }
+
+    previous_line=0
+    while IFS= read -r anchor; do
+        anchor_line=$(ghostty_source_line "$anchor") || fail 'invalid Ghostty staged-build anchor'
+        [ "$anchor_line" -gt "$previous_line" ] \
+            || fail "Ghostty staged-build anchor is out of order: $anchor"
+        previous_line=$anchor_line
+    done <<'GHOSTTY_STAGED_BUILD_ANCHORS'
+cache_dir=$repo_root/.build/ghostty
+safe_directory "$cache_dir" || fail 'unsafe Ghostty build cache path'
+actual_commit=$(git -C "$ghostty_dir" rev-parse HEAD 2>/dev/null) || fail "could not determine Ghostty submodule revision"
+[ "$actual_commit" = "$REQUIRED_GHOSTTY_COMMIT" ] || fail "Ghostty must be checked out at $REQUIRED_GHOSTTY_COMMIT; found $actual_commit"
+stage_dir=$(mktemp -d "$cache_dir/source-stage.XXXXXX") || fail 'could not create Ghostty source stage'
+safe_directory "$stage_dir" || fail 'unsafe Ghostty source stage'
+source_dir=$stage_dir/source
+mkdir "$source_dir" "$stage_dir/patches"
+git -C "$ghostty_dir" archive --format=tar --output="$stage_dir/source.tar" \
+    "$actual_commit" -- . ':(glob,exclude)**/.env*' ':(glob,exclude)**/.env*/**' \
+    || fail 'could not export the pinned Ghostty commit'
+tar -xf "$stage_dir/source.tar" -C "$source_dir" --exclude='.env*' \
+    || fail 'could not unpack the pinned Ghostty source'
+for reserved_path in "$source_dir/.git" "$source_dir/.zig-cache" \
+    "$source_dir/zig-out" "$source_dir/macos/GhosttyKit.xcframework"; do
+    safe_path "$reserved_path" || fail "unsafe exported generated path: $reserved_path"
+    [ ! -e "$reserved_path" ] || fail "export already contains a reserved generated path: $reserved_path"
+if [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 0 ] && validate_cached_xcframework; then
+    cache_reused=1
+    exit 0
+xcframework_dir=$source_dir/macos/GhosttyKit.xcframework
+staged_share_dir=$source_dir/zig-out/share
+    cd "$source_dir" || exit 1
+    zig build "$@"
+GHOSTTY_STAGED_BUILD_ANCHORS
+
+    reuse_line=$(ghostty_source_line 'if [ "$QUICKTTY_FORCE_GHOSTTY_REBUILD" = 0 ] && validate_cached_xcframework; then')
+    reuse_exit_line=$(ghostty_source_line '    exit 0')
+    build_cd_line=$(ghostty_source_line '    cd "$source_dir" || exit 1')
+    build_line=$(ghostty_source_line '    zig build "$@"')
+    [ "$reuse_exit_line" -eq $((reuse_line + 3)) ] \
+        && [ "$(/usr/bin/awk -v line="$((reuse_exit_line + 1))" 'NR == line { print }' "$ghostty_build_script")" = fi ] \
+        && [ "$(/usr/bin/awk -v line="$((build_cd_line - 1))" 'NR == line { print }' "$ghostty_build_script")" = 'if (' ] \
+        && [ "$build_line" -eq $((build_cd_line + 1)) ] \
+        || fail 'Ghostty validated cache reuse must exit before zig builds in the source-stage subshell'
+)
 
 # These calls stop before tool discovery or any build/signing operation.
 DEVELOPMENT_TEAM=N8FS9YUZQA
@@ -334,43 +375,157 @@ esac
 TMPDIR=$tmp_root
 export TMPDIR
 
-ghostty_cleanup_function_fixture=$tmp_root/build-ghostty-cleanup-function.sh
-/usr/bin/awk '
-    /^remove_zig_cache_before_rebuild\(\) \{/ { capture = 1 }
-    capture {
-        print
-        if ($0 == "}") exit
-    }
-' "$ghostty_build_script" >"$ghostty_cleanup_function_fixture"
-. "$ghostty_cleanup_function_fixture"
-ghostty_cleanup_fixture=$tmp_root/ghostty-cache-cleanup
-zig_cache_dir=$ghostty_cleanup_fixture/.zig-cache
-mkdir -p "$zig_cache_dir"
-printf 'stale build artifact\n' >"$zig_cache_dir/stale"
-cleanup_output=$(remove_zig_cache_before_rebuild 2>&1)
-assert_equals "$cleanup_output" \
-    "Removing generated Ghostty Zig cache directory before rebuild: $zig_cache_dir"
-assert_missing "$zig_cache_dir"
-mkdir -p "$ghostty_cleanup_fixture/symlink-target"
-ln -s "$ghostty_cleanup_fixture/symlink-target" "$zig_cache_dir"
-if (remove_zig_cache_before_rebuild) >"$tmp_root/command-output" 2>&1; then
-    fail 'Ghostty Zig cache cleanup accepted a symlink'
-fi
-grep -F -x \
-    "error: refusing to remove generated Ghostty Zig cache directory symlink: $zig_cache_dir" \
-    "$tmp_root/command-output" >/dev/null \
-    || fail 'Ghostty Zig cache cleanup produced an unexpected symlink error'
-[ -L "$zig_cache_dir" ] || fail 'Ghostty Zig cache cleanup removed a symlink'
-rm "$zig_cache_dir"
-printf 'unexpected file\n' >"$zig_cache_dir"
-if (remove_zig_cache_before_rebuild) >"$tmp_root/command-output" 2>&1; then
-    fail 'Ghostty Zig cache cleanup accepted a non-directory path'
-fi
-grep -F -x \
-    "error: generated Ghostty Zig cache path is not a directory: $zig_cache_dir" \
-    "$tmp_root/command-output" >/dev/null \
-    || fail 'Ghostty Zig cache cleanup produced an unexpected non-directory error'
-[ -f "$zig_cache_dir" ] || fail 'Ghostty Zig cache cleanup removed a non-directory path'
+(
+    # Production cleanup must not replace the parent fixture cleanup or its traps.
+    trap - 0 HUP INT TERM
+    ghostty_cleanup_function_fixture=$tmp_root/build-ghostty-cleanup-functions.sh
+    : >"$ghostty_cleanup_function_fixture"
+    for function_name in safe_path safe_directory rollback_stamp rollback_share rollback_xcframework cleanup; do
+        /usr/bin/awk -v name="$function_name" '
+            $0 == name "() {" { capture = 1; found++ }
+            capture {
+                print
+                if ($0 == "}") { capture = 0; closed++ }
+            }
+            END { exit (found != 1 || closed != 1 || capture) }
+        ' "$ghostty_build_script" >>"$ghostty_cleanup_function_fixture" \
+            || fail "could not extract exactly one complete Ghostty function: $function_name"
+    done
+    . "$ghostty_cleanup_function_fixture"
+
+    for cleanup_case in cache-reused published unpublished stage-symlink stage-file ancestor-symlink outside-repo rollback-failure; do
+        (
+            case_root=$tmp_root/ghostty-stage-cleanup/$cleanup_case
+            repo_root=$case_root/repository
+            ghostty_dir=$repo_root/Vendor/ghostty
+            cache_dir=$repo_root/.build/ghostty
+            stage_dir=$cache_dir/source-stage.fixture
+            retained_stage=$stage_dir
+            source_dir=$stage_dir/source
+            lock_dir=$cache_dir/build.lock
+            published_xcframework_dir=$ghostty_dir/macos/GhosttyKit.xcframework
+            published_share_dir=$ghostty_dir/zig-out/share
+            stamp_path=$cache_dir/fixture.stamp
+            dependency_cache=$case_root/dependency-cache
+            lock_owned=1
+            publish_complete=0
+            cache_reused=0
+            xcframework_had_original=0
+            share_had_original=0
+            xcframework_replacement_started=0
+            share_replacement_started=0
+            stamp_had_original=0
+            stamp_replacement_started=0
+            expected_status=0
+            expected_guard=
+            mkdir -p "$source_dir/.zig-cache" "$lock_dir" \
+                "$ghostty_dir/.zig-cache" "$dependency_cache" \
+                "$stage_dir/previous-xcframework" "$stage_dir/previous-share" \
+                "$published_xcframework_dir" "$published_share_dir"
+            for sentinel in "$source_dir/.zig-cache/sentinel" "$stage_dir/build.log" \
+                "$stage_dir/previous-xcframework/sentinel" "$stage_dir/previous-share/sentinel" \
+                "$stage_dir/previous.stamp" "$ghostty_dir/.zig-cache/sentinel" \
+                "$dependency_cache/sentinel" "$published_xcframework_dir/sentinel" \
+                "$published_share_dir/sentinel" "$stamp_path"; do
+                printf 'fixture sentinel\n' >"$sentinel"
+            done
+
+            case "$cleanup_case" in
+                cache-reused) cache_reused=1 ;;
+                published) publish_complete=1 ;;
+                unpublished) ;;
+                stage-symlink | stage-file | ancestor-symlink | outside-repo)
+                    cache_reused=1
+                    expected_status=1
+                    retained_stage=$case_root/retained-stage
+                    mv "$stage_dir" "$retained_stage"
+                    case "$cleanup_case" in
+                        stage-symlink)
+                            ln -s "$retained_stage" "$stage_dir"
+                            expected_guard="error: refusing generated path through symlink: $stage_dir"
+                            ;;
+                        stage-file)
+                            printf 'fixture sentinel\n' >"$stage_dir"
+                            expected_guard="error: generated directory path is not a directory: $stage_dir"
+                            ;;
+                        ancestor-symlink)
+                            ln -s "$case_root" "$cache_dir/ancestor"
+                            stage_dir=$cache_dir/ancestor/retained-stage
+                            expected_guard="error: refusing generated path through symlink: $cache_dir/ancestor"
+                            ;;
+                        outside-repo)
+                            stage_dir=$retained_stage
+                            expected_guard="error: path is outside the repository: $stage_dir"
+                            ;;
+                    esac
+                    ;;
+                rollback-failure)
+                    expected_status=1
+                    stamp_had_original=1
+                    share_had_original=1
+                    xcframework_had_original=1
+                    stamp_replacement_started=1
+                    share_replacement_started=1
+                    xcframework_replacement_started=1
+                    # Real path guards must retain backups when publication paths become symlinks.
+                    mv "$stamp_path" "$case_root/published.stamp"
+                    mv "$published_share_dir" "$case_root/published-share"
+                    mv "$published_xcframework_dir" "$case_root/published-xcframework"
+                    ln -s "$case_root/published.stamp" "$stamp_path"
+                    ln -s "$case_root/published-share" "$published_share_dir"
+                    ln -s "$case_root/published-xcframework" "$published_xcframework_dir"
+                    ;;
+            esac
+
+            if cleanup >"$case_root/cleanup-output" 2>&1; then
+                cleanup_status=0
+            else
+                cleanup_status=$?
+            fi
+            assert_equals "$cleanup_status" "$expected_status"
+            assert_missing "$lock_dir"
+            if [ -n "$expected_guard" ]; then
+                grep -F -x "$expected_guard" "$case_root/cleanup-output" >/dev/null \
+                    || fail "unexpected Ghostty cleanup guard failure: $cleanup_case"
+            fi
+            case "$cleanup_case" in
+                cache-reused | published) assert_missing "$stage_dir" ;;
+                *)
+                    for sentinel in "$retained_stage/source/.zig-cache/sentinel" \
+                        "$retained_stage/build.log" "$retained_stage/previous.stamp" \
+                        "$retained_stage/previous-share/sentinel" \
+                        "$retained_stage/previous-xcframework/sentinel"; do
+                        grep -F -x 'fixture sentinel' "$sentinel" >/dev/null \
+                            || fail "Ghostty cleanup modified retained evidence: $sentinel"
+                    done
+                    ;;
+            esac
+            case "$cleanup_case" in
+                stage-symlink) [ -L "$stage_dir" ] || fail 'Ghostty cleanup removed a stage symlink' ;;
+                stage-file)
+                    [ -f "$stage_dir" ] && grep -F -x 'fixture sentinel' "$stage_dir" >/dev/null \
+                        || fail 'Ghostty cleanup modified a non-directory stage'
+                    ;;
+                ancestor-symlink)
+                    [ -L "$cache_dir/ancestor" ] || fail 'Ghostty cleanup removed a symlink ancestor'
+                    ;;
+                rollback-failure)
+                    for rollback_target in "$stamp_path" "$published_share_dir" "$published_xcframework_dir"; do
+                        [ -L "$rollback_target" ] || fail "Ghostty rollback removed a symlink: $rollback_target"
+                        grep -F -x "error: refusing generated path through symlink: $rollback_target" \
+                            "$case_root/cleanup-output" >/dev/null \
+                            || fail "Ghostty rollback did not reach its real path guard: $rollback_target"
+                    done
+                    ;;
+            esac
+            for sentinel in "$ghostty_dir/.zig-cache/sentinel" "$dependency_cache/sentinel" \
+                "$published_xcframework_dir/sentinel" "$published_share_dir/sentinel" "$stamp_path"; do
+                grep -F -x 'fixture sentinel' "$sentinel" >/dev/null \
+                    || fail "Ghostty cleanup modified an unrelated fixture output or cache: $sentinel"
+            done
+        )
+    done
+)
 
 malicious_bin=$tmp_root/malicious-bin
 malicious_marker=$tmp_root/malicious-command-ran

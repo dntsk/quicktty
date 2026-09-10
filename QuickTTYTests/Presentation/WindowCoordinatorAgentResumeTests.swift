@@ -461,6 +461,9 @@ struct WindowCoordinatorAgentResumeTests {
         coordinator.applyConfiguration(QuickTTYConfig())
 
         try coordinator.start()
+        let initialAuthorizationEpoch = try #require(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+        )
         let oldSurface = try #require(coordinator.surfaceForTesting(id: paneID))
         let oldReference = try #require(
             coordinator.agentResumeAttemptReferenceForTesting(paneID)
@@ -470,6 +473,7 @@ struct WindowCoordinatorAgentResumeTests {
         )
         scheduler.advance(by: 5)
         #expect(restoredBinding(in: coordinator, paneID: paneID)?.restoreState == .unverified)
+        #expect(coordinator.paneAuthorizationEpochForTesting(paneID) == initialAuthorizationEpoch)
 
         coordinator.retryAgentResumeForTesting(paneID)
 
@@ -490,6 +494,10 @@ struct WindowCoordinatorAgentResumeTests {
                 != oldEnvironment["QUICKTTY_PANE_TOKEN"]
         )
         #expect(compatibilityResolutionCount == 2)
+        #expect(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+                == initialAuthorizationEpoch + 1
+        )
         #expect(restoredBinding(in: coordinator, paneID: paneID)?.restoreState == .restoring)
         #expect(
             coordinator.workspaceStoreForTesting.tab(id: tab.id)?
@@ -506,12 +514,39 @@ struct WindowCoordinatorAgentResumeTests {
             sessionID: "retry-session",
             state: .active
         )
+        let rejectedRegistration = try makeBinding(
+            adapterID: "claude",
+            sessionID: "different-session",
+            state: .active
+        )
+        #expect(
+            !coordinator.handleAgentSessionLifecycleAction(
+                .register(paneID: paneID, binding: rejectedRegistration)
+            )
+        )
+        #expect(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+                == initialAuthorizationEpoch + 1
+        )
         #expect(
             coordinator.handleAgentSessionLifecycleAction(
                 .register(paneID: paneID, binding: resumedRegistration)
             )
         )
+        #expect(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+                == initialAuthorizationEpoch + 2
+        )
         #expect(restoredBinding(in: coordinator, paneID: paneID)?.restoreState == .restoring)
+        #expect(
+            coordinator.handleAgentSessionLifecycleAction(
+                .register(paneID: paneID, binding: resumedRegistration)
+            )
+        )
+        #expect(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+                == initialAuthorizationEpoch + 2
+        )
         #expect(
             coordinator.handleAgentSessionLifecycleAction(
                 .unregister(
@@ -524,6 +559,10 @@ struct WindowCoordinatorAgentResumeTests {
         #expect(
             restoredBinding(in: coordinator, paneID: paneID)?.restoreState
                 == .failed(diagnosticCode: .immediateExit, failedAt: scheduler.date)
+        )
+        #expect(
+            coordinator.paneAuthorizationEpochForTesting(paneID)
+                == initialAuthorizationEpoch + 3
         )
         #expect(coordinator.surfaceForTesting(id: paneID) === replacementSurface)
 

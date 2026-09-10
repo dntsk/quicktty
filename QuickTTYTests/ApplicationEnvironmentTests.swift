@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -9,6 +10,23 @@ struct ApplicationEnvironmentTests {
     func detectsCurrentHostedUnitTestProcess() {
         #expect(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil)
         #expect(ApplicationEnvironment.isRunningHostedTests)
+    }
+
+    @Test
+    @MainActor
+    func startupActivationPolicyDistinguishesHostedTestsFromOrdinaryLaunch() {
+        #expect(
+            QuickTTYApplication.startupActivationPolicy(isRunningHostedTests: true) == .accessory)
+        #expect(
+            QuickTTYApplication.startupActivationPolicy(isRunningHostedTests: false) == .regular)
+    }
+
+    @Test
+    @MainActor
+    func currentHostedApplicationUsesAccessoryPolicy() {
+        #expect(ApplicationEnvironment.isRunningHostedTests)
+        #expect(QuickTTYApplication.startupActivationPolicy() == .accessory)
+        #expect(NSApplication.shared.activationPolicy() == .accessory)
     }
 
     @Test

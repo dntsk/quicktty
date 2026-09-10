@@ -3,6 +3,12 @@ import AppKit
 @main
 @MainActor
 enum QuickTTYApplication {
+    static func startupActivationPolicy(
+        isRunningHostedTests: Bool = ApplicationEnvironment.isRunningHostedTests
+    ) -> NSApplication.ActivationPolicy {
+        isRunningHostedTests ? .accessory : .regular
+    }
+
     static func main() {
         guard GhosttyBridge.bootstrapRuntime() else {
             fatalError("Ghostty runtime initialization failed.")
@@ -12,7 +18,7 @@ enum QuickTTYApplication {
         let delegate = AppDelegate()
 
         application.delegate = delegate
-        application.setActivationPolicy(.regular)
+        application.setActivationPolicy(startupActivationPolicy())
         application.run()
     }
 }

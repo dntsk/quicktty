@@ -16,7 +16,7 @@ struct ExecutableInvocation: Equatable, Sendable {
         else {
             throw ExecutableInvocationValidationError.invalidExecutable
         }
-        guard arguments.count <= 64,
+        guard arguments.count <= 256,
             arguments.allSatisfy({ $0.utf8.count <= 4_096 && !$0.contains("\0") }),
             arguments.reduce(into: 0, { $0 += $1.utf8.count }) <= 32_768
         else {

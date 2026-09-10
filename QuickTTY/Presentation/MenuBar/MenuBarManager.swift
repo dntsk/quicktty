@@ -2,21 +2,31 @@ import AppKit
 
 @MainActor
 final class MenuBarManager {
+    private let systemPresentationEnabled: Bool
     private var statusItem: NSStatusItem?
     private var toggleCallback: (@MainActor () -> Void)?
 
     var isMenuBarActive: Bool { statusItem != nil }
 
-    init() {}
+    init(systemPresentationEnabled: Bool = true) {
+        self.systemPresentationEnabled = systemPresentationEnabled
+    }
+
+    isolated deinit {
+        // WHY: Remove only our item; cleanup must not change another owner's Dock policy.
+        removeStatusItem()
+    }
 
     func setToggleCallback(_ callback: @escaping @MainActor () -> Void) {
         toggleCallback = callback
     }
 
     func activateMenuBar() {
-        guard statusItem == nil else { return }
+        guard systemPresentationEnabled, statusItem == nil else { return }
 
-        NSApp.setActivationPolicy(.accessory)
+        if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
@@ -36,11 +46,18 @@ final class MenuBarManager {
     }
 
     func deactivateMenuBar() {
-        if let item = statusItem {
-            NSStatusBar.system.removeStatusItem(item)
-            statusItem = nil
+        guard systemPresentationEnabled else { return }
+
+        removeStatusItem()
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
         }
-        NSApp.setActivationPolicy(.regular)
+    }
+
+    private func removeStatusItem() {
+        guard let item = statusItem else { return }
+        NSStatusBar.system.removeStatusItem(item)
+        statusItem = nil
     }
 
     func applyMode(_ mode: PresentationMode) {

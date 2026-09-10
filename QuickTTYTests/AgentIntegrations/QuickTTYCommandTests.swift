@@ -4,6 +4,24 @@ import Testing
 
 struct QuickTTYCommandTests {
     @Test
+    func dispatchesOnlyTheApprovedTerminalGrammar() throws {
+        let terminal = try TerminalCLICommand.parse(["list"])
+        #expect(try QuickTTYCommand.parse(["terminal", "list"]) == .terminal(terminal))
+        #expect(try QuickTTYCommand.parse(arguments: ["terminal", "list"]) == .terminal(terminal))
+        for arguments in [
+            ["terminal"], ["terminal", "list", "--json"], ["mcp"], ["terminal", "mcp"],
+        ] {
+            #expect(throws: QuickTTYCommand.ParseError.invalidGrammar) {
+                try QuickTTYCommand.parse(arguments)
+            }
+        }
+        #expect(QuickTTYCommand.usage.contains(TerminalCLICommand.usage))
+        #expect(QuickTTYCommand.usage.utf8.count < 4_096)
+        #expect(!QuickTTYCommand.usage.contains("internal"))
+        #expect(!QuickTTYCommand.usage.contains("mcp"))
+    }
+
+    @Test
     func parsesPublicIntegrationGrammarExactly() throws {
         #expect(
             try QuickTTYCommand.parse(["integrations", "status"])

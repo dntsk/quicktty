@@ -23,4 +23,12 @@ fi
 
 DEVELOPER_DIR=$selected_developer_dir
 export DEVELOPER_DIR
+for argument in "$@"; do
+    case "$argument" in
+        test | test-without-building)
+            script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd -P)
+            exec /usr/bin/python3 "$script_dir/xcode-test-watchdog.py" "$xcodebuild_path" "$@"
+            ;;
+    esac
+done
 exec "$xcodebuild_path" "$@"

@@ -22,8 +22,13 @@ do {
         exit(InternalLaunchCommand.run())
     case .internalWrap(let adapterID, let arguments):
         exit(InternalWrapCommand.run(adapterID: adapterID, arguments: arguments))
+    case .terminal(let terminal):
+        exit(TerminalCommand.run(terminal))
     }
 } catch let error as QuickTTYCommand.ParseError {
+    if CommandLine.arguments.dropFirst().first == "terminal" {
+        exit(TerminalCommand.invalidGrammar())
+    }
     writeStandardError("quicktty: \(error.description)\n\(QuickTTYCommand.usage)\n")
     exit(2)
 } catch {

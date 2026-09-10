@@ -17,8 +17,9 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 - Линт: `make lint`
 - Сборка: `make build`
 - Тесты: `make test`
-- Полная проверка: `make check`
-- Прямые/focused Xcode-вызовы: `./scripts/xcodebuild.sh …` (перед каждым `test` всё равно требуется отдельное явное разрешение)
+- Проверки без GUI: `make ghostty-resources-test lint build`
+- Полная проверка: `make check` (включает GUI/test-host)
+- Прямые/focused Xcode-вызовы: `./scripts/xcodebuild.sh …` (`test` в этом проекте запускает test-host и требует отдельного разрешения; compiler-only `build-for-testing` — нет)
 
 ## Критические правила
 
@@ -31,7 +32,7 @@ QuickTTY — нативный терминал для macOS с tabs, splits, wor
 7. Не читать секреты и `.env`; не коммитить и не выполнять release/signing без явного запроса.
 8. После значимых изменений обновлять соответствующую project memory; при завершении сессии оставлять handoff.
 9. Любой release строго выполнять по внешнему `agents/rules/releasing.md` и `docs/releasing.md`; нельзя вручную изменять published release, tag или assets. Beta channel является надмножеством stable: после каждого более нового stable или beta application release обязательно продвигать exact final appcast через `make beta-feed` в `docs/appcasts/beta.xml` отдельным post-release commit.
-10. Никогда не запускать тесты без отдельного явного разрешения пользователя непосредственно перед каждым запуском. Запрет включает `make test`, `make check`, `scripts/pre-deploy-check.sh`, `xcodebuild test` и любые команды, транзитивно запускающие test-host. Предыдущее разрешение не переносится на следующий запуск; release-runbook не отменяет это правило. Если обязательный gate требует тестов, остановиться и запросить разрешение.
+10. Проверки без запуска GUI-приложения или test-host выполнять самостоятельно, без отдельного разрешения, включая повторы после исправлений: статические проверки, shell/CLI-контракты, линт и compiler-only сборки. Перед каждым запуском GUI/test-host требуется отдельное явное разрешение пользователя. Это включает `make test`, `make check`, `scripts/pre-deploy-check.sh`, hosted `xcodebuild test` (в том числе focused) и любые команды, транзитивно запускающие GUI/test-host. Предыдущее разрешение не переносится на следующий GUI-запуск; release-runbook не отменяет это правило. Перед запросом GUI-прогона сначала пройти его проверки без GUI отдельно: `make ghostty-resources-test lint build`. Если неизвестно, запускает ли команда GUI/test-host, сначала проверить её состав; при оставшейся неопределённости запросить разрешение. Это правило не разрешает release/signing, коммиты или изменение пользовательских настроек.
 
 ## Навигация
 

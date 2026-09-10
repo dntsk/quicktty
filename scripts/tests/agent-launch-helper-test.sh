@@ -45,6 +45,7 @@ marker_two=$test_root/semicolon-ran
 /usr/bin/xcrun --sdk macosx swiftc \
     "$repo_root"/Shared/AgentIntegrations/*.swift \
     "$repo_root"/Shared/AgentIntegrations/Installer/*.swift \
+    "$repo_root"/Shared/AgentIntegrations/TerminalControl/*.swift \
     "$repo_root"/QuickTTYCLI/*.swift \
     -o "$helper"
 

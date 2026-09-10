@@ -35,7 +35,7 @@ public struct AgentInvocationPayload: Equatable, Sendable {
     }
 
     private static func validateArguments(_ arguments: [String]) throws {
-        guard arguments.count <= 64 else {
+        guard arguments.count <= 256 else {
             throw AgentInvocationPayloadError.invalidArguments
         }
 

@@ -39,6 +39,19 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
     private let submitButton: NSButton
     private weak var parentWindow: NSWindow?
     private var hasDismissed = false
+    private var isRetiredForTermination = false
+
+    func retireForApplicationTermination() {
+        // WHY: An accepted submit may still be on the stack; freeze must not end its sheet.
+        isRetiredForTermination = true
+    }
+
+    func dismissForApplicationTermination() {
+        // WHY: Explicit later teardown must release the sheet even after retirement.
+        retireForApplicationTermination()
+        dismiss()
+        window?.orderOut(nil)
+    }
 
     init(
         title: String = "New Workspace",
@@ -66,8 +79,10 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
     }
 
     func presentSheet(for parentWindow: NSWindow) {
+        guard !isRetiredForTermination, !hasDismissed else { return }
         self.parentWindow = parentWindow
         parentWindow.beginSheet(window!)
+        guard !isRetiredForTermination, !hasDismissed else { return }
         window?.makeFirstResponder(nameField)
     }
 
@@ -127,10 +142,13 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
     }
 
     private func updateValidation(showEmptyError: Bool) {
+        guard !isRetiredForTermination, !hasDismissed else { return }
+        let names = existingNames()
+        guard !isRetiredForTermination, !hasDismissed else { return }
         do {
             _ = try WorkspaceNameValidator.validate(
                 nameField.stringValue,
-                existingNames: existingNames()
+                existingNames: names
             )
             errorLabel.stringValue = ""
             submitButton.isEnabled = true
@@ -160,6 +178,7 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
         }
 
         func submitForTesting(name: String) {
+            guard !isRetiredForTermination, !hasDismissed else { return }
             nameField.stringValue = name
             submitWorkspace()
         }
@@ -170,18 +189,25 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
     #endif
 
     @objc private func submitWorkspace() {
+        guard !isRetiredForTermination, !hasDismissed else { return }
+        let names = existingNames()
+        guard !isRetiredForTermination, !hasDismissed else { return }
         let name: String
         do {
             name = try WorkspaceNameValidator.validate(
                 nameField.stringValue,
-                existingNames: existingNames()
+                existingNames: names
             )
         } catch {
             updateValidation(showEmptyError: true)
             return
         }
 
-        switch submit(name) {
+        let result = submit(name)
+        // WHY: Success remains accepted even if persistence froze during submit; only the
+        // automatic presentation response is retired, including failure labels and dismissal.
+        guard !isRetiredForTermination, !hasDismissed else { return }
+        switch result {
         case .success:
             dismiss()
         case .failure(.emptyWorkspaceName):
@@ -194,15 +220,18 @@ final class CreateWorkspaceController: NSWindowController, NSTextFieldDelegate {
     }
 
     @objc private func cancel() {
+        guard !isRetiredForTermination, !hasDismissed else { return }
         dismiss()
     }
 
     private func dismiss() {
+        guard !hasDismissed else { return }
+        hasDismissed = true
+        let parentWindow = self.parentWindow
+        self.parentWindow = nil
         if let parentWindow, let window, window.sheetParent === parentWindow {
             parentWindow.endSheet(window)
         }
-        guard !hasDismissed else { return }
-        hasDismissed = true
         onDismiss?()
     }
 

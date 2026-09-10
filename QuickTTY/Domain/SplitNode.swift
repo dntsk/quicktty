@@ -81,22 +81,32 @@ indirect enum SplitNode: Equatable, Codable, Sendable {
         _ target: PaneID,
         axis: SplitAxis,
         newPane: PaneID,
-        ratio: Double
+        ratio: Double,
+        insertionSide: SplitInsertionSide = .second
     ) -> Bool {
         switch self {
         case .pane(let paneID):
             guard paneID == target else { return false }
+            let normalizedRatio = Self.clampedRatio(ratio)
+            let storedRatio =
+                insertionSide == .first ? normalizedRatio : Self.clampedRatio(1 - normalizedRatio)
             self = .split(
                 id: UUID(),
                 axis: axis,
-                ratio: Self.clampedRatio(ratio),
-                first: .pane(paneID),
-                second: .pane(newPane)
+                ratio: storedRatio,
+                first: insertionSide == .first ? .pane(newPane) : .pane(paneID),
+                second: insertionSide == .first ? .pane(paneID) : .pane(newPane)
             )
             return true
         case .split(let id, let currentAxis, let currentRatio, let first, let second):
             var updatedFirst = first
-            if updatedFirst.split(target, axis: axis, newPane: newPane, ratio: ratio) {
+            if updatedFirst.split(
+                target,
+                axis: axis,
+                newPane: newPane,
+                ratio: ratio,
+                insertionSide: insertionSide
+            ) {
                 self = .split(
                     id: id,
                     axis: currentAxis,
@@ -108,7 +118,13 @@ indirect enum SplitNode: Equatable, Codable, Sendable {
             }
 
             var updatedSecond = second
-            if updatedSecond.split(target, axis: axis, newPane: newPane, ratio: ratio) {
+            if updatedSecond.split(
+                target,
+                axis: axis,
+                newPane: newPane,
+                ratio: ratio,
+                insertionSide: insertionSide
+            ) {
                 self = .split(
                     id: id,
                     axis: currentAxis,
@@ -182,6 +198,10 @@ indirect enum SplitNode: Equatable, Codable, Sendable {
 
     private static func clampedRatio(_ ratio: Double) -> Double {
         guard ratio.isFinite else { return 0.5 }
-        return min(max(ratio, 0.1), 0.9)
+        return Self.quantizedRatio(min(max(ratio, 0.1), 0.9))
+    }
+
+    private static func quantizedRatio(_ ratio: Double) -> Double {
+        (ratio * 1_000_000_000_000).rounded() / 1_000_000_000_000
     }
 }

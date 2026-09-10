@@ -144,6 +144,19 @@ private func ghosttyRuntimeActionCallback(
         return context.scheduleProgressReport(report)
     }
 
+    if action.tag == GHOSTTY_ACTION_SHOW_CHILD_EXITED,
+        target.tag == GHOSTTY_TARGET_SURFACE,
+        let surface = target.target.surface,
+        let userdata = ghostty_surface_userdata(surface)
+    {
+        let context = Unmanaged<SurfaceCallbackContext>
+            .fromOpaque(userdata)
+            .takeUnretainedValue()
+        context.scheduleProcessExited(copyGhosttyProcessExited(action.action.child_exited))
+        // WHY: Lifecycle notification is not GUI handling. Fall through to the legacy
+        // runtime handler/return value so an unhandled action still gets native fallback UI.
+    }
+
     if action.tag == GHOSTTY_ACTION_COMMAND_FINISHED {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
             let surface = target.target.surface,
@@ -261,6 +274,17 @@ private func copyGhosttyProgressReport(
         return nil
     }
     return GhosttyProgressReport(state: state, progress: progress)
+}
+
+private func copyGhosttyProcessExited(
+    _ payload: ghostty_surface_message_childexited_s
+) -> GhosttyProcessExited {
+    // WHY: Native code already normalizes wait status. Unknown/out-of-range must never
+    // truncate to success; timetime_ms is the pinned header's spelling, in milliseconds.
+    GhosttyProcessExited(
+        exitCode: UInt8(exactly: payload.exit_code),
+        runtimeMilliseconds: payload.timetime_ms
+    )
 }
 
 private func copyGhosttyCommandFinished(
@@ -413,6 +437,32 @@ private func copyGhosttyCommandFinished(
             nil,
             ghostty_target_s(tag: targetTag, target: targetValue),
             ghostty_action_s(tag: GHOSTTY_ACTION_SCROLLBAR, action: payload)
+        )
+    }
+
+    func ghosttyRuntimeProcessExitedCallbackForTesting(
+        surface: ghostty_surface_t,
+        exitCode: UInt32,
+        runtimeMilliseconds: UInt64,
+        target: GhosttyActivityCallbackTargetForTesting
+    ) -> Bool {
+        var targetValue = ghostty_target_u()
+        targetValue.surface = surface
+        let targetTag: ghostty_target_tag_e =
+            switch target {
+            case .surface: GHOSTTY_TARGET_SURFACE
+            case .app: GHOSTTY_TARGET_APP
+            case .unknown: ghostty_target_tag_e(rawValue: UInt32.max)
+            }
+        var payload = ghostty_action_u()
+        payload.child_exited = ghostty_surface_message_childexited_s(
+            exit_code: exitCode,
+            timetime_ms: runtimeMilliseconds
+        )
+        return ghosttyRuntimeActionCallback(
+            ghostty_surface_app(surface),
+            ghostty_target_s(tag: targetTag, target: targetValue),
+            ghostty_action_s(tag: GHOSTTY_ACTION_SHOW_CHILD_EXITED, action: payload)
         )
     }
 
@@ -636,7 +686,9 @@ final class GhosttyBridge {
     typealias SurfaceWorkingDirectoryHandler = @MainActor (PaneID, String) -> Void
     typealias SurfaceProgressHandler = @MainActor (PaneID, GhosttyProgressReport) -> Void
     typealias SurfaceCommandFinishedHandler = @MainActor (PaneID, GhosttyCommandFinished) -> Void
+    typealias SurfaceProcessExitedHandler = @MainActor (PaneID, GhosttyProcessExited) -> Void
     typealias InputTargetProvider = @MainActor (PaneID) -> [PaneID]
+    typealias ManualInputHandler = @MainActor (PaneID) -> Void
 
     private static let runtimeBootstrapResult =
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
@@ -645,6 +697,7 @@ final class GhosttyBridge {
     private let clipboardClient: GhosttyClipboardClient
     private var configuration: GhosttyConfiguration?
     private var shortcutConfiguration: ShortcutConfiguration
+    private var terminalAutomationClient = GhosttyTerminalAutomationClient.live
     private var application: ghostty_app_t?
     private var callbackContextOwnership: Unmanaged<CallbackContext>?
     private var surfaces: [PaneID: GhosttySurfaceView] = [:]
@@ -658,7 +711,9 @@ final class GhosttyBridge {
     var surfaceWorkingDirectoryHandler: SurfaceWorkingDirectoryHandler?
     var surfaceProgressHandler: SurfaceProgressHandler?
     var surfaceCommandFinishedHandler: SurfaceCommandFinishedHandler?
+    var surfaceProcessExitedHandler: SurfaceProcessExitedHandler?
     var inputTargetProvider: InputTargetProvider = { [$0] }
+    var manualInputHandler: ManualInputHandler?
 
     #if DEBUG
         private var inputObservations: [GhosttyBridgeInputObservation] = []
@@ -849,6 +904,37 @@ final class GhosttyBridge {
         surfaces[id]?.needsConfirmQuit() ?? false
     }
 
+    func readRenderedText(
+        id: PaneID,
+        maximumUTF8Bytes: Int
+    ) throws -> GhosttyRenderedText {
+        guard let surface = surfaces[id] else {
+            throw GhosttyBridgeError.surfaceUnavailable(id)
+        }
+        return try surface.readRenderedText(
+            maximumUTF8Bytes: maximumUTF8Bytes,
+            client: terminalAutomationClient
+        )
+    }
+
+    func outputState(id: PaneID) -> GhosttyOutputState {
+        surfaces[id]?.outputState(client: terminalAutomationClient) ?? .failed
+    }
+
+    func sendAutomationText(id: PaneID, text: String) throws {
+        guard let surface = surfaces[id] else {
+            throw GhosttyBridgeError.surfaceUnavailable(id)
+        }
+        try surface.sendAutomationText(text)
+    }
+
+    func sendAutomationKey(id: PaneID, key: GhosttyAutomationKey) throws {
+        guard let surface = surfaces[id] else {
+            throw GhosttyBridgeError.surfaceUnavailable(id)
+        }
+        try surface.sendAutomationKey(key)
+    }
+
     func reloadConfig(at configURL: URL) throws {
         guard let application else {
             throw GhosttyBridgeError.runtimeNotReady
@@ -940,6 +1026,11 @@ final class GhosttyBridge {
             && searchPayloadsMatchPinnedHeader
     }
 
+    static var terminalAutomationABIMatchesPinnedHeader: Bool {
+        GhosttyTerminalAutomation.allowlistMatchesTerminalControlKey
+            && GhosttyTerminalAutomation.abiMatchesPinnedHeader
+    }
+
     #if DEBUG
         static var callbackContextCountForTesting: Int {
             ghosttyCallbackContextOwnershipCount.withLock { $0 }
@@ -978,6 +1069,12 @@ final class GhosttyBridge {
 
         func failSurfaceCreationForTesting(id: PaneID) {
             failingSurfaceCreationPaneIDForTesting = id
+        }
+
+        func setTerminalAutomationClientForTesting(
+            _ client: GhosttyTerminalAutomationClient
+        ) {
+            terminalAutomationClient = client
         }
 
         static func runtimeReloadActionForTesting(soft: Bool) -> GhosttyRuntimeAction {
@@ -1160,6 +1257,8 @@ final class GhosttyBridge {
             surfaceProgressHandler?(paneID, report)
         case .commandFinished(let command):
             surfaceCommandFinishedHandler?(paneID, command)
+        case .processExited(let process):
+            surfaceProcessExitedHandler?(paneID, process)
         case .scrollbarChanged:
             surface.processCallbackEvent(
                 event,
@@ -1188,7 +1287,9 @@ final class GhosttyBridge {
             return
         }
 
-        let capture = source.captureInputEvent(event)
+        let capture = source.captureInputEvent(event) { [weak self] in
+            self?.manualInputHandler?(paneID)
+        }
 
         #if DEBUG
             inputObservations.append(
@@ -1205,7 +1306,10 @@ final class GhosttyBridge {
             let wasProcessed =
                 surfaces[targetPaneID]?.replayInputEvent(
                     event,
-                    replay: replay
+                    replay: replay,
+                    beforeDelivery: { [weak self] in
+                        self?.manualInputHandler?(targetPaneID)
+                    }
                 ) ?? false
 
             #if DEBUG
@@ -1256,7 +1360,11 @@ final class GhosttyBridge {
         )
         var sourceResult = false
         for targetPaneID in targetPaneIDs {
-            let coreResult = surfaces[targetPaneID]?.performTerminalShortcutAction(action) ?? false
+            guard let surface = surfaces[targetPaneID] else { continue }
+            if action == .paste || action == .pasteSelection {
+                manualInputHandler?(targetPaneID)
+            }
+            let coreResult = surface.performTerminalShortcutAction(action)
             #if DEBUG
                 let result = terminalActionResultsForTesting[action] ?? coreResult
             #else
@@ -1283,8 +1391,9 @@ final class GhosttyBridge {
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {
         guard let surface = surfaces[id] else { return }
 
-        if processAlive {
-            surfaceCloseHandlers[id]?(id, true)
+        if processAlive || surface.isManagedTask {
+            // WHY: Managed root exit is not EOF; the host owns capture and closure policy.
+            surfaceCloseHandlers[id]?(id, processAlive)
             return
         }
 

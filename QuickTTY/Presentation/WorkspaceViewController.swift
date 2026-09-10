@@ -426,6 +426,12 @@ final class WorkspaceViewController: NSViewController {
             hostedAgentResumePresentationsForTestingStorage
         }
 
+        var hostedTerminalAutomationPresentationsForTesting:
+            [PaneID: TerminalAutomationPresentation]
+        {
+            splitHostingController?.rootView.terminalAutomationPresentations ?? [:]
+        }
+
         var renderedSurfaceIdentifiersForTesting: [ObjectIdentifier] {
             guard let splitHostingController else { return [] }
             return surfaceViews(in: splitHostingController.view).map(ObjectIdentifier.init)
@@ -445,6 +451,7 @@ final class WorkspaceViewController: NSViewController {
         surfaces: [PaneID: GhosttySurfaceView],
         failures: [PaneID: SurfaceFailurePresentation],
         agentResumePresentations: [PaneID: AgentResumePresentation] = [:],
+        terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] = [:],
         palette: GhosttyChromePalette,
         activePaneID: PaneID? = nil,
         splitAppearance: GhosttySplitAppearance = .fallback,
@@ -453,7 +460,8 @@ final class WorkspaceViewController: NSViewController {
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
         onCloseUnavailablePane: @escaping (PaneID) -> Void,
         onRetryAgentResume: @escaping (PaneID) -> Void = { _ in },
-        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in }
+        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in },
+        onReturnControlToAgent: @escaping (UUID) -> Void = { _ in }
     ) {
         loadViewIfNeeded()
         presentationState.setChromePalette(palette)
@@ -486,6 +494,7 @@ final class WorkspaceViewController: NSViewController {
             surfaces: surfaces,
             failures: failures,
             agentResumePresentations: agentResumePresentations,
+            terminalAutomationPresentations: terminalAutomationPresentations,
             activePaneID: activePaneID,
             presentationState: presentationState,
             onResize: onResize,
@@ -493,7 +502,8 @@ final class WorkspaceViewController: NSViewController {
             onRetryUnavailablePane: onRetryUnavailablePane,
             onCloseUnavailablePane: onCloseUnavailablePane,
             onRetryAgentResume: onRetryAgentResume,
-            onForgetAgentResume: onForgetAgentResume
+            onForgetAgentResume: onForgetAgentResume,
+            onReturnControlToAgent: onReturnControlToAgent
         )
         if let splitHostingController {
             splitHostingController.rootView = splitTreeView
@@ -519,6 +529,18 @@ final class WorkspaceViewController: NSViewController {
         NSLayoutConstraint.activate(splitHostingConstraints)
         self.splitHostingController = splitHostingController
         splitHostingView.layoutSubtreeIfNeeded()
+    }
+
+    func refreshTerminalAutomationPresentations(
+        _ presentations: [PaneID: TerminalAutomationPresentation]
+    ) {
+        guard let splitHostingController,
+            splitHostingController.rootView.terminalAutomationPresentations != presentations
+        else { return }
+        // WHY: A badge-only change must not run terminal layout, focus, or workspace chrome updates.
+        var rootView = splitHostingController.rootView
+        rootView.updateTerminalAutomationPresentations(presentations)
+        splitHostingController.rootView = rootView
     }
 
     #if DEBUG

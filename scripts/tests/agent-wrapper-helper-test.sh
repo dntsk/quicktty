@@ -59,6 +59,7 @@ export PYTHONPATH
 /usr/bin/xcrun --sdk macosx swiftc -D QUICKTTY_TESTING \
     "$repo_root"/Shared/AgentIntegrations/*.swift \
     "$repo_root"/Shared/AgentIntegrations/Installer/*.swift \
+    "$repo_root"/Shared/AgentIntegrations/TerminalControl/*.swift \
     "$repo_root"/QuickTTYCLI/*.swift \
     -o "$helper"
 /bin/cp "$repo_root/QuickTTY/Resources/AgentSessionIntegrations/amp/wrapper/amp" "$wrapper_dir/amp"

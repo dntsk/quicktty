@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Synchronization
 import Testing
 
 @testable import QuickTTY
@@ -7,10 +8,10 @@ import Testing
 @Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct WindowCoordinatorTabLifecycleTests {
-    @Test
-    func agentIdentityEnvironmentIsInjectedForStartupNewTabAndSplitAndRevokedOnClose()
-        throws
-    {
+    @Test(arguments: [false, true])
+    func agentIdentityEnvironmentIsInjectedForStartupNewTabAndSplitAndRevokedOnClose(
+        controlEnabled: Bool
+    ) throws {
         let instanceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let tokens = CoordinatorAgentTokenSequence([
             Array(repeating: 0x11, count: 32),
@@ -20,16 +21,25 @@ struct WindowCoordinatorTabLifecycleTests {
         let controller = try AgentSessionController(
             socketPath: "/tmp/quicktty-test/agent.sock",
             helperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            controlSocketPath: controlEnabled ? "/tmp/quicktty-test/control.sock" : nil,
             instanceID: instanceID,
             tokenGenerator: tokens.next,
             onAction: { _ in false }
         )
-        let bridge = try GhosttyBridge()
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Control-Environment-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config")
+        // WHY: Splits clear command overrides, so their default must also be an inert process.
+        try Data("command = /bin/cat\n".utf8).write(to: configURL)
+        let bridge = try GhosttyBridge(configURL: configURL)
         defer { bridge.shutdown() }
         let coordinator = WindowCoordinator(
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(
                 command: "exec /bin/cat",
+                managedHelperPath: "/must-not-launch-from-normal-configuration",
                 environment: [
                     "BASE_VALUE": "preserved",
                     "QUICKTTY_PANE_ID": "collision",
@@ -37,6 +47,7 @@ struct WindowCoordinatorTabLifecycleTests {
                     "QUICKTTY_INSTANCE_ID": "collision",
                     "QUICKTTY_PANE_TOKEN": "collision",
                     "QUICKTTY_AGENT_HELPER": "collision",
+                    "QUICKTTY_CONTROL_SOCKET": "caller-owned",
                 ]
             ),
             agentSessionController: controller
@@ -55,6 +66,8 @@ struct WindowCoordinatorTabLifecycleTests {
             token: String(repeating: "11", count: 32)
         )
         #expect(startupEnvironment["BASE_VALUE"] == "preserved")
+        let expectedControlPath: String? = controlEnabled ? "/tmp/quicktty-test/control.sock" : nil
+        #expect(startupEnvironment["QUICKTTY_CONTROL_SOCKET"] == expectedControlPath)
 
         coordinator.createNewTab()
         let newTabSurface = try #require(coordinator.activeSurfaceForTesting)
@@ -89,10 +102,2935 @@ struct WindowCoordinatorTabLifecycleTests {
             ).count == 3
         )
 
+        #expect(newTabEnvironment["QUICKTTY_CONTROL_SOCKET"] == expectedControlPath)
+        #expect(splitEnvironment["QUICKTTY_CONTROL_SOCKET"] == expectedControlPath)
+        for surface in [startupSurface, newTabSurface, splitSurface] {
+            #expect(
+                bridge.surfaceConfigurationForTesting(id: surface.paneID)?.managedHelperPath == nil)
+        }
         coordinator.surfaceDidRequestCloseForTesting(id: splitSurface.paneID, processAlive: false)
 
         #expect(controller.environment(for: splitSurface.paneID) == nil)
         #expect(controller.environment(for: startupSurface.paneID) != nil)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake])
+    func controlFreezeRevokesGrantedManagedPanesWithoutDetachingBeforePersistence(
+        mode: PresentationMode
+    ) async throws {
+        let helperPath = ApplicationEnvironment.bundledAgentHelperURL(in: Bundle.main).path
+        try #require(FileManager.default.isExecutableFile(atPath: helperPath))
+        let cwd = URL(fileURLWithPath: "/tmp").resolvingSymlinksInPath().path
+        let tokenCount = Mutex(0)
+        let controller = try AgentSessionController(
+            socketPath: "/tmp/quicktty-test/agent.sock", helperPath: helperPath,
+            controlSocketPath: "/tmp/quicktty-test/control.sock",
+            tokenGenerator: {
+                tokenCount.withLock { count in
+                    count += 1
+                    return Array(repeating: UInt8(count), count: 32)
+                }
+            },
+            onAction: { _ in false })
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        // WHY: A login banner can arrive between baseline and wait registration. Keep real
+        // task/grant/wait lifecycles, but control rendered reads from before task creation.
+        bridge.setTerminalAutomationClientForTesting(
+            GhosttyTerminalAutomationClient(
+                readText: { _, _ in
+                    .success(GhosttyTerminalAutomationReadBuffer(bytes: Data(), release: {}))
+                },
+                freeText: { $0.release() }))
+        defer { bridge.setTerminalAutomationClientForTesting(.live) }
+        var promptCount = 0
+        var snapshots: [WorkspaceStore] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: cwd, command: "exec /bin/cat",
+                environment: ["BASE": "preserved", "QUICKTTY_CONTROL_SOCKET": "collision"]),
+            agentSessionController: controller,
+            terminalAutomationPermissionPresenter: { _ in
+                promptCount += 1
+                return .allowed
+            },
+            persistWorkspaceStore: { snapshots.append($0) })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let origin = try #require(coordinator.activeSurfaceForTesting?.paneID)
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude"), sessionID: "origin-session",
+            workingDirectory: cwd, registeredAt: Date(), launchMetadata: [:], restoreState: .active)
+        #expect(
+            coordinator.handleAgentSessionLifecycleAction(
+                .register(paneID: origin, binding: binding)))
+        let resolved = try #require(
+            coordinator.resolveTerminalAutomationSession(
+                instanceID: controller.instanceID, originPaneID: origin))
+        let launch = try TerminalControlLaunch(executable: "/bin/cat", arguments: [], cwd: cwd)
+        let operations: [TerminalControlRequest.Operation] = [
+            .createTab(launch: launch, policy: .closeOnSuccess, focus: false),
+            .split(
+                anchorPaneID: origin.rawValue, direction: .right, ratio: 0.5,
+                launch: launch, policy: .keep, focus: false),
+        ]
+        var tasks: [TerminalControlTask] = []
+        for operation in operations {
+            let response = await coordinator.handleTerminalAutomationRequest(
+                TerminalControlSocketRequest(
+                    instanceID: controller.instanceID, paneID: origin.rawValue,
+                    request: try TerminalControlRequest(operation: operation, requestID: UUID())),
+                context: TerminalControlRequestContext())
+            guard case .task(let task) = response.result else {
+                Issue.record("Expected a managed task")
+                return
+            }
+            tasks.append(task)
+            let pane = PaneID(rawValue: task.paneID)
+            let environment = try #require(
+                bridge.surfaceConfigurationForTesting(id: pane)?.environment)
+            #expect(environment["BASE"] == "preserved")
+            for key in [
+                "QUICKTTY_PANE_ID", "QUICKTTY_AGENT_SOCKET", "QUICKTTY_INSTANCE_ID",
+                "QUICKTTY_PANE_TOKEN", "QUICKTTY_AGENT_HELPER", "QUICKTTY_CONTROL_SOCKET",
+            ] {
+                #expect(environment[key] == nil)
+            }
+            #expect(controller.environment(for: pane) == nil)
+            #expect(controller.rotate(paneID: pane) == nil)
+            #expect(
+                controller.credential(
+                    for: try AgentIPCPreflight(
+                        instanceID: controller.instanceID, paneID: task.paneID,
+                        nonce: Data(repeating: 1, count: AgentIPCProtocol.nonceSize))) == nil)
+            #expect(
+                controller.credential(
+                    for: try TerminalControlPreflight(
+                        instanceID: controller.instanceID, paneID: task.paneID,
+                        nonce: Data(repeating: 1, count: TerminalControlProtocol.nonceSize))) == nil
+            )
+        }
+        #expect(tokenCount.withLock { $0 } == 1)
+        #expect(promptCount == 1)
+        let waitingTask = try #require(tasks.last)
+        let baseline = coordinator.readManagedTask(
+            taskID: waitingTask.taskID, expectedSession: resolved.identity)
+        guard case .snapshot(let snapshot) = baseline else {
+            Issue.record("Expected wait baseline")
+            return
+        }
+        let waitRequest = TerminalControlSocketRequest(
+            instanceID: controller.instanceID, paneID: origin.rawValue,
+            request: try TerminalControlRequest(
+                operation: .wait(
+                    taskID: waitingTask.taskID, revision: snapshot.task.revision,
+                    timeoutMilliseconds: 5_000)))
+        let waiter = Task { @MainActor in
+            await coordinator.handleTerminalAutomationRequest(
+                waitRequest, context: TerminalControlRequestContext())
+        }
+        defer { waiter.cancel() }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !coordinator.hasPendingTerminalControlWaitForTesting(
+            taskID: waitingTask.taskID, session: resolved.identity), ContinuousClock.now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(
+            coordinator.hasPendingTerminalControlWaitForTesting(
+                taskID: waitingTask.taskID, session: resolved.identity))
+        let before = coordinator.workspaceStoreForPersistence
+        let modelBefore = coordinator.workspaceStoreForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let liveSurfaces = try surfaceIDs.map { paneID in
+            try #require(coordinator.surfaceForTesting(id: paneID))
+        }
+        let selectedTab = activeTab(of: coordinator)
+        try #require(selectedTab.root.leaves.count == 2)
+        let inactivePaneID = try #require(
+            selectedTab.root.leaves.first { $0 != selectedTab.activePaneID })
+        let staleFocusHandler = try #require(bridge.surfaceFocusHandler)
+        let staleProcessHandler = try #require(bridge.surfaceProcessExitedHandler)
+        let firstResponder = coordinator.activeWindowForTesting?.firstResponder
+        snapshots.removeAll()
+        coordinator.freezeTerminalControlForApplicationTermination()
+        coordinator.freezeTerminalControlForApplicationTermination()
+        #expect(bridge.surfaceFocusHandler == nil)
+        staleFocusHandler(inactivePaneID)
+        #expect(coordinator.workspaceStoreForTesting == modelBefore)
+        #expect(coordinator.workspaceStoreForPersistence == before)
+        #expect(activeTab(of: coordinator).activePaneID == selectedTab.activePaneID)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === firstResponder)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        for surface in liveSurfaces {
+            #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+        }
+        #expect(bridge.activeSurfaceCount == 3)
+        #expect(snapshots.isEmpty)
+        // WHY: Freezing control must retire an already-allowed grant, not only its permission sheet.
+        for task in tasks {
+            // WHY: Freeze must not turn exact compensation into authority to close accepted panes.
+            #expect(
+                !coordinator.discardManagedTask(
+                    TerminalAutomationCreatedTaskResponse(
+                        task: task,
+                        splitID: coordinator.managedSplitIDForTesting(taskID: task.taskID)),
+                    expectedSession: resolved.identity))
+            #expect(coordinator.managedTaskForTesting(taskID: task.taskID)?.owner == .user)
+            #expect(
+                coordinator.inspectManagedTask(
+                    taskID: task.taskID,
+                    expectedSession: resolved.identity) == .notOwned)
+            let rejected = await coordinator.handleTerminalAutomationRequest(
+                TerminalControlSocketRequest(
+                    instanceID: controller.instanceID, paneID: origin.rawValue,
+                    request: try TerminalControlRequest(operation: .read(taskID: task.taskID))),
+                context: TerminalControlRequestContext())
+            guard case .failure(let failure) = rejected.result else {
+                Issue.record("Frozen control unexpectedly succeeded")
+                return
+            }
+            #expect(failure.code == .cancelled)
+        }
+        let waitResponse = await waiter.value
+        guard case .failure(let waitFailure) = waitResponse.result else {
+            Issue.record("Revoked wait unexpectedly succeeded")
+            return
+        }
+        #expect(waitFailure.code == .staleSession)
+        #expect(
+            !coordinator.hasPendingTerminalControlWaitForTesting(
+                taskID: waitingTask.taskID, session: resolved.identity))
+        #expect(promptCount == 1)
+        #expect(controller.environment(for: origin) != nil)
+        #expect(bridge.surfaceProcessExitedHandler == nil)
+        for task in tasks {
+            let revoked = coordinator.managedTaskForTesting(taskID: task.taskID)
+            staleProcessHandler(
+                PaneID(rawValue: task.paneID),
+                GhosttyProcessExited(exitCode: 0, runtimeMilliseconds: 1))
+            #expect(coordinator.managedTaskForTesting(taskID: task.taskID) == revoked)
+            #expect(coordinator.managedCompletionTaskForTesting(taskID: task.taskID) == nil)
+        }
+        #expect(coordinator.workspaceStoreForTesting == modelBefore)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        controller.freeze()
+        coordinator.prepareForApplicationTermination()
+        coordinator.prepareForApplicationTermination()
+        let closed = bridge.successfulSurfaceCloseObservationsForTesting
+        for task in tasks {
+            staleProcessHandler(
+                PaneID(rawValue: task.paneID),
+                GhosttyProcessExited(exitCode: 0, runtimeMilliseconds: 2))
+            #expect(coordinator.managedTaskForTesting(taskID: task.taskID) == nil)
+        }
+        #expect(bridge.surfaceProcessExitedHandler == nil)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closed)
+        #expect(coordinator.workspaceStoreForTesting == modelBefore)
+        #expect(bridge.activeSurfaceCount == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func nativeQuakeKeyCallbackCannotActivateApplicationAfterPersistenceFreezes(
+        freezeOnFocus: Bool, synchronousAnimation: Bool
+    ) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Quake-Native-Focus-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config")
+        try Data("command = /bin/cat\n".utf8).write(to: configURL)
+        let bridge = try GhosttyBridge(configURL: configURL)
+        defer { bridge.shutdown() }
+        let driver = TerminationQuakeDriver()
+        // WHY: Count and forward the exact production activation boundary, even if the
+        // application is already active. Observing application focus cannot prove absence.
+        let window = QuakeWindow(activateApplication: {
+            driver.activate()
+            NSApp.activate(ignoringOtherApps: true)
+        })
+        let screen = try #require(NSScreen.main?.visibleFrame)
+        let quake = QuakeWindowController(
+            window: window, configuration: QuakeWindowConfiguration(hideOnFocusLoss: false),
+            visibleFrames: { [screen] },
+            cursorLocation: { NSPoint(x: screen.midX, y: screen.midY) },
+            animator: driver, animationDeferrer: driver, scheduler: driver,
+            isFocusLossSuppressed: { false }, priorApplicationProvider: { nil })
+        let state = NativeCallbackFreezeState()
+        let keyObserver = NativeQuakeKeyObserver(window: window)
+        var modes: [PresentationMode] = []
+        var frameAtFreeze: NSRect?
+        var visibilityAtFreeze: QuakeVisibility?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: .quake,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp", command: "exec /bin/cat"),
+            persistWorkspaceStore: { store in
+                if state.freezeOnCommit {
+                    #expect(keyObserver.isInCallback)
+                    frameAtFreeze = window.frame
+                    visibilityAtFreeze = quake.requestedVisibility
+                }
+                state.record(store)
+            }, persistPresentationMode: { modes.append($0) }, quakeWindowController: quake)
+        state.coordinator = coordinator
+        defer {
+            keyObserver.stop()
+            coordinator.prepareForApplicationTermination()
+            window.orderOut(nil)
+        }
+        try coordinator.start()
+        try #require(driver.deferred.count == 1)
+        driver.deferred[0].action()
+        try #require(driver.animations.count == 1)
+        driver.animations[0].completion()
+        try #require(driver.activationCount == 1)
+        let sibling = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let selected = try #require(coordinator.activeSurfaceForTesting)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !selected.isReady || !sibling.isReady, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(selected.isReady && sibling.isReady)
+        // Drain the existing startup focus retry before isolating the native callback.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        try #require(selected !== sibling)
+        try #require(activeTab(of: coordinator).activePaneID == selected.paneID)
+        try #require(selected.window === window && sibling.window === window)
+        try #require(window.delegate === quake)
+        try coordinator.requestQuakeVisibilityForTesting(.hidden)
+        try #require(driver.animations.count == 2)
+        driver.animations[1].completion()
+        try #require(!window.isVisible && !window.isKeyWindow)
+        let content = coordinator.workspaceViewControllerForTesting
+        let hosted = content.hostedSurfaceIdentifiersForTesting
+        let bindings = [selected, sibling].map(\.bindingActionObservationsForTesting)
+        let configurations = [selected, sibling].map {
+            bridge.surfaceConfigurationForTesting(id: $0.paneID)
+        }
+        let refreshes = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let focusRoute = try #require(bridge.surfaceFocusHandler)
+        var routedPanes: [PaneID] = []
+        bridge.surfaceFocusHandler = { paneID in
+            if keyObserver.isInCallback { routedPanes.append(paneID) }
+            focusRoute(paneID)
+        }
+        // WHY: This is a real makeKeyAndOrderFront notification, not a fabricated notification
+        // or fake Quake window algorithm. Its native responder change reaches Ghostty's real
+        // becomeFirstResponder -> focusRoute -> selection persistence while makeKey is on stack.
+        keyObserver.action = {
+            #expect(state.isCompletingAnimation)
+            #expect(driver.animations.count == 3)
+            #expect(window.isKeyWindow)
+            #expect(window.makeFirstResponder(sibling))
+        }
+        state.snapshots.removeAll()
+        state.freezeOnCommit = freezeOnFocus
+        driver.completesAnimationsSynchronously = synchronousAnimation
+        let activations = driver.activationCount
+        try coordinator.requestQuakeVisibilityForTesting(.shown)
+        try #require(driver.deferred.count == 2)
+        state.isCompletingAnimation = true
+        driver.deferred[1].action()
+        try #require(driver.animations.count == 3)
+        if !synchronousAnimation { driver.animations[2].completion() }
+        state.isCompletingAnimation = false
+
+        try #require(keyObserver.callbackCount == 1)
+        try #require(routedPanes == [sibling.paneID])
+        try #require(state.snapshots.count == 1)
+        #expect(activeTab(of: coordinator).activePaneID == sibling.paneID)
+        #expect(state.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(driver.activationCount == activations + (freezeOnFocus ? 0 : 1))
+        #expect(coordinator.presentationMode == .quake)
+        #expect(modes.isEmpty)
+        #expect(window.isVisible)
+        #expect(window.contentViewController === content)
+        #expect(content.hostedSurfaceIdentifiersForTesting == hosted)
+        let postOperationBindings = [selected, sibling].map(\.bindingActionObservationsForTesting)
+        // WHY: A live selection commit ends search only on the previously selected pane;
+        // reentrant persistence freeze must stop that action without changing either history.
+        if freezeOnFocus {
+            #expect(postOperationBindings == bindings)
+        } else {
+            #expect(postOperationBindings == [bindings[0] + ["end_search"], bindings[1]])
+        }
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        for (surface, configuration) in zip([selected, sibling], configurations) {
+            #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+            #expect(
+                bridge.surfaceConfigurationForTesting(id: surface.paneID)?.command
+                    == configuration?.command)
+            #expect(
+                bridge.surfaceConfigurationForTesting(id: surface.paneID)?.environment
+                    == configuration?.environment)
+        }
+        if freezeOnFocus {
+            let frozen = try #require(state.presentationAtFreeze)
+            let returned = NativeCallbackPresentationSnapshot(coordinator)
+            #expect(!state.freezeChangedPresentation)
+            #expect(window.frame == frameAtFreeze)
+            #expect(quake.requestedVisibility == visibilityAtFreeze)
+            #expect(returned.model == frozen.model)
+            #expect(returned.persistenceModel == frozen.persistenceModel)
+            #expect(returned.selectionGeneration == frozen.selectionGeneration)
+            #expect(returned.displayedTabs == frozen.displayedTabs)
+            #expect(returned.displayedTitles == frozen.displayedTitles)
+            #expect(returned.activeTab == frozen.activeTab)
+            #expect(returned.rendered == frozen.rendered)
+            #expect(returned.splitHost == frozen.splitHost)
+            #expect(returned.surfaces == frozen.surfaces)
+            #expect(returned.statusRefreshCount == frozen.statusRefreshCount)
+            #expect(returned.hosted == frozen.hosted)
+            #expect(returned.surfaceHosts == frozen.surfaceHosts)
+            #expect(returned.surfaceWindows == frozen.surfaceWindows)
+            #expect(returned.reloadGeneration == frozen.reloadGeneration)
+            #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshes)
+            if synchronousAnimation {
+                #expect(driver.animations[2].cancellation.isCancelled)
+            }
+        } else {
+            #expect(state.presentationAtFreeze == nil)
+            #expect(
+                coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshes + 1)
+        }
+        // The native responder operation already on stack may finish after freeze. From its
+        // return onward, compare the complete UI/model snapshot, including first responder.
+        state.freezeOnCommit = false
+        coordinator.freezeTerminalControlForApplicationTermination()
+        keyObserver.stop()
+        let frame = window.frame
+        let activationCount = driver.activationCount
+        let model = coordinator.workspaceStoreForTesting
+        let snapshots = state.snapshots
+        for afterTeardown in [false, true] {
+            if afterTeardown { coordinator.prepareForApplicationTermination() }
+            let before = NativeCallbackPresentationSnapshot(coordinator)
+            for request in driver.deferred { request.action() }
+            for request in driver.animations { request.completion() }
+            for request in driver.scheduled { request.action() }
+            window.focusForPresentation()
+            window.orderFrontForPresentation()
+            window.setPresentationFrame(frame.offsetBy(dx: 31, dy: 17))
+            window.setPresentationLevel(.popUpMenu)
+            try window.installContentViewController(nil)
+            try quake.installContentViewController(nil)
+            try quake.requestVisibility(.hidden)
+            try quake.requestVisibility(.shown)
+            quake.deactivateForModeTransition()
+            focusRoute(selected.paneID)
+            coordinator.createNewTab()
+            coordinator.togglePresentationMode()
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == before)
+            #expect(window.frame == frame)
+            #expect(window.level == .floating)
+            #expect(window.isVisible == !afterTeardown)
+            #expect(driver.activationCount == activationCount)
+            #expect(driver.animations.count == 3)
+            #expect(driver.deferred.count == 2)
+            #expect(coordinator.workspaceStoreForTesting == model)
+            #expect(state.snapshots == snapshots)
+            #expect(modes.isEmpty)
+            // WHY: Replay must preserve the validated live/frozen result, including the
+            // legitimate deactivation already performed by the unfrozen positive control.
+            #expect(
+                [selected, sibling].map(\.bindingActionObservationsForTesting)
+                    == postOperationBindings)
+            #expect(bridge.activeSurfaceCount == (afterTeardown ? 0 : 2))
+            if afterTeardown {
+                #expect(content.hostedSurfaceIdentifiersForTesting.isEmpty)
+                #expect(
+                    Set(bridge.successfulSurfaceCloseObservationsForTesting)
+                        == [selected.paneID, sibling.paneID])
+            } else {
+                #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func nativeQuakeContentRemovalStopsBeforeParentRemovalAndAssignment(
+        freezeOnRemoval: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let driver = TerminationQuakeDriver()
+        let window = QuakeWindow()
+        let quake = QuakeWindowController(
+            window: window,
+            visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
+            cursorLocation: { NSPoint(x: 500, y: 500) },
+            animator: driver, animationDeferrer: driver, scheduler: driver,
+            isFocusLossSuppressed: { false }, priorApplicationProvider: { nil })
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            quakeWindowController: quake)
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let parent = NSViewController()
+        let candidate = NSViewController()
+        let view = RetirementRemovalView()
+        candidate.view = view
+        parent.addChild(candidate)
+        let host = NSView()
+        host.addSubview(view)
+        defer {
+            view.didRemove = nil
+            window.contentViewController = nil
+            view.removeFromSuperview()
+            candidate.removeFromParent()
+            window.orderOut(nil)
+        }
+        let frame = window.frame
+        let before = NativeCallbackPresentationSnapshot(coordinator)
+        var callbackCount = 0
+        view.didRemove = {
+            callbackCount += 1
+            if freezeOnRemoval { coordinator.freezeTerminalControlForApplicationTermination() }
+        }
+        try quake.installContentViewController(candidate)
+        #expect(callbackCount == 1)
+        if freezeOnRemoval {
+            #expect(view.superview == nil)
+            #expect(candidate.parent === parent)
+            #expect(window.contentViewController == nil)
+            #expect(window.frame == frame)
+            try window.installContentViewController(candidate)
+            #expect(candidate.parent === parent)
+            #expect(window.contentViewController == nil)
+        } else {
+            #expect(candidate.parent == nil)
+            #expect(window.contentViewController === candidate)
+        }
+        #expect(NativeCallbackPresentationSnapshot(coordinator) == before)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+    }
+
+    @Test
+    func retainedNativeQuakePanelFailsClosedAfterControllerLifetimeEnds() throws {
+        let driver = TerminationQuakeDriver()
+        let window = QuakeWindow(activateApplication: {
+            driver.activate()
+            NSApp.activate(ignoringOtherApps: true)
+        })
+        defer { window.orderOut(nil) }
+        weak var owner: QuakeWindowController?
+        let liveFrame = NSRect(x: 100, y: 100, width: 600, height: 400)
+        // WHY: Native frame callbacks can autorelease delegate references. End the controller's
+        // closure-local lifetime and drain that pool before checking the externally retained panel.
+        try autoreleasepool {
+            let controller = QuakeWindowController(
+                window: window,
+                visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
+                cursorLocation: { NSPoint(x: 500, y: 500) },
+                animator: driver, animationDeferrer: driver, scheduler: driver,
+                isFocusLossSuppressed: { false }, priorApplicationProvider: { nil })
+            owner = controller
+            try withExtendedLifetime(controller) {
+                try #require(window.delegate === controller)
+                try #require(window.canContinuePresentation())
+                try #require(window.frame != liveFrame)
+                controller.setPresentationFrame(liveFrame)
+                try #require(window.frame == liveFrame)
+                try #require(window.canContinuePresentation())
+            }
+        }
+        try #require(owner == nil)
+        #expect(window.delegate == nil)
+        #expect(!window.canContinuePresentation())
+        let frame = window.frame
+        window.focusForPresentation()
+        window.orderFrontForPresentation()
+        window.setPresentationFrame(.zero)
+        try window.installContentViewController(NSViewController())
+        #expect(driver.activationCount == 0)
+        #expect(window.frame == frame)
+        #expect(!window.isVisible)
+        #expect(window.contentViewController == nil)
+        window.orderOutForPresentation()
+    }
+
+    @Test(arguments: ["live", "frame", "mode"])
+    func nativeNormalFrameRestorationStopsTransitionAtReentrantFreeze(freezeAt: String) async throws
+    {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeModeTransitionState()
+        let driver = TerminationQuakeDriver()
+        let quakeWindow = TerminationQuakeWindow()
+        let screen = try #require(NSScreen.main?.visibleFrame)
+        let quake = QuakeWindowController(
+            window: quakeWindow,
+            configuration: QuakeWindowConfiguration(hideOnFocusLoss: false),
+            visibleFrames: { [screen] },
+            cursorLocation: { NSPoint(x: screen.midX, y: screen.midY) },
+            animator: driver, animationDeferrer: driver, scheduler: driver,
+            isFocusLossSuppressed: { false }, priorApplicationProvider: { nil })
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp", command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.workspaces.append($0) },
+            persistPresentationMode: { mode in
+                state.modes.append(mode)
+                if state.isReturning, freezeAt == "mode" { state.freeze() }
+            },
+            persistNormalWindowFrame: { frame in
+                guard state.isReturning else { return }
+                // WHY: Only the real normal-window delegate calls this persistence closure.
+                // No synthetic notification or delegate replacement may stand in for setFrame.
+                state.frames.append(frame)
+                if let nativeFrame = state.coordinator?.windowForTesting?.frame {
+                    state.nativeFrames.append(nativeFrame)
+                }
+                if freezeAt == "frame" { state.freeze() }
+            },
+            onError: { state.errors.append($0) }, quakeWindowController: quake)
+        state.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let normalWindow = try #require(coordinator.windowForTesting)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let presentation = coordinator.presentationControllerForTesting
+        let content = coordinator.workspaceViewControllerForTesting
+        let normal = coordinator.normalWindowControllerForTesting
+        let replayTransition = presentation.transition
+        let replayShow = presentation.showCurrentPresentation
+        let replayToggle = presentation.toggleQuakeVisibility
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !surface.isReady || !normalWindow.isVisible, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(surface.isReady)
+        try #require(normalWindow.isVisible)
+        try #require(normalWindow.delegate === coordinator)
+        try #require(normalWindow.contentViewController === content)
+        let savedFrame = normalWindow.frame
+        let savedPersistenceFrame = try #require(
+            WindowCoordinator.normalWindowFrame(from: savedFrame))
+        let surfaceConfiguration = bridge.surfaceConfigurationForTesting(id: surface.paneID)
+        let model = coordinator.workspaceStoreForTesting
+        let host = try #require(surface.superview)
+
+        coordinator.togglePresentationMode()
+        try #require(coordinator.presentationMode == .quake)
+        try #require(presentation.savedNormalFrame == savedFrame)
+        try #require(driver.deferred.count == 1)
+        driver.deferred[0].action()
+        try #require(driver.animations.count == 1)
+        driver.animations[0].completion()
+        try #require(quakeWindow.isVisible)
+        try #require(!normalWindow.isVisible)
+        try #require(quakeWindow.contentViewController === content)
+        try #require(surface.window === quakeWindow)
+        let quakeFrame = quakeWindow.frame
+        let quakeEvents = quakeWindow.events
+        let hosted = content.hostedSurfaceIdentifiersForTesting
+        let snapshot = NativeCallbackPresentationSnapshot(coordinator)
+        // WHY: Change only the hidden native window before arming persistence. Restoration
+        // must move it back exactly, so a missing synchronous native callback fails the test.
+        let displacedFrame = savedFrame.offsetBy(dx: 37, dy: -23)
+        normalWindow.setFrame(displacedFrame, display: false)
+        try #require(normalWindow.frame == displacedFrame)
+        try #require(coordinator.normalWindowFrame == savedPersistenceFrame)
+        state.workspaces.removeAll()
+        state.isReturning = true
+
+        coordinator.togglePresentationMode()
+
+        try #require(!state.frames.isEmpty)
+        #expect(state.frames.first == savedPersistenceFrame)
+        #expect(state.nativeFrames.count == state.frames.count)
+        #expect(state.nativeFrames.first == savedFrame)
+        #expect(normalWindow.frame == savedFrame)
+        #expect(coordinator.normalWindowFrame == savedPersistenceFrame)
+        #expect(presentation.savedNormalFrame == savedFrame)
+        #expect(state.errors.isEmpty)
+        #expect(state.workspaces.isEmpty)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+        #expect(surface.superview === host)
+        #expect(surface.isReady)
+        #expect(bridge.activeSurfaceIDs == [surface.paneID])
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: surface.paneID)?.command
+                == surfaceConfiguration?.command)
+        #expect(
+            bridge.surfaceConfigurationForTesting(id: surface.paneID)?.environment
+                == surfaceConfiguration?.environment)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(content.hostedSurfaceIdentifiersForTesting == hosted)
+        if freezeAt == "frame" {
+            #expect(state.frames == [savedPersistenceFrame])
+            #expect(state.freezeCount == 1)
+            #expect(!state.freezeChangedPresentation)
+            #expect(state.modeAtFreeze == .quake)
+            #expect(state.normalFrameAtFreeze == savedFrame)
+            #expect(state.modes == [.quake])
+            #expect(coordinator.presentationMode == .quake)
+            #expect(coordinator.activeWindowForTesting === quakeWindow)
+            #expect(normalWindow.contentViewController == nil)
+            #expect(!normalWindow.isVisible)
+            #expect(quakeWindow.contentViewController === content)
+            #expect(quakeWindow.isVisible)
+            #expect(quakeWindow.frame == quakeFrame)
+            #expect(quakeWindow.events == quakeEvents)
+            #expect(surface.window === quakeWindow)
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == snapshot)
+        } else {
+            #expect(state.modes == [.quake, .normal])
+            #expect(coordinator.presentationMode == .normal)
+            #expect(coordinator.activeWindowForTesting === normalWindow)
+            #expect(normalWindow.contentViewController === content)
+            #expect(normalWindow.isVisible)
+            #expect(quakeWindow.contentViewController == nil)
+            #expect(!quakeWindow.isVisible)
+            #expect(surface.window === normalWindow)
+            if freezeAt == "mode" {
+                #expect(state.freezeCount == 1)
+                #expect(state.modeAtFreeze == .normal)
+                #expect(!state.freezeChangedPresentation)
+            } else {
+                #expect(state.freezeCount == 0)
+            }
+        }
+
+        coordinator.freezeTerminalControlForApplicationTermination()
+        let modes = state.modes
+        let frames = state.frames
+        for afterTeardown in [false, true] {
+            if afterTeardown { coordinator.prepareForApplicationTermination() }
+            let beforeReplay = NativeCallbackPresentationSnapshot(coordinator)
+            let events = quakeWindow.events
+            // WHY: Retain actual controller entry points to bypass the coordinator's outer guard.
+            try replayTransition(.normal, true)
+            try replayTransition(.quake, true)
+            try replayShow()
+            replayToggle()
+            try coordinator.requestQuakeVisibilityForTesting(.shown)
+            try coordinator.requestQuakeVisibilityForTesting(.hidden)
+            coordinator.togglePresentationMode()
+            normal.setPresentationFrame(displacedFrame)
+            try normal.installContentViewController(nil)
+            try normal.showPresentationWindow()
+            normal.hidePresentationWindow()
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == beforeReplay)
+            #expect(quakeWindow.events == events)
+            #expect(normalWindow.frame == savedFrame)
+            #expect(state.modes == modes)
+            #expect(state.frames == frames)
+            #expect(state.workspaces.isEmpty)
+            #expect(bridge.activeSurfaceCount == (afterTeardown ? 0 : 1))
+            if afterTeardown {
+                #expect(!normalWindow.isVisible)
+                #expect(!quakeWindow.isVisible)
+                #expect(content.hostedSurfaceIdentifiersForTesting.isEmpty)
+                #expect(bridge.successfulSurfaceCloseObservationsForTesting == [surface.paneID])
+            }
+        }
+    }
+
+    @Test(arguments: ["destination", "source", "rollback", "liveRollback"], [false, true])
+    func partialModeTransitionRetirementSuppressesContinuationAndRollback(
+        boundary: String, throwAfterFreeze: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeCallbackFreezeState()
+        let driver = TerminationQuakeDriver()
+        let window = TerminationQuakeWindow()
+        let quake = QuakeWindowController(
+            window: window,
+            visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
+            cursorLocation: { NSPoint(x: 500, y: 500) },
+            animator: driver, animationDeferrer: driver, scheduler: driver,
+            isFocusLossSuppressed: { true }, priorApplicationProvider: { nil })
+        var modes: [PresentationMode] = []
+        var errors: [Error] = []
+        var eventsAtFreeze: [String]?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.record($0) },
+            persistPresentationMode: { modes.append($0) }, onError: { errors.append($0) },
+            quakeWindowController: quake)
+        state.coordinator = coordinator
+        defer {
+            window.willInstallContent = nil
+            window.didInstallContent = nil
+            window.didOrderOut = nil
+            coordinator.prepareForApplicationTermination()
+        }
+        try coordinator.start()
+        let content = coordinator.workspaceViewControllerForTesting
+        let normal = try #require(coordinator.windowForTesting)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let savedFrame = normal.frame
+        if boundary == "source" {
+            coordinator.togglePresentationMode()
+            try #require(driver.deferred.count == 1)
+            driver.deferred[0].action()
+            try #require(driver.animations.count == 1)
+            driver.animations[0].completion()
+            try #require(window.isVisible)
+        }
+        let oldMode = coordinator.presentationMode
+        let model = coordinator.workspaceStoreForTesting
+        let oldModes = modes
+        state.snapshots.removeAll()
+        if boundary == "rollback" || boundary == "liveRollback" {
+            window.willInstallContent = { controller in
+                if controller != nil { throw PresentationContainerError.windowUnavailable }
+            }
+            if boundary == "rollback" {
+                // WHY: The original error starts a live rollback. Retirement during its native
+                // order-out must stop the remaining cleanup/reinstall/show steps as well.
+                window.didOrderOut = {
+                    state.freeze()
+                    eventsAtFreeze = window.events
+                }
+            }
+        } else {
+            window.didInstallContent = { controller in
+                #expect((controller == nil) == (boundary == "source"))
+                state.freeze()
+                eventsAtFreeze = window.events
+                if throwAfterFreeze { throw PresentationContainerError.windowUnavailable }
+            }
+        }
+
+        coordinator.togglePresentationMode()
+
+        #expect(coordinator.presentationMode == oldMode)
+        #expect(modes == oldModes)
+        #expect(normal.frame == savedFrame)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(state.snapshots.isEmpty)
+        #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+        #expect(surface.superview === host)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        if boundary == "liveRollback" {
+            #expect(errors.count == 1)
+            #expect(errors.first as? PresentationContainerError == .windowUnavailable)
+            #expect(normal.contentViewController === content)
+            #expect(window.contentViewController == nil)
+            #expect(normal.isVisible)
+            #expect(!window.isVisible)
+        } else {
+            try #require(state.presentationAtFreeze != nil)
+            #expect(errors.isEmpty)
+            #expect(!state.freezeChangedPresentation)
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == state.presentationAtFreeze)
+            #expect(window.events == eventsAtFreeze)
+            switch boundary {
+            case "destination":
+                #expect(normal.contentViewController == nil)
+                #expect(window.contentViewController === content)
+                #expect(surface.window === window)
+                #expect(normal.isVisible)
+                #expect(!window.isVisible)
+            case "source":
+                #expect(normal.contentViewController == nil)
+                #expect(window.contentViewController == nil)
+                // WHY: AppKit may retain the content view after clearing its controller;
+                // the snapshot, not an assumed detach, defines the interrupted native state.
+                #expect(window.isVisible)
+                #expect(!normal.isVisible)
+            default:
+                #expect(normal.contentViewController === content)
+                #expect(window.contentViewController == nil)
+                #expect(normal.isVisible)
+            }
+        }
+        window.willInstallContent = nil
+        window.didInstallContent = nil
+        window.didOrderOut = nil
+        coordinator.freezeTerminalControlForApplicationTermination()
+        let transition = coordinator.presentationControllerForTesting.transition
+        for afterTeardown in [false, true] {
+            if afterTeardown { coordinator.prepareForApplicationTermination() }
+            let before = NativeCallbackPresentationSnapshot(coordinator)
+            let events = window.events
+            try transition(.normal, true)
+            try transition(.quake, true)
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == before)
+            #expect(window.events == events)
+            #expect(modes == oldModes)
+            #expect(state.snapshots.isEmpty)
+            if afterTeardown {
+                #expect(!normal.isVisible)
+                #expect(!window.isVisible)
+                #expect(content.hostedSurfaceIdentifiersForTesting.isEmpty)
+                #expect(bridge.activeSurfaceCount == 0)
+                #expect(bridge.successfulSurfaceCloseObservationsForTesting == [surface.paneID])
+            }
+        }
+    }
+
+    @Test
+    func normalContainerStopsBetweenNativeViewRemovalAndParentRemovalWhenCoordinatorFreezes() throws
+    {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let normal = coordinator.normalWindowControllerForTesting
+        let window = try #require(normal.window)
+        let installed = try #require(window.contentViewController)
+        let parent = NSViewController()
+        let candidate = NSViewController()
+        let view = RetirementRemovalView()
+        candidate.view = view
+        parent.addChild(candidate)
+        let host = NSView()
+        host.addSubview(view)
+        let before = NativeCallbackPresentationSnapshot(coordinator)
+        let frame = window.frame
+        var callbackCount = 0
+        view.didRemove = {
+            callbackCount += 1
+            coordinator.freezeTerminalControlForApplicationTermination()
+        }
+
+        try normal.installContentViewController(candidate)
+
+        #expect(callbackCount == 1)
+        #expect(view.superview == nil)
+        // WHY: The already-started native removal completes, but parent removal and window
+        // assignment are new operations and must not run after that callback freezes.
+        #expect(candidate.parent === parent)
+        #expect(window.contentViewController === installed)
+        #expect(window.frame == frame)
+        #expect(NativeCallbackPresentationSnapshot(coordinator) == before)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        try normal.installContentViewController(candidate)
+        #expect(callbackCount == 1)
+        #expect(candidate.parent === parent)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func terminationFreezeSuppressesImmediateAndAlreadyQueuedCoordinatorFocus(
+        mode: PresentationMode, freezeBeforeRetry: Bool
+    ) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Focus-Freeze-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config")
+        try Data("command = /bin/cat\n".utf8).write(to: configURL)
+        let bridge = try GhosttyBridge(configURL: configURL)
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let sibling = try #require(coordinator.activeSurfaceForTesting)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        // WHY: Drain startup/presentation focus before isolating the retry under test.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let host = try #require(surface.superview)
+        try #require(surface !== sibling)
+        try #require(surface.window === window)
+        try #require(activeTab(of: coordinator).root.leaves.count == 2)
+        let staleFocusHandler = try #require(bridge.surfaceFocusHandler)
+
+        // WHY: Queue the real coordinator retry while the live surface is not yet presented.
+        // Restore its host before freeze: freeze itself must never detach a surface.
+        try #require(window.makeFirstResponder(nil))
+        surface.removeFromSuperview()
+        try #require(surface.window == nil)
+        try #require(coordinator.activeSurfaceForTesting === surface)
+        coordinator.focusActivePaneForTesting()
+        host.addSubview(surface)
+        try #require(surface.window === window)
+        try #require(window.makeFirstResponder(nil))
+        let firstResponder = window.firstResponder
+        try #require(firstResponder !== surface)
+        let modelBefore = coordinator.workspaceStoreForTesting
+        let snapshotBefore = coordinator.workspaceStoreForPersistence
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        persistence.reset()
+        if freezeBeforeRetry {
+            coordinator.freezeTerminalControlForApplicationTermination()
+            coordinator.freezeTerminalControlForApplicationTermination()
+            #expect(bridge.surfaceFocusHandler == nil)
+            staleFocusHandler(sibling.paneID)
+            #expect(window.firstResponder === firstResponder)
+            #expect(surface.superview === host)
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+        if freezeBeforeRetry {
+            #expect(window.firstResponder === firstResponder)
+        } else {
+            // WHY: The unfrozen control proves the queued production path actually focuses.
+            #expect(window.firstResponder === surface)
+        }
+        try #require(window.makeFirstResponder(nil))
+        let responderBeforeImmediateFocus = window.firstResponder
+        coordinator.focusActivePaneForTesting()
+        if freezeBeforeRetry {
+            #expect(window.firstResponder === responderBeforeImmediateFocus)
+        } else {
+            #expect(window.firstResponder === surface)
+        }
+        #expect(coordinator.workspaceStoreForTesting == modelBefore)
+        #expect(coordinator.workspaceStoreForPersistence == snapshotBefore)
+        #expect(activeTab(of: coordinator).activePaneID == surface.paneID)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(coordinator.surfaceForTesting(id: sibling.paneID) === sibling)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(surface.superview === host)
+        #expect(sibling.window === window)
+        #expect(persistence.snapshots.isEmpty)
+
+        coordinator.prepareForApplicationTermination()
+        coordinator.prepareForApplicationTermination()
+        staleFocusHandler(sibling.paneID)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.workspaceStoreForTesting == modelBefore)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func lateIntegrationSheetCloseUsesTerminationProtectedProductionRestoration(
+        mode: PresentationMode, freezeBeforeClose: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        coordinator.installAgentIntegrations(
+            installer: AgentIntegrationInstallerClient(
+                adapterIDs: AgentIntegrationInstaller.adapterIDs,
+                status: { [] },
+                prepare: { _ in AgentIntegrationPreparedSummary(planID: "plan", adapters: []) },
+                apply: { _ in AgentIntegrationApplySummary(adapters: []) }),
+            launcherInstaller: CommandLineLauncherInstallerClient(
+                prepare: {
+                    CommandLineLauncherSummary(
+                        planID: "launcher", displayPath: "~/.local/bin/quicktty",
+                        kind: "symlinkCreate", createsBackup: false, status: .available)
+                },
+                apply: { _ in .succeeded }))
+        let sheet = try #require(coordinator.agentIntegrationsSheetControllerForTesting)
+        let requestClose = try #require(sheet.viewController.onRequestClose)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        coordinator.presentAgentIntegrations()
+        try #require(sheet.sheetWindow.sheetParent === window)
+        // WHY: Transition detachment leaves isPresented true, so close still restores focus.
+        // Isolate that real callback from AppKit's own responder changes during endSheet.
+        try #require(sheet.detachForWindowTransition())
+        try #require(sheet.isPresented)
+        try #require(sheet.parentWindowForTesting == nil)
+        try #require(sheet.sheetWindow.sheetParent == nil)
+        try #require(window.makeFirstResponder(nil))
+        let responder = window.firstResponder
+        try #require(responder !== surface)
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let hosted = coordinator.workspaceViewControllerForTesting
+            .hostedSurfaceIdentifiersForTesting
+        let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        if freezeBeforeClose {
+            coordinator.freezeTerminalControlForApplicationTermination()
+            coordinator.freezeTerminalControlForApplicationTermination()
+            #expect(window.firstResponder === responder)
+            #expect(surface.superview === host)
+        }
+        // WHY: Retain the installed UI closure, not a replica of coordinator restoration logic.
+        requestClose()
+        #expect(!sheet.isPresented)
+        if freezeBeforeClose {
+            #expect(window.firstResponder === responder)
+        } else {
+            #expect(window.firstResponder === surface)
+        }
+        sheet.close()
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.workspaceStoreForPersistence == snapshot)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == hosted)
+        #expect(persistence.snapshots.isEmpty)
+
+        coordinator.prepareForApplicationTermination()
+        requestClose()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake])
+    func retainedWorkspaceEditorRequestsRespectTerminationPresentationBoundary(
+        mode: PresentationMode
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) })
+        defer {
+            coordinator.createWorkspaceControllerForTesting?.cancelForTesting()
+            coordinator.prepareForApplicationTermination()
+        }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let create = try #require(presentation.onCreateWorkspace)
+        let rename = try #require(presentation.onRenameWorkspace)
+        let move = try #require(presentation.onMoveToNewWorkspace)
+        let tabID = activeTab(of: coordinator).id
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let epoch = coordinator.selectionGenerationForTesting
+        let hosted = presentation.hostedSurfaceIdentifiersForTesting
+        let rendered = presentation.renderedSurfaceIdentifiersForTesting
+        let splitHost = presentation.splitHostingControllerIdentifierForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let bindings = surface.bindingActionObservationsForTesting
+        let responder = window.firstResponder
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        try #require(window.attachedSheet == nil)
+        try #require(coordinator.createWorkspaceControllerForTesting == nil)
+        persistence.reset()
+        coordinator.freezeTerminalControlForApplicationTermination()
+
+        // WHY: Rejected requests cannot change the baseline, so all retained UI callbacks
+        // can share one frozen fixture while checking the complete baseline after each call.
+        for action in ["create", "rename", "move"] {
+            switch action {
+            case "create": create()
+            case "rename": rename()
+            default: move([tabID])
+            }
+            #expect(coordinator.createWorkspaceControllerForTesting == nil)
+            #expect(window.attachedSheet == nil)
+            #expect(window.firstResponder === responder)
+            #expect(Set(NSApp.windows.map(ObjectIdentifier.init)) == windows)
+            #expect(coordinator.workspaceStoreForTesting == model)
+            #expect(coordinator.workspaceStoreForPersistence == snapshot)
+            #expect(coordinator.selectionGenerationForTesting == epoch)
+            #expect(coordinator.activeSurfaceForTesting === surface)
+            #expect(coordinator.surfaceIDsForTesting == [surface.paneID])
+            #expect(surface.superview === host)
+            #expect(surface.window === window)
+            #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+            #expect(presentation.renderedSurfaceIdentifiersForTesting == rendered)
+            #expect(presentation.splitHostingControllerIdentifierForTesting == splitHost)
+            #expect(
+                coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+            #expect(surface.bindingActionObservationsForTesting == bindings)
+            #expect(bridge.activeSurfaceCount == 1)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+            #expect(persistence.snapshots.isEmpty)
+        }
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["create", "rename", "move"])
+    func alreadyPresentedWorkspaceEditorCannotCommitOrDismissOnFrozenSubmit(
+        mode: PresentationMode, action: String
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeCallbackFreezeState()
+        var errors: [Error] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.record($0) },
+            onError: { errors.append($0) })
+        state.coordinator = coordinator
+        defer {
+            coordinator.createWorkspaceControllerForTesting?.cancelForTesting()
+            coordinator.prepareForApplicationTermination()
+        }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let create = try #require(presentation.onCreateWorkspace)
+        let rename = try #require(presentation.onRenameWorkspace)
+        let move = try #require(presentation.onMoveToNewWorkspace)
+        let original = coordinator.workspaceStoreForTesting
+        let tab = activeTab(of: coordinator)
+        let originalSurface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        state.snapshots.removeAll()
+        if action == "create" {
+            // WHY: Cancellation/reopening needs one positive control per mode, not per submit.
+            create()
+            let cancelledEditor = try #require(coordinator.createWorkspaceControllerForTesting)
+            defer { cancelledEditor.window?.orderOut(nil) }
+            cancelledEditor.cancelForTesting()
+            try #require(coordinator.createWorkspaceControllerForTesting == nil)
+            try #require(window.attachedSheet == nil)
+            #expect(coordinator.workspaceStoreForTesting == original)
+            #expect(state.snapshots.isEmpty)
+        }
+        switch action {
+        case "create": create()
+        case "rename": rename()
+        default: move([tab.id])
+        }
+        let liveEditor = try #require(coordinator.createWorkspaceControllerForTesting)
+        let liveSheet = try #require(liveEditor.window)
+        defer { liveSheet.orderOut(nil) }
+        try #require(liveSheet.sheetParent === window)
+        try #require(window.attachedSheet === liveSheet)
+        #expect(
+            liveEditor.submitButtonTitleForTesting == (action == "rename" ? "Rename" : "Create"))
+        let liveDismiss = try #require(liveEditor.onDismiss)
+        liveEditor.onDismiss = {
+            state.dismissCount += 1
+            liveDismiss()
+        }
+        let name = "Accepted \(action) \(UUID().uuidString)"
+        liveEditor.submitForTesting(name: name)
+        let expected = try expectedWorkspaceEditorStore(
+            original: original, tab: tab, action: action, name: name,
+            committed: coordinator.workspaceStoreForTesting)
+        try #require(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == [expected])
+        #expect(liveEditor.errorMessageForTesting.isEmpty)
+        #expect(state.presentationAtFreeze == nil)
+        #expect(state.dismissCount == 1)
+        try #require(coordinator.createWorkspaceControllerForTesting == nil)
+        try #require(window.attachedSheet == nil)
+        #expect(liveSheet.sheetParent == nil)
+        let expectedSurfaceIDs = Set(
+            expected.workspaces.flatMap { $0.tabs.flatMap { $0.root.leaves } })
+        let expectedSurfaceCount = action == "create" ? 2 : 1
+        #expect(expectedSurfaceIDs.count == expectedSurfaceCount)
+        #expect(Set(coordinator.surfaceIDsForTesting) == expectedSurfaceIDs)
+        #expect(Set(bridge.activeSurfaceIDs) == expectedSurfaceIDs)
+        #expect(bridge.activeSurfaceCount == expectedSurfaceCount)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(coordinator.surfaceForTesting(id: originalSurface.paneID) === originalSurface)
+        let currentTab = activeTab(of: coordinator)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        #expect(surface.paneID == currentTab.activePaneID)
+        let configuration = try #require(bridge.surfaceConfigurationForTesting(id: surface.paneID))
+        #expect(configuration.command == "exec /bin/cat")
+        if action == "create" {
+            #expect(surface !== originalSurface)
+            #expect(configuration.context == .newTab)
+            // WHY: The launch cwd override stays nil; only the descriptor falls back to home.
+            #expect(configuration.workingDirectory == nil)
+        } else {
+            #expect(surface === originalSurface)
+        }
+
+        // WHY: A fresh editor on the validated live result isolates freeze-before-submit
+        // without unfreezing or losing the accepted commit (including create's extra surface).
+        switch action {
+        case "create": create()
+        case "rename": rename()
+        default: move([currentTab.id])
+        }
+        let editor = try #require(coordinator.createWorkspaceControllerForTesting)
+        try #require(editor !== liveEditor)
+        let sheet = try #require(editor.window)
+        defer { sheet.orderOut(nil) }
+        let host = try #require(surface.superview)
+        try #require(sheet.sheetParent === window)
+        try #require(window.attachedSheet === sheet)
+        #expect(editor.submitButtonTitleForTesting == (action == "rename" ? "Rename" : "Create"))
+        var frozenDismissCount = 0
+        let dismiss = try #require(editor.onDismiss)
+        editor.onDismiss = {
+            frozenDismissCount += 1
+            dismiss()
+        }
+        let responder = window.firstResponder
+        let sheetResponder = sheet.firstResponder
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let epoch = coordinator.selectionGenerationForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let beforeFreeze = NativeCallbackPresentationSnapshot(coordinator, editor: editor)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == [expected])
+
+        coordinator.freezeTerminalControlForApplicationTermination()
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == beforeFreeze)
+        #expect(window.attachedSheet === sheet)
+        #expect(sheet.sheetParent === window)
+        let nameBeforeSubmit = editor.nameForTesting
+        let errorBeforeSubmit = editor.errorMessageForTesting
+        // WHY: A retired caller must reject submit before validation or its coordinator callback.
+        editor.submitForTesting(name: "Late workspace")
+        #expect(coordinator.createWorkspaceControllerForTesting === editor)
+        #expect(window.attachedSheet === sheet)
+        #expect(sheet.sheetParent === window)
+        #expect(window.firstResponder === responder)
+        #expect(sheet.firstResponder === sheetResponder)
+        #expect(editor.nameForTesting == nameBeforeSubmit)
+        #expect(editor.errorMessageForTesting == errorBeforeSubmit)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(coordinator.workspaceStoreForPersistence == snapshot)
+        #expect(coordinator.selectionGenerationForTesting == epoch)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(coordinator.surfaceForTesting(id: originalSurface.paneID) === originalSurface)
+        #expect(Set(coordinator.surfaceIDsForTesting) == expectedSurfaceIDs)
+        #expect(Set(bridge.activeSurfaceIDs) == expectedSurfaceIDs)
+        #expect(bridge.activeSurfaceCount == expectedSurfaceCount)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == beforeFreeze)
+        #expect(frozenDismissCount == 0)
+        #expect(state.dismissCount == 1)
+        #expect(state.snapshots == [expected])
+        #expect(errors.isEmpty)
+
+        coordinator.prepareForApplicationTermination()
+        #expect(coordinator.createWorkspaceControllerForTesting == nil)
+        #expect(window.attachedSheet == nil)
+        #expect(liveSheet.sheetParent == nil)
+        #expect(sheet.sheetParent == nil)
+        #expect(!sheet.isVisible)
+        #expect(state.dismissCount == 1)
+        #expect(frozenDismissCount == 1)
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+        let liveTornDown = NativeCallbackPresentationSnapshot(coordinator, editor: liveEditor)
+        let tornDown = NativeCallbackPresentationSnapshot(coordinator, editor: editor)
+        liveEditor.submitForTesting(name: "After teardown")
+        liveEditor.cancelForTesting()
+        editor.submitForTesting(name: "After teardown")
+        editor.cancelForTesting()
+        coordinator.prepareForApplicationTermination()
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: liveEditor) == liveTornDown)
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == tornDown)
+        #expect(state.dismissCount == 1)
+        #expect(frozenDismissCount == 1)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == [expected])
+        #expect(errors.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["create", "rename", "move"])
+    func workspaceEditorAcceptedSubmitRetainsSheetWhenPersistenceFreezes(
+        mode: PresentationMode, action: String
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeCallbackFreezeState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.record($0) })
+        state.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let create = try #require(presentation.onCreateWorkspace)
+        let rename = try #require(presentation.onRenameWorkspace)
+        let move = try #require(presentation.onMoveToNewWorkspace)
+        let original = coordinator.workspaceStoreForTesting
+        let tab = activeTab(of: coordinator)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let window = try #require(coordinator.activeWindowForTesting)
+        switch action {
+        case "create": create()
+        case "rename": rename()
+        default: move([tab.id])
+        }
+        let editor = try #require(coordinator.createWorkspaceControllerForTesting)
+        let sheet = try #require(editor.window)
+        defer { sheet.orderOut(nil) }
+        try #require(sheet.sheetParent === window)
+        let dismiss = try #require(editor.onDismiss)
+        editor.onDismiss = {
+            state.dismissCount += 1
+            dismiss()
+        }
+        state.snapshots.removeAll()
+        state.freezeOnCommit = true
+        let name = "Accepted \(action) \(UUID().uuidString)"
+
+        // WHY: Use the actual caller whose success branch used to endSheet after freeze.
+        editor.submitForTesting(name: name)
+
+        let expected = try expectedWorkspaceEditorStore(
+            original: original, tab: tab, action: action, name: name,
+            committed: coordinator.workspaceStoreForTesting)
+        #expect(state.snapshots == [expected])
+        #expect(editor.errorMessageForTesting.isEmpty)
+        #expect(bridge.activeSurfaceCount == (action == "create" ? 2 : 1))
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        let frozen = try #require(state.presentationAtFreeze)
+        #expect(!state.freezeChangedPresentation)
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == frozen)
+        #expect(state.dismissCount == 0)
+        #expect(coordinator.createWorkspaceControllerForTesting === editor)
+        #expect(window.attachedSheet === sheet)
+        #expect(sheet.sheetParent === window)
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+        editor.submitForTesting(name: "Replay \(UUID().uuidString)")
+        editor.cancelForTesting()
+        #expect(editor.nameForTesting == name)
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == frozen)
+        #expect(state.dismissCount == 0)
+        coordinator.prepareForApplicationTermination()
+        #expect(coordinator.createWorkspaceControllerForTesting == nil)
+        #expect(window.attachedSheet == nil)
+        #expect(sheet.sheetParent == nil)
+        #expect(!sheet.isVisible)
+        #expect(state.dismissCount == 1)
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+        let tornDown = NativeCallbackPresentationSnapshot(coordinator, editor: editor)
+        editor.submitForTesting(name: "After teardown")
+        editor.cancelForTesting()
+        coordinator.prepareForApplicationTermination()
+        #expect(NativeCallbackPresentationSnapshot(coordinator, editor: editor) == tornDown)
+        #expect(state.dismissCount == 1)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == [expected])
+    }
+
+    private func expectedWorkspaceEditorStore(
+        original: WorkspaceStore, tab: TerminalTab, action: String, name: String,
+        committed: WorkspaceStore
+    ) throws -> WorkspaceStore {
+        let sourceID = original.activeWorkspaceID
+        let destination = try #require(committed.workspaces.first { $0.name == name })
+        var expected = original
+        if action != "rename" {
+            expected = try WorkspaceStore(
+                workspaces: original.workspaces + [Workspace(id: destination.id, name: name)],
+                activeWorkspaceID: sourceID)
+        }
+        switch action {
+        case "rename":
+            try expected.renameWorkspace(sourceID, to: name)
+        case "move":
+            try expected.moveTabs([tab.id], from: sourceID, to: destination.id)
+        default:
+            try #require(destination.tabs.count == 1)
+            let createdTab = try #require(destination.tabs.first)
+            try #require(createdTab.id != tab.id)
+            try #require(createdTab.root.leaves.count == 1)
+            #expect(createdTab.title == "Shell")
+            #expect(createdTab.titleOverride == nil)
+            #expect(!createdTab.isBroadcasting)
+            let descriptor = try #require(
+                createdTab.paneDescriptor(for: createdTab.activePaneID))
+            #expect(descriptor.startupCommand == .custom("exec /bin/cat"))
+            #expect(descriptor.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
+            #expect(descriptor.agentResumeBinding == nil)
+            try expected.activateWorkspace(destination.id)
+            try expected.addTab(createdTab, to: destination.id)
+            try expected.activateTab(createdTab.id, in: destination.id)
+        }
+        #expect(committed == expected)
+        return expected
+    }
+
+    @Test(
+        arguments: [PresentationMode.normal, .quake], ["unfrozen", "pending", "commit", "reject"])
+    func nativeDragCompletionRespectsCoordinatorRetirement(
+        mode: PresentationMode, freezeAt: String
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeCallbackFreezeState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.record($0) })
+        state.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let firstTab = activeTab(of: coordinator)
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let secondTab = activeTab(of: coordinator)
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let tabBar = presentation.tabBarViewController
+        let collectionView = tabBar.collectionViewForTesting
+        let drag = CoordinatorTabDraggingInfo(
+            source: collectionView, payload: firstTab.id.rawValue.uuidString)
+        defer { drag.draggingPasteboard.releaseGlobally() }
+        let session = NSDraggingSession()
+        tabBar.collectionView(
+            collectionView, draggingSession: session, willBeginAt: .zero,
+            forItemsAt: [IndexPath(item: 0, section: 0)])
+        let displayed = tabBar.displayedTabsForTesting
+        let reloads = tabBar.dataReloadGenerationForTesting
+        var expected = coordinator.workspaceStoreForTesting
+        let order = [secondTab.id, firstTab.id]
+        if freezeAt != "reject" {
+            try expected.reorderTabs(order, in: expected.activeWorkspaceID)
+            try expected.activateTab(firstTab.id, in: expected.activeWorkspaceID)
+        }
+        let expectedSnapshots: [WorkspaceStore] = freezeAt == "reject" ? [] : [expected]
+        state.snapshots.removeAll()
+        state.freezeOnCommit = freezeAt == "commit"
+        if freezeAt == "reject" {
+            let reorder = try #require(tabBar.onReorderTabs)
+            tabBar.onReorderTabs = { ids, activeID in
+                state.freeze()
+                return reorder(ids, activeID)
+            }
+        }
+
+        let accepted = tabBar.collectionView(
+            collectionView, acceptDrop: drag, indexPath: IndexPath(item: 2, section: 0),
+            dropOperation: .before)
+
+        #expect(accepted == (freezeAt != "reject"))
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == expectedSnapshots)
+        #expect(tabBar.displayedTabsForTesting == displayed)
+        #expect(tabBar.dataReloadGenerationForTesting == reloads)
+        #expect(
+            tabBar.hasPendingReorderForTesting
+                == (freezeAt == "unfrozen" || freezeAt == "pending"))
+        if freezeAt == "commit" || freezeAt == "reject" {
+            let frozen = try #require(state.presentationAtFreeze)
+            #expect(!state.freezeChangedPresentation)
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == frozen)
+        } else if freezeAt == "pending" {
+            let beforeFreeze = NativeCallbackPresentationSnapshot(coordinator)
+            coordinator.freezeTerminalControlForApplicationTermination()
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == beforeFreeze)
+            #expect(!tabBar.hasPendingReorderForTesting)
+        }
+        let beforeCompletion = NativeCallbackPresentationSnapshot(coordinator)
+        // WHY: Call the native delegate, not just the coordinator's guarded finish closure.
+        tabBar.collectionView(
+            collectionView, draggingSession: session, endedAt: .zero, dragOperation: .move)
+        if freezeAt == "unfrozen" {
+            #expect(tabBar.displayedTabsForTesting.map(\.id) == order)
+            #expect(tabBar.orderedTabIDsForTesting == order)
+            #expect(tabBar.selectedTabIDsInOrderForTesting == [firstTab.id])
+            #expect(tabBar.activeTabIDForTesting == firstTab.id)
+            #expect(tabBar.dataReloadGenerationForTesting > reloads)
+            #expect(coordinator.activeWindowForTesting?.firstResponder === firstSurface)
+        } else {
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == beforeCompletion)
+        }
+        #expect(!tabBar.hasPendingReorderForTesting)
+        #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
+        #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        coordinator.freezeTerminalControlForApplicationTermination()
+        for afterTeardown in [false, true] {
+            if afterTeardown { coordinator.prepareForApplicationTermination() }
+            let beforeReplay = NativeCallbackPresentationSnapshot(coordinator)
+            let closes = bridge.successfulSurfaceCloseObservationsForTesting
+            tabBar.collectionView(
+                collectionView, draggingSession: session, endedAt: .zero, dragOperation: .move)
+            let lateAccepted = tabBar.collectionView(
+                collectionView, acceptDrop: drag, indexPath: IndexPath(item: 0, section: 0),
+                dropOperation: .before)
+            #expect(!lateAccepted)
+            var proposedIndexPath = IndexPath(item: 0, section: 0) as NSIndexPath
+            var dropOperation = NSCollectionView.DropOperation.on
+            let validation = tabBar.collectionView(
+                collectionView, validateDrop: drag, proposedIndexPath: &proposedIndexPath,
+                dropOperation: &dropOperation)
+            #expect(validation.isEmpty)
+            #expect(dropOperation == .on)
+            tabBar.collectionView(
+                collectionView, draggingSession: session, willBeginAt: .zero, forItemsAt: [])
+            tabBar.beginSelectionForTesting(secondTab.id, gesture: .click)
+            tabBar.finishSelectionForTesting()
+            tabBar.beginRenameForTesting(secondTab.id)
+            #expect(tabBar.contextMenu(for: secondTab.id).items.isEmpty)
+            #expect(!tabBar.hasPendingReorderForTesting)
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == beforeReplay)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting == closes)
+            #expect(bridge.activeSurfaceCount == (afterTeardown ? 0 : 2))
+            #expect(coordinator.workspaceStoreForTesting == expected)
+            #expect(state.snapshots == expectedSnapshots)
+        }
+        #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["begin", "reload", "commit"])
+    func nativeRenameAndSelectionStopAtReentrantCallbackRetirement(
+        mode: PresentationMode, boundary: String
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let state = NativeCallbackFreezeState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { state.record($0) })
+        state.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let tab = activeTab(of: coordinator)
+        let tabBar = coordinator.workspaceViewControllerForTesting.tabBarViewController
+        let item = tabBar.tabItemForTesting(at: 0)
+        if boundary != "commit" {
+            let editingChanged = try #require(tabBar.onRenameEditingChanged)
+            tabBar.onRenameEditingChanged = { isEditing in
+                editingChanged(isEditing)
+                if isEditing == (boundary == "begin") { state.freeze() }
+            }
+        }
+        var expected = coordinator.workspaceStoreForTesting
+        state.snapshots.removeAll()
+        tabBar.beginRenameForTesting(tab.id)
+        if boundary == "begin" {
+            #expect(!item.isRenamingForTesting)
+            #expect(tabBar.editedTabIDForTesting == tab.id)
+        } else {
+            try #require(item.isRenamingForTesting)
+            if boundary == "reload" {
+                // WHY: reloadCollectionView ends native editing before it can safely reload.
+                tabBar.finishSelectionForTesting()
+            } else {
+                let editor = try #require(item.renameEditorForTesting)
+                editor.stringValue = "Accepted native rename"
+                state.freezeOnCommit = true
+                try expected.setTitleOverride(editor.stringValue, for: tab.id)
+                item.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+            }
+        }
+        let frozen = try #require(state.presentationAtFreeze)
+        #expect(!state.freezeChangedPresentation)
+        #expect(NativeCallbackPresentationSnapshot(coordinator) == frozen)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        let expectedSnapshots: [WorkspaceStore] = boundary == "commit" ? [expected] : []
+        #expect(state.snapshots == expectedSnapshots)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        tabBar.finishSelectionForTesting()
+        tabBar.beginRenameForTesting(tab.id)
+        item.endRenameEditingForTesting()
+        #expect(NativeCallbackPresentationSnapshot(coordinator) == frozen)
+        // WHY: A begin interrupted before item.beginRenaming still needs explicit cleanup.
+        coordinator.prepareForApplicationTermination()
+        #expect(tabBar.editedTabIDForTesting == nil)
+        #expect(!item.isRenamingForTesting)
+        #expect(!coordinator.isTabRenameEditingForTesting)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+        #expect(bridge.activeSurfaceCount == 0)
+        let tornDown = NativeCallbackPresentationSnapshot(coordinator)
+        item.endRenameEditingForTesting()
+        tabBar.finishSelectionForTesting()
+        #expect(NativeCallbackPresentationSnapshot(coordinator) == tornDown)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == expectedSnapshots)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["return", "escape", "endEditing"])
+    func fullyActiveNativeRenameDefersAutomaticCompletionUntilExplicitTeardown(
+        mode: PresentationMode, completion: String
+    ) throws {
+        for freezeBeforeCompletion in [false, true] {
+            let bridge = try GhosttyBridge()
+            defer { bridge.shutdown() }
+            let state = NativeCallbackFreezeState()
+            let coordinator = WindowCoordinator(
+                ghosttyBridge: bridge, presentationMode: mode,
+                surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+                persistWorkspaceStore: { state.record($0) })
+            defer { coordinator.prepareForApplicationTermination() }
+            try coordinator.start()
+            if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+            let presentation = coordinator.workspaceViewControllerForTesting
+            let tabBar = presentation.tabBarViewController
+            let window = try #require(coordinator.activeWindowForTesting)
+            window.contentView?.layoutSubtreeIfNeeded()
+            let tab = activeTab(of: coordinator)
+            let surface = try #require(coordinator.activeSurfaceForTesting)
+            let bindings = surface.bindingActionObservationsForTesting
+            let item = tabBar.tabItemForTesting(at: 0)
+            try #require(item.view.window === window)
+            let commit = try #require(tabBar.onRenameTab)
+            let editingChanged = try #require(tabBar.onRenameEditingChanged)
+            tabBar.onRenameTab = { id, title in
+                state.renameCommits.append(title)
+                commit(id, title)
+            }
+            tabBar.onRenameEditingChanged = { isEditing in
+                state.renameEditingStates.append(isEditing)
+                editingChanged(isEditing)
+            }
+            tabBar.beginRenameForTesting(tab.id)
+            let editor = try #require(item.renameEditorForTesting)
+            let fieldEditor = try #require(editor.currentEditor())
+            try #require(window.firstResponder === fieldEditor)
+            try #require(item.isRenamingForTesting)
+            try #require(!editor.isHidden)
+            try #require(item.visibleTitleForTesting == nil)
+            try #require(tabBar.editedTabIDForTesting == tab.id)
+            try #require(coordinator.isTabRenameEditingForTesting)
+            let title = "Native active rename"
+            editor.stringValue = title
+            fieldEditor.string = title
+            fieldEditor.selectedRange = NSRange(2..<6)
+            let selectedRange = fieldEditor.selectedRange
+            let displayedTitle = item.latestDisplayedTitleForTesting
+            let transientInteractions = coordinator.quakeTransientInteractionCountForTesting
+            let active = NativeCallbackPresentationSnapshot(coordinator)
+            var expected = coordinator.workspaceStoreForTesting
+            state.snapshots.removeAll()
+
+            // WHY: Retain the real item/editor and deliver at the native caller, not its parent
+            // callbacks. Each completion gets its own fully active session and unfrozen control.
+            let deliverCompletion: @MainActor () -> Void = {
+                switch completion {
+                case "return":
+                    item.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+                case "escape":
+                    item.invokeRenameCommandForTesting(#selector(NSResponder.cancelOperation(_:)))
+                default:
+                    item.endRenameEditingForTesting()
+                }
+            }
+            @MainActor func expectActiveRenameUnchanged() {
+                #expect(NativeCallbackPresentationSnapshot(coordinator) == active)
+                #expect(item.isRenamingForTesting)
+                #expect(!editor.isHidden)
+                #expect(editor.stringValue == title)
+                #expect(fieldEditor.string == title)
+                #expect(fieldEditor.selectedRange == selectedRange)
+                #expect(editor.currentEditor() === fieldEditor)
+                #expect(window.firstResponder === fieldEditor)
+                #expect(item.visibleTitleForTesting == nil)
+                #expect(item.latestDisplayedTitleForTesting == displayedTitle)
+                #expect(coordinator.isTabRenameEditingForTesting)
+                #expect(
+                    coordinator.quakeTransientInteractionCountForTesting == transientInteractions)
+                #expect(state.renameCommits.isEmpty)
+                #expect(state.renameEditingStates == [true])
+                #expect(state.snapshots.isEmpty)
+                #expect(surface.bindingActionObservationsForTesting == bindings)
+                #expect(bridge.activeSurfaceCount == 1)
+                #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+            }
+
+            if freezeBeforeCompletion {
+                coordinator.freezeTerminalControlForApplicationTermination()
+                expectActiveRenameUnchanged()
+                for _ in 0..<2 {
+                    deliverCompletion()
+                    expectActiveRenameUnchanged()
+                }
+            } else {
+                if completion != "escape" {
+                    try expected.setTitleOverride(title, for: tab.id)
+                }
+                deliverCompletion()
+                #expect(!item.isRenamingForTesting)
+                #expect(editor.isHidden)
+                #expect(item.visibleTitleForTesting != nil)
+                #expect(editor.currentEditor() == nil)
+                #expect(window.firstResponder !== fieldEditor)
+                #expect(tabBar.editedTabIDForTesting == nil)
+                #expect(!coordinator.isTabRenameEditingForTesting)
+                #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+                #expect(state.renameCommits == (completion == "escape" ? [] : [title]))
+                #expect(state.renameEditingStates == [true, false])
+                let finished = NativeCallbackPresentationSnapshot(coordinator)
+                deliverCompletion()
+                item.endRenameEditingForTesting()
+                #expect(NativeCallbackPresentationSnapshot(coordinator) == finished)
+                #expect(state.renameCommits == (completion == "escape" ? [] : [title]))
+                #expect(state.renameEditingStates == [true, false])
+                coordinator.freezeTerminalControlForApplicationTermination()
+            }
+            let expectedSnapshots: [WorkspaceStore] =
+                !freezeBeforeCompletion && completion != "escape" ? [expected] : []
+            #expect(coordinator.workspaceStoreForTesting == expected)
+            #expect(state.snapshots == expectedSnapshots)
+            #expect(bridge.activeSurfaceCount == 1)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+
+            coordinator.prepareForApplicationTermination()
+            #expect(!item.isRenamingForTesting)
+            #expect(editor.isHidden)
+            #expect(item.visibleTitleForTesting != nil)
+            #expect(editor.currentEditor() == nil)
+            #expect(window.firstResponder !== fieldEditor)
+            #expect(tabBar.editedTabIDForTesting == nil)
+            #expect(!coordinator.isTabRenameEditingForTesting)
+            #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+            #expect(state.renameEditingStates == [true, false])
+            #expect(bridge.activeSurfaceCount == 0)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting == [surface.paneID])
+            #expect(coordinator.surfaceIDsForTesting.isEmpty)
+            #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+            let tornDown = NativeCallbackPresentationSnapshot(coordinator)
+            let editorText = editor.stringValue
+            let visibleTitle = item.visibleTitleForTesting
+            let commits = state.renameCommits
+            // WHY: Replay every automatic route against the retained, explicitly ended session.
+            item.invokeRenameCommandForTesting(#selector(NSResponder.insertNewline(_:)))
+            item.invokeRenameCommandForTesting(#selector(NSResponder.cancelOperation(_:)))
+            item.endRenameEditingForTesting()
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == tornDown)
+            #expect(!item.isRenamingForTesting)
+            #expect(editor.isHidden)
+            #expect(editor.stringValue == editorText)
+            #expect(item.visibleTitleForTesting == visibleTitle)
+            #expect(editor.currentEditor() == nil)
+            #expect(window.firstResponder !== fieldEditor)
+            #expect(state.renameCommits == commits)
+            #expect(state.renameEditingStates == [true, false])
+            #expect(coordinator.workspaceStoreForTesting == expected)
+            #expect(state.snapshots == expectedSnapshots)
+            #expect(surface.bindingActionObservationsForTesting == bindings)
+            #expect(bridge.activeSurfaceCount == 0)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting == [surface.paneID])
+        }
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func workspaceDeletionStopsWhenNativeEndEditingPersistsRenameAndFreezes(
+        mode: PresentationMode, freezeDuringRename: Bool
+    ) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Delete-Rename-Freeze-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appending(path: "config")
+        // WHY: The selected split and both workspaces use controlled, real runtimes.
+        try Data("command = /bin/cat\n".utf8).write(to: configURL)
+        let bridge = try GhosttyBridge(configURL: configURL)
+        defer { bridge.shutdown() }
+        let selected = Workspace(name: "Selected")
+        let other = Workspace(name: "Other")
+        let store = try WorkspaceStore(
+            workspaces: [selected, other], activeWorkspaceID: selected.id)
+        let state = NativeCallbackFreezeState()
+        let deletion = NativeRenameDeletionState()
+        let title = "Accepted rename during workspace deletion"
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: "/tmp", command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { snapshot in
+                if deletion.isInRenameCallback {
+                    #expect(deletion.isResolvingDeletion)
+                    #expect(state.renameCommits == [title])
+                    deletion.persistedRenameDuringDeletion = deletion.isResolvingDeletion
+                }
+                if state.freezeOnCommit { #expect(deletion.isInRenameCallback) }
+                state.record(snapshot)
+            },
+            workspaceDeletionConfirmationPresenter: { confirmation, completion in
+                deletion.confirmations.append(confirmation)
+                deletion.completions.append(completion)
+            })
+        state.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        try coordinator.createShellTab(in: other.id)
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let tabBar = presentation.tabBarViewController
+        let window = try #require(coordinator.activeWindowForTesting)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaces = try coordinator.surfaceIDsForTesting.map {
+            try #require(coordinator.surfaceForTesting(id: $0))
+        }
+        try #require(surfaces.count == 3)
+        let tab = activeTab(of: coordinator)
+        try #require(tab.root.leaves.count == 2)
+        let backgroundPane = try #require(
+            coordinator.workspaceStoreForTesting.workspace(id: other.id)?.tabs.first?.activePaneID)
+        let indexPath = IndexPath(item: 0, section: 0)
+        let deadline = ContinuousClock.now + .seconds(2)
+        // WHY: Require an actually installed collection item, not the testing fallback item.
+        // Drain deferred startup/Quake focus before creating the native field editor.
+        repeat {
+            window.contentView?.layoutSubtreeIfNeeded()
+            if window.isVisible, window.firstResponder === surface,
+                tabBar.collectionViewForTesting.item(at: indexPath)?.view.window === window,
+                surfaces.allSatisfy({ $0.isReady })
+            {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        } while ContinuousClock.now < deadline
+        try #require(window.isVisible)
+        try #require(window.firstResponder === surface)
+        try #require(surfaces.allSatisfy { $0.isReady })
+        let nativeItem = try #require(tabBar.collectionViewForTesting.item(at: indexPath))
+        let item = tabBar.tabItemForTesting(at: 0)
+        try #require(item === nativeItem)
+        try #require(item.view.window === window)
+        let rename = try #require(tabBar.onRenameTab)
+        let editingChanged = try #require(tabBar.onRenameEditingChanged)
+        tabBar.onRenameTab = { id, value in
+            deletion.isInRenameCallback = true
+            defer { deletion.isInRenameCallback = false }
+            state.renameCommits.append(value)
+            rename(id, value)
+        }
+        tabBar.onRenameEditingChanged = { isEditing in
+            state.renameEditingStates.append(isEditing)
+            editingChanged(isEditing)
+        }
+        tabBar.beginRenameForTesting(tab.id)
+        let editor = try #require(item.renameEditorForTesting)
+        let editorDeadline = ContinuousClock.now + .seconds(2)
+        while editor.currentEditor() == nil, ContinuousClock.now < editorDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let fieldEditor = try #require(editor.currentEditor())
+        try #require(window.firstResponder === fieldEditor)
+        try #require(item.isRenamingForTesting)
+        try #require(!editor.isHidden)
+        try #require(tabBar.editedTabIDForTesting == tab.id)
+        try #require(coordinator.isTabRenameEditingForTesting)
+        editor.stringValue = title
+        fieldEditor.string = title
+        fieldEditor.selectedRange = NSRange(2..<6)
+        let before = NativeCallbackPresentationSnapshot(coordinator)
+        let bindingActions = surfaces.map(\.bindingActionObservationsForTesting)
+        var renamed = coordinator.workspaceStoreForTesting
+        try renamed.setTitleOverride(title, for: tab.id)
+        state.snapshots.removeAll()
+        let requestDeletion = try #require(presentation.onDeleteWorkspace)
+        requestDeletion()
+        try #require(
+            deletion.confirmations == [
+                WorkspaceDeletionConfirmation(
+                    workspaceID: selected.id, workspaceName: selected.name, tabCount: 1,
+                    paneCount: 2)
+            ])
+        try #require(deletion.completions.count == 1)
+        let allowDeletion = try #require(deletion.completions.first)
+        try #require(coordinator.pendingWorkspaceDeletionIDForTesting == selected.id)
+        try #require(window.attachedSheet == nil)
+        try #require(editor.currentEditor() === fieldEditor)
+        try #require(window.firstResponder === fieldEditor)
+        try #require(state.renameCommits.isEmpty)
+        try #require(state.snapshots.isEmpty)
+        try #require(state.presentationAtFreeze == nil)
+        try #require(NativeCallbackPresentationSnapshot(coordinator) == before)
+
+        // WHY: No manual end-edit or freeze here. The real deletion callback must reach
+        // detach's makeFirstResponder(nil), native end-edit, rename commit, then persistence.
+        state.freezeOnCommit = freezeDuringRename
+        deletion.isResolvingDeletion = true
+        allowDeletion(true)
+        deletion.isResolvingDeletion = false
+
+        try #require(deletion.persistedRenameDuringDeletion)
+        try #require(state.renameCommits == [title])
+        #expect(coordinator.pendingWorkspaceDeletionIDForTesting == nil)
+        var expected = renamed
+        if freezeDuringRename {
+            let frozen = try #require(state.presentationAtFreeze)
+            let returned = NativeCallbackPresentationSnapshot(coordinator)
+            #expect(!state.freezeChangedPresentation)
+            #expect(frozen.model == renamed)
+            #expect(returned.model == frozen.model)
+            #expect(returned.persistenceModel == frozen.persistenceModel)
+            #expect(returned.selectionGeneration == before.selectionGeneration)
+            #expect(returned.hosted == before.hosted)
+            #expect(returned.rendered == before.rendered)
+            #expect(returned.splitHost == before.splitHost)
+            #expect(returned.surfaces == before.surfaces)
+            #expect(returned.surfaceHosts == before.surfaceHosts)
+            #expect(returned.surfaceWindows == before.surfaceWindows)
+            #expect(returned.refreshCount == frozen.refreshCount)
+            #expect(returned.statusRefreshCount == frozen.statusRefreshCount)
+            #expect(returned.reloadGeneration == frozen.reloadGeneration)
+            #expect(returned.displayedTabs == frozen.displayedTabs)
+            #expect(returned.displayedTitles == frozen.displayedTitles)
+            #expect(bridge.activeSurfaceCount == 3)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+            #expect(surfaces.map(\.bindingActionObservationsForTesting) == bindingActions)
+            #expect(state.snapshots == [renamed])
+            // WHY: The AppKit responder call began BEFORE freeze and may finish unwinding.
+            // Compare responders only after that boundary returns, not to the in-call snapshot.
+            allowDeletion(true)
+            requestDeletion()
+            item.endRenameEditingForTesting()
+            coordinator.focusActivePaneForTesting()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            #expect(NativeCallbackPresentationSnapshot(coordinator) == returned)
+            #expect(state.snapshots == [renamed])
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        } else {
+            _ = try expected.deleteWorkspace(selected.id)
+            #expect(state.presentationAtFreeze == nil)
+            #expect(state.snapshots == [renamed, expected])
+            #expect(coordinator.surfaceIDsForTesting == [backgroundPane])
+            #expect(bridge.activeSurfaceCount == 1)
+            #expect(
+                Set(bridge.successfulSurfaceCloseObservationsForTesting) == Set(tab.root.leaves))
+        }
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        let snapshots = state.snapshots
+        coordinator.prepareForApplicationTermination()
+        coordinator.prepareForApplicationTermination()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+        #expect(
+            Set(bridge.successfulSurfaceCloseObservationsForTesting) == Set(surfaces.map(\.paneID)))
+        #expect(!item.isRenamingForTesting)
+        #expect(editor.currentEditor() == nil)
+        #expect(!coordinator.isTabRenameEditingForTesting)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+        #expect(state.renameCommits == [title])
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(state.snapshots == snapshots)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func retainedWorkspaceDeletionRequestCannotPresentOrBecomePendingAfterFreeze(
+        mode: PresentationMode, freezeBeforeRequest: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let selected = Workspace(name: "Selected")
+        let other = Workspace(name: "Other")
+        let store = try WorkspaceStore(
+            workspaces: [selected, other], activeWorkspaceID: selected.id)
+        let persistence = WorkspacePersistenceRecorder()
+        var confirmations: [WorkspaceDeletionConfirmation] = []
+        var completions: [@MainActor (Bool) -> Void] = []
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            workspaceDeletionConfirmationPresenter: { confirmation, completion in
+                confirmations.append(confirmation)
+                completions.append(completion)
+            })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let request = try #require(coordinator.workspaceViewControllerForTesting.onDeleteWorkspace)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let responder = window.firstResponder
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let epoch = coordinator.selectionGenerationForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        persistence.reset()
+        if freezeBeforeRequest { coordinator.freezeTerminalControlForApplicationTermination() }
+
+        for attempt in 1...2 {
+            request()
+            if freezeBeforeRequest {
+                #expect(confirmations.isEmpty)
+                #expect(completions.isEmpty)
+            } else {
+                #expect(confirmations.count == attempt)
+                #expect(confirmations.last?.workspaceID == selected.id)
+                #expect(coordinator.pendingWorkspaceDeletionIDForTesting == selected.id)
+                let completion = try #require(completions.last)
+                completion(false)
+            }
+            #expect(coordinator.pendingWorkspaceDeletionIDForTesting == nil)
+        }
+        #expect(window.attachedSheet == nil)
+        #expect(Set(NSApp.windows.map(ObjectIdentifier.init)) == windows)
+        #expect(window.firstResponder === responder)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.workspaceStoreForPersistence == snapshot)
+        #expect(coordinator.selectionGenerationForTesting == epoch)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(coordinator.surfaceIDsForTesting == [surface.paneID])
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func queuedAndLateConfirmationsFailClosedAtActualPresenterBoundary(
+        mode: PresentationMode, freezeBeforeResolution: Bool
+    ) throws {
+        let config = try WindowCloseConfig(confirmCloseSurface: "always")
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        var presentations: [GhosttyConfirmationPresentation] = []
+        var completions: [GhosttyConfirmationQueue.Completion] = []
+        var dismissCount = 0
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            confirmationPresenter: { presentation, completion in
+                presentations.append(presentation)
+                completions.append(completion)
+                return { dismissCount += 1 }
+            })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let first = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let second = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let third = try #require(coordinator.activeSurfaceForTesting)
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let close = try #require(coordinator.workspaceViewControllerForTesting.onCloseTab)
+        let clipboard = try #require(bridge.clipboardConfirmationHandler)
+        let request = GhosttyClipboardConfirmationRequest(
+            id: UUID(), paneID: third.paneID, kind: .paste, location: .standard,
+            contents: [GhosttyClipboardContent(mime: "text/plain", data: "bounded\nfixture")])
+        let closeResponses = Mutex<[GhosttyClipboardConfirmationResponse]>([])
+        let clipboardResponses = Mutex<[GhosttyClipboardConfirmationResponse]>([])
+        coordinator.enqueueCloseConfirmationForTesting(first.paneID)
+        coordinator.enqueueCloseConfirmationForTesting(second.paneID) { response in
+            closeResponses.withLock { $0.append(response) }
+        }
+        clipboard(
+            .request(
+                request,
+                response: { response in
+                    clipboardResponses.withLock { $0.append(response) }
+                }))
+        try #require(presentations == [.close(first.paneID)])
+        try #require(coordinator.pendingConfirmationCountForTesting == 2)
+        let resolveFirst = try #require(completions.first)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let host = try #require(third.superview)
+        let responder = window.firstResponder
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let epoch = coordinator.selectionGenerationForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let hosted = coordinator.workspaceViewControllerForTesting
+            .hostedSurfaceIdentifiersForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        if freezeBeforeResolution {
+            coordinator.freezeTerminalControlForApplicationTermination()
+            #expect(dismissCount == 0)
+            #expect(coordinator.activeConfirmationForTesting == .close(first.paneID))
+            #expect(closeResponses.withLock { $0.isEmpty })
+            #expect(clipboardResponses.withLock { $0.isEmpty })
+            let lateResponses = Mutex<[GhosttyClipboardConfirmationResponse]>([])
+            clipboard(
+                .request(
+                    request,
+                    response: { response in
+                        lateResponses.withLock { $0.append(response) }
+                    }))
+            // WHY: A late close must not cancel the queued clipboard or preempt an existing sheet;
+            // a late clipboard must complete immediately, even while another request is active.
+            close(activeTab(of: coordinator).id)
+            coordinator.requestCloseActivePane()
+            #expect(lateResponses.withLock { $0 } == [.deny])
+            #expect(clipboardResponses.withLock { $0.isEmpty })
+            #expect(coordinator.pendingConfirmationCountForTesting == 2)
+            #expect(coordinator.activeConfirmationForTesting == .close(first.paneID))
+            #expect(dismissCount == 0)
+        }
+        // WHY: Drain through the production queue callback, not a duplicate presenter guard.
+        // Frozen pending requests must each receive exactly one synchronous denial.
+        resolveFirst(.deny)
+        if freezeBeforeResolution {
+            #expect(presentations == [.close(first.paneID)])
+        } else {
+            try #require(presentations == [.close(first.paneID), .close(second.paneID)])
+            let resolveSecond = try #require(completions.last)
+            resolveSecond(.deny)
+            try #require(presentations.last == .clipboard(request))
+            let resolveClipboard = try #require(completions.last)
+            resolveClipboard(.deny)
+            #expect(presentations.count == 3)
+        }
+        #expect(closeResponses.withLock { $0 } == [.deny])
+        #expect(clipboardResponses.withLock { $0 } == [.deny])
+        #expect(coordinator.activeConfirmationForTesting == nil)
+        #expect(coordinator.pendingConfirmationCountForTesting == 0)
+        if freezeBeforeResolution {
+            let lateCloseResponses = Mutex<[GhosttyClipboardConfirmationResponse]>([])
+            coordinator.enqueueCloseConfirmationForTesting(second.paneID) { response in
+                lateCloseResponses.withLock { $0.append(response) }
+            }
+            #expect(lateCloseResponses.withLock { $0 } == [.deny])
+            #expect(presentations.count == 1)
+            #expect(coordinator.activeConfirmationForTesting == nil)
+            #expect(coordinator.pendingConfirmationCountForTesting == 0)
+        }
+        resolveFirst(.allow)
+        #expect(dismissCount == 0)
+        #expect(window.attachedSheet == nil)
+        #expect(Set(NSApp.windows.map(ObjectIdentifier.init)) == windows)
+        #expect(window.firstResponder === responder)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.workspaceStoreForPersistence == snapshot)
+        #expect(coordinator.selectionGenerationForTesting == epoch)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(
+            coordinator.workspaceViewControllerForTesting.hostedSurfaceIdentifiersForTesting
+                == hosted)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.surfaceForTesting(id: first.paneID) === first)
+        #expect(coordinator.surfaceForTesting(id: second.paneID) === second)
+        #expect(coordinator.activeSurfaceForTesting === third)
+        #expect(third.superview === host)
+        #expect(third.window === window)
+        #expect(bridge.activeSurfaceCount == 3)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func retainedRenameAndReorderCompletionsCannotRestoreFocusOrPersistAfterFreeze(
+        mode: PresentationMode, freezeBeforeCompletion: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let rename = try #require(presentation.onRenameTab)
+        let editingChanged = try #require(presentation.onRenameEditingChanged)
+        let finishReorder = try #require(presentation.onFinishReorderTabs)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let tabID = activeTab(of: coordinator).id
+        // WHY: Exercise retained production completions without asserting native editor teardown focus.
+        editingChanged(true)
+        try #require(coordinator.isTabRenameEditingForTesting)
+        try #require(window.makeFirstResponder(nil))
+        let responder = window.firstResponder
+        try #require(responder !== surface)
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        if freezeBeforeCompletion {
+            coordinator.freezeTerminalControlForApplicationTermination()
+        }
+        rename(tabID, "Late rename")
+        editingChanged(false)
+        finishReorder()
+
+        #expect(!coordinator.isTabRenameEditingForTesting)
+        #expect(coordinator.quakeTransientInteractionCountForTesting == 0)
+        if freezeBeforeCompletion {
+            #expect(window.firstResponder === responder)
+            #expect(coordinator.workspaceStoreForTesting == model)
+            #expect(coordinator.workspaceStoreForPersistence == snapshot)
+            #expect(persistence.snapshots.isEmpty)
+            #expect(
+                coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        } else {
+            #expect(window.firstResponder === surface)
+            #expect(
+                coordinator.workspaceStoreForTesting.tab(id: tabID)?.titleOverride == "Late rename")
+            #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        }
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(coordinator.surfaceIDsForTesting == [surface.paneID])
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func retainedTabActivationAndReorderRespectSharedTerminationBoundaries(
+        mode: PresentationMode, freezeBeforeCallback: Bool
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let firstSurface = try #require(coordinator.activeSurfaceForTesting)
+        coordinator.createNewTab()
+        let secondSurface = try #require(coordinator.activeSurfaceForTesting)
+        try #require(firstSurface !== secondSurface)
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let activate = try #require(presentation.onActivateTab)
+        let reorder = try #require(presentation.onReorderTabs)
+        let finishReorder = try #require(presentation.onFinishReorderTabs)
+        let window = try #require(coordinator.activeWindowForTesting)
+        if freezeBeforeCallback {
+            coordinator.freezeTerminalControlForApplicationTermination()
+        }
+
+        for isReorder in [false, true] {
+            let model = coordinator.workspaceStoreForTesting
+            let snapshot = coordinator.workspaceStoreForPersistence
+            let workspace = try #require(model.workspace(id: model.activeWorkspaceID))
+            try #require(workspace.tabs.count == 2)
+            let selected = activeTab(of: coordinator)
+            let target = try #require(workspace.tabs.first { $0.id != selected.id })
+            let order = Array(workspace.tabs.map(\.id).reversed())
+            try #require(order != workspace.tabs.map(\.id))
+            let surface = try #require(coordinator.activeSurfaceForTesting)
+            let host = try #require(surface.superview)
+            let firstHost = firstSurface.superview
+            let secondHost = secondSurface.superview
+            let responder = window.firstResponder
+            let surfaceIDs = coordinator.surfaceIDsForTesting
+            let epoch = coordinator.selectionGenerationForTesting
+            let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+            let statusCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+            let hosted = presentation.hostedSurfaceIdentifiersForTesting
+            let rendered = presentation.renderedSurfaceIdentifiersForTesting
+            let splitHost = presentation.splitHostingControllerIdentifierForTesting
+            let displayedTabs = presentation.tabBarViewController.displayedTabsForTesting.map(\.id)
+            let displayedActiveTab = presentation.tabBarViewController.activeTabIDForTesting
+            let reloadGeneration = presentation.tabBarViewController.dataReloadGenerationForTesting
+            let closeObservations = bridge.successfulSurfaceCloseObservationsForTesting
+            let bindingActions = surface.bindingActionObservationsForTesting
+            persistence.reset()
+
+            // WHY: Retain and invoke the installed closures with real selection/order changes,
+            // not a helper that duplicates their guards or a single-tab no-op.
+            if isReorder {
+                #expect(reorder(order, target.id) == !freezeBeforeCallback)
+            } else {
+                activate(target.id)
+            }
+            if freezeBeforeCallback {
+                #expect(coordinator.workspaceStoreForTesting == model)
+                #expect(coordinator.workspaceStoreForPersistence == snapshot)
+                #expect(coordinator.selectionGenerationForTesting == epoch)
+                #expect(activeTab(of: coordinator).id == selected.id)
+                #expect(activeTab(of: coordinator).activePaneID == selected.activePaneID)
+                #expect(coordinator.activeSurfaceForTesting === surface)
+                #expect(window.firstResponder === responder)
+                #expect(surface.superview === host)
+                #expect(firstSurface.superview === firstHost)
+                #expect(secondSurface.superview === secondHost)
+                #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+                #expect(presentation.renderedSurfaceIdentifiersForTesting == rendered)
+                #expect(presentation.splitHostingControllerIdentifierForTesting == splitHost)
+                #expect(
+                    presentation.tabBarViewController.displayedTabsForTesting.map(\.id)
+                        == displayedTabs)
+                #expect(
+                    presentation.tabBarViewController.activeTabIDForTesting == displayedActiveTab)
+                #expect(
+                    presentation.tabBarViewController.dataReloadGenerationForTesting
+                        == reloadGeneration)
+                #expect(
+                    coordinator.refreshWorkspacePresentationInvocationCountForTesting
+                        == refreshCount)
+                #expect(
+                    coordinator.refreshWorkspaceStatusesInvocationCountForTesting == statusCount)
+                #expect(surface.bindingActionObservationsForTesting == bindingActions)
+                #expect(persistence.snapshots.isEmpty)
+            } else {
+                var expected = model
+                if isReorder { try expected.reorderTabs(order, in: workspace.id) }
+                try expected.activateTab(target.id, in: workspace.id)
+                #expect(coordinator.workspaceStoreForTesting == expected)
+                #expect(coordinator.selectionGenerationForTesting == epoch + 1)
+                #expect(activeTab(of: coordinator).id == target.id)
+                #expect(activeTab(of: coordinator).activePaneID == target.activePaneID)
+                #expect(persistence.snapshots == [expected])
+                #expect(
+                    coordinator.refreshWorkspacePresentationInvocationCountForTesting
+                        == refreshCount + (isReorder ? 0 : 1))
+            }
+            if isReorder { finishReorder() }
+            if freezeBeforeCallback {
+                #expect(
+                    coordinator.refreshWorkspacePresentationInvocationCountForTesting
+                        == refreshCount)
+                #expect(window.firstResponder === responder)
+                #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+            } else {
+                #expect(
+                    window.firstResponder === coordinator.surfaceForTesting(id: target.activePaneID)
+                )
+                #expect(
+                    coordinator.refreshWorkspacePresentationInvocationCountForTesting
+                        == refreshCount + 1)
+            }
+            #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+            #expect(coordinator.surfaceForTesting(id: firstSurface.paneID) === firstSurface)
+            #expect(coordinator.surfaceForTesting(id: secondSurface.paneID) === secondSurface)
+            #expect(bridge.activeSurfaceCount == 2)
+            #expect(bridge.successfulSurfaceCloseObservationsForTesting == closeObservations)
+        }
+
+        let finalModel = coordinator.workspaceStoreForTesting
+        persistence.reset()
+        coordinator.prepareForApplicationTermination()
+        coordinator.prepareForApplicationTermination()
+        #expect(coordinator.workspaceStoreForTesting == finalModel)
+        #expect(coordinator.surfaceIDsForTesting.isEmpty)
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting.isEmpty)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: ["show", "hide", "deferred"])
+    func coordinatorFreezeRetiresActualQuakeCallbacksBeforeAndAfterTeardown(work: String) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let driver = TerminationQuakeDriver()
+        let window = TerminationQuakeWindow()
+        let persistence = WorkspacePersistenceRecorder()
+        let quake = QuakeWindowController(
+            window: window,
+            visibleFrames: { [NSRect(x: 0, y: 20, width: 1_200, height: 780)] },
+            cursorLocation: { NSPoint(x: 500, y: 500) },
+            animator: driver, animationDeferrer: driver, scheduler: driver,
+            isFocusLossSuppressed: { false }, priorApplicationProvider: { driver },
+            persistQuakeHeight: { driver.persistedHeights.append($0) })
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: .quake,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            quakeWindowController: quake)
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        try #require(surface.window === window)
+        // WHY: Positive controls use the same real controller completions, not replica logic.
+        try #require(driver.deferred.count == 1)
+        driver.deferred[0].action()
+        try #require(driver.animations.count == 1)
+        driver.animations[0].completion()
+        #expect(window.focusCount == 1)
+        try coordinator.requestQuakeVisibilityForTesting(.hidden)
+        try #require(driver.animations.count == 2)
+        driver.animations[1].completion()
+        #expect(!window.isVisible)
+        #expect(driver.activationCount == 1)
+
+        try coordinator.requestQuakeVisibilityForTesting(.shown)
+        try #require(driver.deferred.count == 2)
+        if work != "deferred" {
+            driver.deferred[1].action()
+            try #require(driver.animations.count == 3)
+        }
+        quake.focusDidResignKey()
+        try #require(driver.scheduled.count == 1)
+        if work == "hide" {
+            driver.animations[2].completion()
+            try coordinator.requestQuakeVisibilityForTesting(.hidden)
+            try #require(driver.animations.count == 4)
+        }
+        // WHY: A resize already in flight must not persist geometry after retirement either.
+        quake.windowWillStartLiveResize(
+            Notification(name: NSWindow.willStartLiveResizeNotification, object: window))
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let visibility = quake.requestedVisibility
+        let frame = window.frame
+        let events = window.events
+        let responder = window.firstResponder
+        let hosted = coordinator.workspaceViewControllerForTesting
+            .hostedSurfaceIdentifiersForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let activationCount = driver.activationCount
+        let animationCount = driver.animations.count
+        persistence.reset()
+        try #require(window.isVisible)
+        if work == "deferred" {
+            try #require(driver.deferred.last?.cancellation.isCancelled == false)
+        } else {
+            try #require(driver.animations.last?.cancellation.isCancelled == false)
+        }
+        if work != "hide" {
+            try #require(driver.scheduled.last?.cancellation.isCancelled == false)
+        }
+
+        coordinator.freezeTerminalControlForApplicationTermination()
+        coordinator.freezeTerminalControlForApplicationTermination()
+        #expect(window.events == events)
+        #expect(window.frame == frame)
+        #expect(window.isVisible)
+        #expect(quake.requestedVisibility == visibility)
+        #expect(driver.scheduled.last?.cancellation.isCancelled == true)
+        if work == "deferred" {
+            #expect(driver.deferred.last?.cancellation.isCancelled == true)
+        } else {
+            #expect(driver.animations.last?.cancellation.isCancelled == true)
+        }
+
+        // WHY: Deliberately deliver cancelled callbacks, then deliver the SAME callbacks again
+        // after teardown. Cancellation alone must not be the authority to focus/order windows.
+        for afterTeardown in [false, true] {
+            if afterTeardown { coordinator.prepareForApplicationTermination() }
+            let eventsBeforeDelivery = window.events
+            let responderBeforeDelivery = window.firstResponder
+            for request in driver.deferred { request.action() }
+            for request in driver.animations { request.completion() }
+            for request in driver.scheduled { request.action() }
+            quake.focusDidResignKey()
+            quake.windowDidResize(
+                Notification(name: NSWindow.didResizeNotification, object: window))
+            quake.windowDidEndLiveResize(
+                Notification(name: NSWindow.didEndLiveResizeNotification, object: window))
+            try coordinator.requestQuakeVisibilityForTesting(.hidden)
+            try coordinator.requestQuakeVisibilityForTesting(.shown)
+            quake.deactivateForModeTransition()
+            #expect(window.events == eventsBeforeDelivery)
+            #expect(window.firstResponder === responderBeforeDelivery)
+            #expect(window.frame == frame)
+            #expect(window.isVisible == !afterTeardown)
+            #expect(quake.requestedVisibility == visibility)
+            #expect(driver.animations.count == animationCount)
+            #expect(driver.deferred.count == 2)
+            #expect(driver.scheduled.count == 1)
+            #expect(driver.activationCount == activationCount)
+            #expect(driver.persistedHeights.isEmpty)
+            #expect(coordinator.workspaceStoreForTesting == model)
+            #expect(coordinator.workspaceStoreForPersistence == snapshot)
+            #expect(
+                coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+            #expect(persistence.snapshots.isEmpty)
+            if afterTeardown {
+                #expect(bridge.activeSurfaceCount == 0)
+                #expect(coordinator.surfaceIDsForTesting.isEmpty)
+                #expect(
+                    coordinator.workspaceViewControllerForTesting
+                        .hostedSurfaceIdentifiersForTesting.isEmpty)
+            } else {
+                #expect(window.firstResponder === responder)
+                #expect(surface.superview === host)
+                #expect(coordinator.surfaceForTesting(id: surface.paneID) === surface)
+                #expect(bridge.activeSurfaceCount == 1)
+                #expect(
+                    coordinator.workspaceViewControllerForTesting
+                        .hostedSurfaceIdentifiersForTesting == hosted)
+                #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["broadcast", "move", "reorder"])
+    func acceptedUICommitCannotApplyOrClearSelectionWhenPersistenceFreezes(
+        mode: PresentationMode, action: String
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = Workspace(name: "Source")
+        let destination = Workspace(name: "Destination")
+        let store = try WorkspaceStore(
+            workspaces: [source, destination], activeWorkspaceID: source.id)
+        let persistence = WorkspacePersistenceRecorder()
+        let termination = ReentrantTerminationState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: {
+                persistence.snapshots.append($0)
+                if termination.freezeOnCommit {
+                    termination.coordinator?.freezeTerminalControlForApplicationTermination()
+                }
+            })
+        termination.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        let firstTab = activeTab(of: coordinator)
+        coordinator.createNewTab()
+        let secondTab = activeTab(of: coordinator)
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let tabBar = presentation.tabBarViewController
+        tabBar.beginSelectionForTesting(firstTab.id, gesture: .commandClick)
+        tabBar.finishSelectionForTesting()
+        let selection = tabBar.selectedTabIDsInOrderForTesting
+        try #require(selection.count == 2)
+        let selected = activeTab(of: coordinator)
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let host = try #require(surface.superview)
+        let window = try #require(coordinator.activeWindowForTesting)
+        try #require(window.makeFirstResponder(nil))
+        let responder = window.firstResponder
+        let hosted = presentation.hostedSurfaceIdentifiersForTesting
+        let rendered = presentation.renderedSurfaceIdentifiersForTesting
+        let splitHost = presentation.splitHostingControllerIdentifierForTesting
+        let displayed = tabBar.displayedTabsForTesting
+        let displayedActiveTab = tabBar.activeTabIDForTesting
+        let reloadCount = tabBar.dataReloadGenerationForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let statusCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+        let surfaces = coordinator.surfaceIDsForTesting
+        let bindings = surface.bindingActionObservationsForTesting
+        let epoch = coordinator.selectionGenerationForTesting
+        var expected = coordinator.workspaceStoreForTesting
+        let broadcast = try #require(presentation.onToggleBroadcast)
+        let move = try #require(presentation.onMoveToWorkspace)
+        let reorder = try #require(presentation.onReorderTabs)
+        let finishReorder = try #require(presentation.onFinishReorderTabs)
+        persistence.reset()
+        termination.freezeOnCommit = true
+        switch action {
+        case "broadcast":
+            try expected.setBroadcasting(!selected.isBroadcasting, for: selected.id, in: source.id)
+            broadcast()
+        case "move":
+            try expected.moveTabs([selected.id], from: source.id, to: destination.id)
+            move([selected.id], destination.id)
+        default:
+            let order = [secondTab.id, firstTab.id]
+            try expected.reorderTabs(order, in: source.id)
+            try expected.activateTab(secondTab.id, in: source.id)
+            // WHY: A commit already accepted before freeze must still report true.
+            #expect(reorder(order, secondTab.id))
+            finishReorder()
+        }
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(persistence.snapshots == [expected])
+        #expect(
+            coordinator.selectionGenerationForTesting == epoch + (action == "broadcast" ? 0 : 1))
+        #expect(tabBar.displayedTabsForTesting == displayed)
+        #expect(tabBar.activeTabIDForTesting == displayedActiveTab)
+        #expect(tabBar.selectedTabIDsInOrderForTesting == selection)
+        #expect(tabBar.dataReloadGenerationForTesting == reloadCount)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(presentation.renderedSurfaceIdentifiersForTesting == rendered)
+        #expect(presentation.splitHostingControllerIdentifierForTesting == splitHost)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(coordinator.refreshWorkspaceStatusesInvocationCountForTesting == statusCount)
+        #expect(surface.bindingActionObservationsForTesting == bindings)
+        #expect(window.firstResponder === responder)
+        #expect(surface.superview === host)
+        #expect(coordinator.surfaceIDsForTesting == surfaces)
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        coordinator.prepareForApplicationTermination()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.workspaceStoreForTesting == expected)
+        #expect(persistence.snapshots == [expected])
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake])
+    func freezeDuringCommitPreventsFollowingPresentationAndLatePhysicalMutations(
+        mode: PresentationMode
+    ) throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let persistence = WorkspacePersistenceRecorder()
+        let termination = ReentrantTerminationState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            persistWorkspaceStore: {
+                persistence.snapshots.append($0)
+                if termination.freezeOnCommit {
+                    termination.coordinator?.freezeTerminalControlForApplicationTermination()
+                }
+            })
+        termination.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let firstTabID = activeTab(of: coordinator).id
+        coordinator.createNewTab()
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let activate = try #require(presentation.onActivateTab)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let responder = window.firstResponder
+        let hosted = presentation.hostedSurfaceIdentifiersForTesting
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        persistence.reset()
+        termination.freezeOnCommit = true
+        activate(firstTabID)
+        // WHY: Commit succeeded before freeze; only the shared refresh boundary can stop
+        // the production activation callback from rebuilding presentation on its return.
+        #expect(activeTab(of: coordinator).id == firstTabID)
+        #expect(persistence.snapshots == [coordinator.workspaceStoreForTesting])
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(window.firstResponder === responder)
+        let model = coordinator.workspaceStoreForTesting
+        persistence.reset()
+
+        #expect(throws: CancellationError.self) { try coordinator.createShellTab() }
+        #expect(throws: CancellationError.self) {
+            try coordinator.splitActivePane(axis: .horizontal)
+        }
+        #expect(throws: CancellationError.self) {
+            try coordinator.openConfiguration(at: URL(fileURLWithPath: "/tmp/quicktty-config"))
+        }
+        let normalWindow = try #require(coordinator.windowForTesting)
+        #expect(!coordinator.windowShouldClose(normalWindow))
+        coordinator.windowWillClose(
+            Notification(name: NSWindow.willCloseNotification, object: normalWindow))
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(bridge.activeSurfaceCount == 2)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(window.firstResponder === responder)
+        #expect(persistence.snapshots.isEmpty)
+
+        coordinator.prepareForApplicationTermination()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(persistence.snapshots.isEmpty)
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], [false, true])
+    func pendingCreationCompensatesExactRuntimeWithoutEditingFrozenModel(
+        mode: PresentationMode, createsSplit: Bool
+    ) async throws {
+        let helperPath = ApplicationEnvironment.bundledAgentHelperURL(in: Bundle.main).path
+        try #require(FileManager.default.isExecutableFile(atPath: helperPath))
+        let cwd = URL(fileURLWithPath: "/tmp").resolvingSymlinksInPath().path
+        let controller = try AgentSessionController(
+            socketPath: "/tmp/quicktty-test/agent.sock", helperPath: helperPath,
+            controlSocketPath: "/tmp/quicktty-test/control.sock",
+            tokenGenerator: { Array(repeating: 0x11, count: 32) },
+            onAction: { _ in false })
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let taskID = UUID()
+        let persistence = WorkspacePersistenceRecorder()
+        let termination = ReentrantTerminationState()
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(
+                workingDirectory: cwd, command: "exec /bin/cat"),
+            agentSessionController: controller,
+            managedTaskIDProvider: { taskID },
+            terminalAutomationPermissionPresenter: { _ in .allowed },
+            persistWorkspaceStore: { snapshot in
+                persistence.snapshots.append(snapshot)
+                guard termination.freezeOnCommit, let reference = termination.coordinator,
+                    let task = reference.managedTaskForTesting(taskID: taskID)
+                else { return }
+                termination.created = TerminalAutomationCreatedTaskResponse(
+                    task: task, splitID: reference.managedSplitIDForTesting(taskID: taskID))
+                reference.freezeTerminalControlForApplicationTermination()
+            })
+        termination.coordinator = coordinator
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let origin = try #require(coordinator.activeSurfaceForTesting)
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude"), sessionID: "pending-origin",
+            workingDirectory: cwd, registeredAt: Date(), launchMetadata: [:], restoreState: .active)
+        try #require(
+            coordinator.handleAgentSessionLifecycleAction(
+                .register(paneID: origin.paneID, binding: binding)))
+        let resolved = try #require(
+            coordinator.resolveTerminalAutomationSession(
+                instanceID: controller.instanceID, originPaneID: origin.paneID))
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let hosted = presentation.hostedSurfaceIdentifiersForTesting
+        let responder = coordinator.activeWindowForTesting?.firstResponder
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        let launch = try TerminalControlLaunch(executable: "/bin/cat", arguments: [], cwd: cwd)
+        let operation: TerminalControlRequest.Operation =
+            createsSplit
+            ? .split(
+                anchorPaneID: origin.paneID.rawValue, direction: .right, ratio: 0.5,
+                launch: launch, policy: .keep, focus: false)
+            : .createTab(launch: launch, policy: .keep, focus: false)
+        persistence.reset()
+        termination.freezeOnCommit = true
+        // WHY: Freeze inside the real host commit, before domain acceptance. The domain's
+        // post-await validation must compensate, not strand a surface behind a rejected commit.
+        let response = await coordinator.handleTerminalAutomationRequest(
+            TerminalControlSocketRequest(
+                instanceID: controller.instanceID, paneID: origin.paneID.rawValue,
+                request: try TerminalControlRequest(
+                    operation: operation,
+                    requestID: UUID(uuidString: "00000000-0000-0000-0000-000000001010")!)),
+            context: TerminalControlRequestContext())
+        guard case .failure = response.result else {
+            Issue.record("Frozen pending creation unexpectedly succeeded")
+            return
+        }
+        let exact = try #require(termination.created)
+        let frozenModel = try #require(persistence.snapshots.first)
+        #expect(persistence.snapshots == [frozenModel])
+        #expect(coordinator.workspaceStoreForTesting == frozenModel)
+        #expect(frozenModel.workspaces.flatMap(\.tabs).flatMap(\.root.leaves).count == 2)
+        #expect(coordinator.surfaceIDsForTesting == [origin.paneID])
+        #expect(coordinator.surfaceForTesting(id: origin.paneID) === origin)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(
+            bridge.successfulSurfaceCloseObservationsForTesting == [
+                PaneID(rawValue: exact.task.paneID)
+            ])
+        #expect(presentation.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(coordinator.activeWindowForTesting?.firstResponder === responder)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(coordinator.managedTaskForTesting(taskID: taskID) == nil)
+        let epoch = coordinator.selectionGenerationForTesting
+        #expect(
+            !coordinator.discardManagedTask(
+                TerminalAutomationCreatedTaskResponse(task: exact.task, splitID: UUID()),
+                expectedSession: resolved.identity))
+        #expect(coordinator.discardManagedTask(exact, expectedSession: resolved.identity))
+        #expect(coordinator.discardManagedTask(exact, expectedSession: resolved.identity))
+        #expect(coordinator.selectionGenerationForTesting == epoch)
+        #expect(coordinator.workspaceStoreForTesting == frozenModel)
+        #expect(persistence.snapshots == [frozenModel])
+        coordinator.prepareForApplicationTermination()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.count == 2)
+        #expect(coordinator.workspaceStoreForTesting == frozenModel)
+        #expect(persistence.snapshots == [frozenModel])
+    }
+
+    @Test(arguments: [PresentationMode.normal, .quake], ["pane", "tab", "workspace"])
+    func retainedCloseConfirmationCannotDetachOrMutateDuringTerminationFreeze(
+        mode: PresentationMode, target: String
+    ) throws {
+        let config = try WindowCloseConfig(confirmCloseSurface: "always")
+        defer { config.remove() }
+        let bridge = try GhosttyBridge(configURL: config.url)
+        defer { bridge.shutdown() }
+        let selected = Workspace(name: "Selected")
+        let other = Workspace(name: "Other")
+        let store = try WorkspaceStore(
+            workspaces: [selected, other], activeWorkspaceID: selected.id)
+        let persistence = WorkspacePersistenceRecorder()
+        var closeResponse: GhosttyConfirmationQueue.Completion?
+        var deletionResponse: (@MainActor (Bool) -> Void)?
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge, presentationMode: mode,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            initialWorkspaceStore: store,
+            persistWorkspaceStore: { persistence.snapshots.append($0) },
+            confirmationPresenter: { _, completion in
+                closeResponse = completion
+                return nil
+            },
+            workspaceDeletionConfirmationPresenter: { _, completion in
+                deletionResponse = completion
+            })
+        defer { coordinator.prepareForApplicationTermination() }
+        try coordinator.start()
+        if mode == .quake { try coordinator.requestQuakeVisibilityForTesting(.shown) }
+        let surface = try #require(coordinator.activeSurfaceForTesting)
+        let window = try #require(coordinator.activeWindowForTesting)
+        let host = try #require(surface.superview)
+        switch target {
+        case "pane": coordinator.requestCloseActivePane()
+        case "tab": coordinator.requestCloseActiveTab()
+        default: coordinator.deleteActiveWorkspace()
+        }
+        let model = coordinator.workspaceStoreForTesting
+        let snapshot = coordinator.workspaceStoreForPersistence
+        let responder = window.firstResponder
+        let refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        persistence.reset()
+
+        coordinator.freezeTerminalControlForApplicationTermination()
+        // WHY: Deliver the actual retained confirmation, including an affirmative late result.
+        if target == "workspace" {
+            let response = try #require(deletionResponse)
+            response(true)
+            response(false)
+        } else {
+            let response = try #require(closeResponse)
+            response(.allow)
+            response(.deny)
+        }
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(coordinator.workspaceStoreForPersistence == snapshot)
+        #expect(window.firstResponder === responder)
+        #expect(coordinator.activeSurfaceForTesting === surface)
+        #expect(coordinator.surfaceIDsForTesting == [surface.paneID])
+        #expect(surface.superview === host)
+        #expect(surface.window === window)
+        #expect(bridge.activeSurfaceCount == 1)
+        #expect(bridge.successfulSurfaceCloseObservationsForTesting.isEmpty)
+        #expect(coordinator.refreshWorkspacePresentationInvocationCountForTesting == refreshCount)
+        #expect(persistence.snapshots.isEmpty)
+
+        coordinator.prepareForApplicationTermination()
+        #expect(bridge.activeSurfaceCount == 0)
+        #expect(coordinator.workspaceStoreForTesting == model)
+        #expect(persistence.snapshots.isEmpty)
     }
 
     @Test
@@ -172,6 +3110,7 @@ struct WindowCoordinatorTabLifecycleTests {
         let controller = try AgentSessionController(
             socketPath: "/tmp/quicktty-test/agent.sock",
             helperPath: "/Applications/QuickTTY.app/Contents/Helpers/quicktty",
+            controlSocketPath: "/tmp/quicktty-test/control.sock",
             tokenGenerator: tokens.next,
             onAction: { _ in false }
         )
@@ -197,6 +3136,7 @@ struct WindowCoordinatorTabLifecycleTests {
         )
         #expect(environment["QUICKTTY_PANE_ID"] == paneID.rawValue.uuidString)
         #expect(environment["QUICKTTY_PANE_TOKEN"] == String(repeating: "55", count: 32))
+        #expect(environment["QUICKTTY_CONTROL_SOCKET"] == "/tmp/quicktty-test/control.sock")
         #expect(coordinator.surfaceForTesting(id: paneID)?.paneID == paneID)
         #expect(
             coordinator.workspaceStoreForTesting.tab(id: tab.id)?
@@ -275,13 +3215,15 @@ struct WindowCoordinatorTabLifecycleTests {
     @Test
     func existingCoordinatorWithoutAgentControllerPreservesSurfaceEnvironment() throws {
         let environment = ["CUSTOM": "value", "QUICKTTY_PANE_TOKEN": "caller-owned"]
+        var callerEnvironment = environment
+        callerEnvironment["QUICKTTY_CONTROL_SOCKET"] = "/tmp/caller.sock"
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
         let coordinator = WindowCoordinator(
             ghosttyBridge: bridge,
             surfaceConfiguration: GhosttySurfaceConfiguration(
                 command: "exec /bin/cat",
-                environment: environment
+                environment: callerEnvironment
             )
         )
         defer { coordinator.prepareForBridgeShutdownForTesting() }
@@ -694,6 +3636,7 @@ struct WindowCoordinatorTabLifecycleTests {
         var effects: [TerminalActivityEffect] = []
         coordinator.terminalActivityEffectHandler = { effects.append($0) }
         try coordinator.start()
+        coordinator.setActiveWindowIsKeyForTesting(false)
         let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
         let tab = activeTab(of: coordinator)
         bridge.surfaceProgressHandler?(
@@ -838,6 +3781,7 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(coordinator.terminalActivityStatusesForTesting.isEmpty)
         #expect(bridge.surfaceProgressHandler == nil)
         #expect(bridge.surfaceCommandFinishedHandler == nil)
+        #expect(bridge.surfaceProcessExitedHandler == nil)
     }
 
     @Test
@@ -5507,6 +8451,354 @@ private final class CoordinatorAgentTokenSequence {
     func next() -> [UInt8] {
         values.removeFirst()
     }
+}
+
+@MainActor
+private final class ReentrantTerminationState {
+    weak var coordinator: WindowCoordinator?
+    var freezeOnCommit = false
+    var created: TerminalAutomationCreatedTaskResponse?
+}
+
+@MainActor
+private final class TerminationPresentationCancellation: PresentationCancellation {
+    private(set) var isCancelled = false
+    func cancel() { isCancelled = true }
+}
+
+// WHY: Same manual protocol-driver pattern as PresentationStateMachineTests. Retained
+// callbacks are delivered even after cancel(), so tests exercise controller invalidation.
+@MainActor
+private final class TerminationQuakeDriver: QuakeFrameAnimating, PresentationDeferring,
+    PresentationScheduling, PresentationApplicationActivation
+{
+    struct Animation {
+        let completion: @MainActor () -> Void
+        let cancellation: TerminationPresentationCancellation
+    }
+    struct Scheduled {
+        let action: @MainActor @Sendable () -> Void
+        let cancellation: TerminationPresentationCancellation
+    }
+    private(set) var animations: [Animation] = []
+    private(set) var deferred: [Scheduled] = []
+    private(set) var scheduled: [Scheduled] = []
+    private(set) var activationCount = 0
+    var persistedHeights: [Double] = []
+    var completesAnimationsSynchronously = false
+
+    func animate(
+        window: any QuakeWindowRepresenting, to frame: NSRect,
+        request: QuakeAnimationRequest, duration: TimeInterval,
+        completion: @escaping @MainActor () -> Void
+    ) -> any PresentationCancellation {
+        let cancellation = TerminationPresentationCancellation()
+        animations.append(Animation(completion: completion, cancellation: cancellation))
+        if completesAnimationsSynchronously { completion() }
+        return cancellation
+    }
+
+    func deferAction(
+        _ action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation {
+        let cancellation = TerminationPresentationCancellation()
+        deferred.append(Scheduled(action: action, cancellation: cancellation))
+        return cancellation
+    }
+
+    func schedule(
+        after delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void
+    ) -> any PresentationCancellation {
+        let cancellation = TerminationPresentationCancellation()
+        scheduled.append(Scheduled(action: action, cancellation: cancellation))
+        return cancellation
+    }
+
+    func activate() { activationCount += 1 }
+}
+
+// WHY: Keep a real AppKit content host for coordinator/surface wiring while observing
+// every Quake protocol write, including focus that could otherwise re-show an empty window.
+@MainActor
+private final class TerminationQuakeWindow: NSPanel, QuakeWindowRepresenting {
+    private(set) var events: [String] = []
+    private(set) var focusCount = 0
+    var willInstallContent: (@MainActor (NSViewController?) throws -> Void)?
+    var didInstallContent: (@MainActor (NSViewController?) throws -> Void)?
+    var didOrderOut: (@MainActor () -> Void)?
+
+    init(contentRect: NSRect = .zero) {
+        super.init(
+            contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+    }
+
+    override var canBecomeKey: Bool { true }
+    var presentationFrame: NSRect { frame }
+    var isPresentationVisible: Bool { isVisible }
+    var installedContentViewController: NSViewController? { contentViewController }
+    var hasAttachedSheet: Bool { attachedSheet != nil }
+
+    func setPresentationFrame(_ frame: NSRect) {
+        events.append("frame")
+        setFrame(frame, display: false)
+    }
+    func setPresentationLevel(_ level: QuakePresentationLevel) {
+        events.append("level")
+        self.level = level == .floating ? .floating : .popUpMenu
+    }
+    func installContentViewController(_ controller: NSViewController?) throws {
+        events.append("content")
+        try willInstallContent?(controller)
+        controller?.view.removeFromSuperview()
+        controller?.removeFromParent()
+        contentViewController = controller
+        try didInstallContent?(controller)
+    }
+    func orderFrontForPresentation() {
+        events.append("front")
+        orderFrontRegardless()
+    }
+    func focusForPresentation() {
+        events.append("focus")
+        focusCount += 1
+        makeKeyAndOrderFront(nil)
+    }
+    func orderOutForPresentation() {
+        events.append("out")
+        orderOut(nil)
+        didOrderOut?()
+    }
+}
+
+// WHY: Value-only snapshots keep Swift Testing captures independent of mutable AppKit objects.
+private struct NativeCallbackPresentationSnapshot: Equatable {
+    let model: WorkspaceStore
+    let persistenceModel: WorkspaceStore
+    let selectionGeneration: UInt64
+    let displayedTabs: [TerminalTab]
+    let displayedTitles: [TabID: String]
+    let selectedTabs: [TabID]
+    let orderedTabs: [TabID]
+    let activeTab: TabID?
+    let editedTab: TabID?
+    let nativeSelection: Set<IndexPath>
+    let reloadGeneration: Int
+    let dragGeneration: Int
+    let refreshCount: Int
+    let statusRefreshCount: Int
+    let hosted: [PaneID: ObjectIdentifier]
+    let rendered: [ObjectIdentifier]
+    let splitHost: ObjectIdentifier?
+    let surfaces: [PaneID: ObjectIdentifier]
+    let surfaceHosts: [PaneID: ObjectIdentifier]
+    let surfaceWindows: [PaneID: ObjectIdentifier]
+    let responder: ObjectIdentifier?
+    let windowVisible: Bool
+    let ownedEditor: ObjectIdentifier?
+    let attachedSheet: ObjectIdentifier?
+    let sheetParent: ObjectIdentifier?
+    let sheetResponder: ObjectIdentifier?
+    let sheetVisible: Bool
+
+    @MainActor
+    init(_ coordinator: WindowCoordinator, editor: CreateWorkspaceController? = nil) {
+        let presentation = coordinator.workspaceViewControllerForTesting
+        let tabBar = presentation.tabBarViewController
+        let window = coordinator.activeWindowForTesting
+        let sheet = (editor ?? coordinator.createWorkspaceControllerForTesting)?.window
+        model = coordinator.workspaceStoreForTesting
+        persistenceModel = coordinator.workspaceStoreForPersistence
+        selectionGeneration = coordinator.selectionGenerationForTesting
+        displayedTabs = tabBar.displayedTabsForTesting
+        displayedTitles = tabBar.displayedTitlesForTesting
+        selectedTabs = tabBar.selectedTabIDsInOrderForTesting
+        orderedTabs = tabBar.orderedTabIDsForTesting
+        activeTab = tabBar.activeTabIDForTesting
+        editedTab = tabBar.editedTabIDForTesting
+        nativeSelection = tabBar.collectionViewForTesting.selectionIndexPaths
+        reloadGeneration = tabBar.dataReloadGenerationForTesting
+        dragGeneration = tabBar.dragSessionGenerationForTesting
+        refreshCount = coordinator.refreshWorkspacePresentationInvocationCountForTesting
+        statusRefreshCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+        hosted = presentation.hostedSurfaceIdentifiersForTesting
+        rendered = presentation.renderedSurfaceIdentifiersForTesting
+        splitHost = presentation.splitHostingControllerIdentifierForTesting
+        let liveSurfaces = coordinator.surfaceIDsForTesting.compactMap {
+            coordinator.surfaceForTesting(id: $0)
+        }
+        surfaces = Dictionary(
+            uniqueKeysWithValues: liveSurfaces.map {
+                ($0.paneID, ObjectIdentifier($0))
+            })
+        surfaceHosts = Dictionary(
+            uniqueKeysWithValues: liveSurfaces.compactMap { surface in
+                surface.superview.map { (surface.paneID, ObjectIdentifier($0)) }
+            })
+        surfaceWindows = Dictionary(
+            uniqueKeysWithValues: liveSurfaces.compactMap { surface in
+                surface.window.map { (surface.paneID, ObjectIdentifier($0)) }
+            })
+        responder = window?.firstResponder.map(ObjectIdentifier.init)
+        windowVisible = window?.isVisible == true
+        ownedEditor = coordinator.createWorkspaceControllerForTesting.map(ObjectIdentifier.init)
+        attachedSheet = window?.attachedSheet.map(ObjectIdentifier.init)
+        sheetParent = sheet?.sheetParent.map(ObjectIdentifier.init)
+        sheetResponder = sheet?.firstResponder.map(ObjectIdentifier.init)
+        sheetVisible = sheet?.isVisible == true
+    }
+}
+
+// WHY: Selector observation keeps AppKit delivery on the main actor without capturing
+// non-Sendable state in NotificationCenter's @Sendable block observer API.
+@MainActor
+private final class NativeQuakeKeyObserver: NSObject {
+    var action: (@MainActor () -> Void)?
+    private(set) var callbackCount = 0
+    private(set) var isInCallback = false
+
+    init(window: NSWindow) {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(didBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification, object: window)
+    }
+
+    @objc private func didBecomeKey(_ notification: Notification) {
+        guard let action else { return }
+        self.action = nil
+        callbackCount += 1
+        isInCallback = true
+        defer { isInCallback = false }
+        action()
+    }
+
+    func stop() {
+        action = nil
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    isolated deinit { stop() }
+}
+
+@MainActor
+private final class RetirementRemovalView: NSView {
+    var didRemove: (@MainActor () -> Void)?
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if superview == nil { didRemove?() }
+    }
+}
+
+@MainActor
+private final class NativeModeTransitionState {
+    weak var coordinator: WindowCoordinator?
+    var isReturning = false
+    var frames: [NormalWindowFrame] = []
+    var nativeFrames: [NSRect] = []
+    var modes: [PresentationMode] = []
+    var workspaces: [WorkspaceStore] = []
+    var errors: [Error] = []
+    var freezeCount = 0
+    var freezeChangedPresentation = false
+    var modeAtFreeze: PresentationMode?
+    var normalFrameAtFreeze: NSRect?
+
+    func freeze() {
+        guard let coordinator else { return }
+        freezeCount += 1
+        let before = NativeCallbackPresentationSnapshot(coordinator)
+        modeAtFreeze = coordinator.presentationMode
+        normalFrameAtFreeze = coordinator.windowForTesting?.frame
+        coordinator.freezeTerminalControlForApplicationTermination()
+        freezeChangedPresentation = before != NativeCallbackPresentationSnapshot(coordinator)
+    }
+}
+
+@MainActor
+private final class NativeRenameDeletionState {
+    var confirmations: [WorkspaceDeletionConfirmation] = []
+    var completions: [@MainActor (Bool) -> Void] = []
+    var isResolvingDeletion = false
+    var isInRenameCallback = false
+    var persistedRenameDuringDeletion = false
+}
+
+@MainActor
+private final class NativeCallbackFreezeState {
+    weak var coordinator: WindowCoordinator?
+    var freezeOnCommit = false
+    var isCompletingAnimation = false
+    var snapshots: [WorkspaceStore] = []
+    var presentationAtFreeze: NativeCallbackPresentationSnapshot?
+    var freezeChangedPresentation = false
+    var dismissCount = 0
+    var renameCommits: [String] = []
+    var renameEditingStates: [Bool] = []
+
+    func record(_ store: WorkspaceStore) {
+        snapshots.append(store)
+        guard freezeOnCommit else { return }
+        freeze()
+    }
+
+    func freeze() {
+        guard let coordinator else { return }
+        let before = NativeCallbackPresentationSnapshot(coordinator)
+        coordinator.freezeTerminalControlForApplicationTermination()
+        let after = NativeCallbackPresentationSnapshot(coordinator)
+        freezeChangedPresentation = before != after
+        presentationAtFreeze = after
+    }
+}
+
+// WHY: Match WorkspacePresentationTests' private local-drag fixture; never use the general pasteboard.
+private final class CoordinatorTabDraggingInfo: NSObject, @MainActor NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingSource: Any?
+
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .move }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSequenceNumber: Int { 0 }
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+
+    @MainActor
+    init(source: AnyObject?, payload: String?) {
+        draggingSource = source
+        draggingPasteboard = NSPasteboard(
+            name: NSPasteboard.Name("QuickTTYTests.CoordinatorTabDraggingInfo.\(UUID().uuidString)")
+        )
+        super.init()
+        draggingPasteboard.clearContents()
+        if let payload {
+            draggingPasteboard.setString(payload, forType: .quickTTYTab)
+        }
+    }
+
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+
+    override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? {
+        nil
+    }
+
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions,
+        for view: NSView?,
+        classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+        using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {}
+
+    func resetSpringLoading() {}
 }
 
 @MainActor

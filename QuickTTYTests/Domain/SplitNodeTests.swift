@@ -18,10 +18,52 @@ struct SplitNodeTests {
             return
         }
         #expect(axis == .horizontal)
-        #expect(ratio == 0.4)
+        #expect(ratio == 0.6)
         #expect(first == .pane(existingPane))
         #expect(second == .pane(newPane))
         #expect(root.leaves == [existingPane, newPane])
+    }
+
+    @Test
+    func explicitInsertionSidesUseNewPaneShareAndLeafOrder() {
+        let sourcePane = PaneID()
+        let firstNewPane = PaneID()
+        var firstRoot = SplitNode.pane(sourcePane)
+        let didInsertFirst = firstRoot.split(
+            sourcePane,
+            axis: .horizontal,
+            newPane: firstNewPane,
+            ratio: 0.3,
+            insertionSide: .first
+        )
+
+        #expect(didInsertFirst)
+        guard case .split(_, .horizontal, 0.3, let first, let second) = firstRoot else {
+            Issue.record("Expected first-side split")
+            return
+        }
+        #expect(first == .pane(firstNewPane))
+        #expect(second == .pane(sourcePane))
+        #expect(firstRoot.leaves == [firstNewPane, sourcePane])
+
+        let secondNewPane = PaneID()
+        var secondRoot = SplitNode.pane(sourcePane)
+        let didInsertSecond = secondRoot.split(
+            sourcePane,
+            axis: .vertical,
+            newPane: secondNewPane,
+            ratio: 0.3,
+            insertionSide: .second
+        )
+
+        #expect(didInsertSecond)
+        guard case .split(_, .vertical, 0.7, let secondFirst, let secondSecond) = secondRoot else {
+            Issue.record("Expected second-side split")
+            return
+        }
+        #expect(secondFirst == .pane(sourcePane))
+        #expect(secondSecond == .pane(secondNewPane))
+        #expect(secondRoot.leaves == [sourcePane, secondNewPane])
     }
 
     @Test
@@ -46,8 +88,8 @@ struct SplitNodeTests {
         #expect(didCreateRoot)
         #expect(didCreateNestedSplit)
         guard
-            case .split(_, .horizontal, 0.4, .pane(let actualFirst), let nested) = root,
-            case .split(_, .vertical, 0.6, .pane(let actualSecond), .pane(let actualThird)) = nested
+            case .split(_, .horizontal, 0.6, .pane(let actualFirst), let nested) = root,
+            case .split(_, .vertical, 0.4, .pane(let actualSecond), .pane(let actualThird)) = nested
         else {
             Issue.record("Expected a nested vertical split")
             return
@@ -105,8 +147,8 @@ struct SplitNodeTests {
             Issue.record("Expected split roots")
             return
         }
-        #expect(lowRatio == 0.1)
-        #expect(highRatio == 0.9)
+        #expect(lowRatio == 0.9)
+        #expect(highRatio == 0.1)
     }
 
     @Test

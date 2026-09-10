@@ -44,6 +44,7 @@ secret='TASK15_FIXTURE_SECRET_DO_NOT_PRINT'
 /usr/bin/xcrun --sdk macosx swiftc \
     "$repo_root"/Shared/AgentIntegrations/*.swift \
     "$repo_root"/Shared/AgentIntegrations/Installer/*.swift \
+    "$repo_root"/Shared/AgentIntegrations/TerminalControl/*.swift \
     "$repo_root"/QuickTTYCLI/*.swift \
     -o "$helper"
 

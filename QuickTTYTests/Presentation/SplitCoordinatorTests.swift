@@ -30,6 +30,7 @@ struct SplitCoordinatorTests {
                 let sourcePaneID,
                 let reportedDescriptor,
                 .horizontal,
+                .second,
                 0.3,
                 _,
                 let activePaneID
@@ -61,6 +62,7 @@ struct SplitCoordinatorTests {
                 _,
                 _,
                 .vertical,
+                .second,
                 0.7,
                 let reportedRoot,
                 let reportedActivePaneID
@@ -73,12 +75,12 @@ struct SplitCoordinatorTests {
         let expectedRoot = SplitNode.split(
             id: horizontalSplitID,
             axis: .horizontal,
-            ratio: 0.3,
+            ratio: 0.7,
             first: .pane(paneID(1)),
             second: .split(
                 id: verticalSplitID,
                 axis: .vertical,
-                ratio: 0.7,
+                ratio: 0.3,
                 first: .pane(paneID(2)),
                 second: .pane(paneID(3))
             )
@@ -90,6 +92,119 @@ struct SplitCoordinatorTests {
         #expect(tab.paneDescriptors == [descriptor(paneID(1)), secondDescriptor, thirdDescriptor])
         #expect(tab.activePaneID == paneID(3))
         try tab.validateInvariant()
+    }
+
+    @Test
+    func explicitFirstInsertionReturnsExactNestedSplitAndLeafOrderedDescriptors() throws {
+        var store = try makeSingleTabStore()
+        let coordinator = SplitCoordinator()
+        let secondDescriptor = descriptor(paneID(2))
+        let thirdDescriptor = descriptor(paneID(3))
+        _ = try coordinator.apply(
+            .split(
+                workspaceID: workspaceID(1),
+                tabID: tabID(1),
+                paneID: paneID(1),
+                axis: .horizontal,
+                newPane: secondDescriptor,
+                ratio: 0.4
+            ),
+            to: &store
+        )
+        let initialTab = try #require(store.tab(id: tabID(1)))
+        guard
+            case .split(
+                let ancestorSplitID,
+                .horizontal,
+                0.6,
+                .pane(let initialFirstPaneID),
+                .pane(let initialSecondPaneID)
+            ) = initialTab.root
+        else {
+            Issue.record("Expected the initial horizontal split")
+            return
+        }
+        #expect(initialFirstPaneID == paneID(1))
+        #expect(initialSecondPaneID == paneID(2))
+
+        let delta = try coordinator.apply(
+            .split(
+                workspaceID: workspaceID(1),
+                tabID: tabID(1),
+                paneID: paneID(2),
+                axis: .vertical,
+                insertionSide: .first,
+                newPane: thirdDescriptor,
+                ratio: 0.2
+            ),
+            to: &store
+        )
+
+        guard
+            case .paneSplit(
+                _,
+                _,
+                let createdSplitID,
+                let sourcePaneID,
+                let newPane,
+                .vertical,
+                .first,
+                0.2,
+                let root,
+                let activePaneID
+            ) = delta,
+            case .split(
+                let actualAncestorID,
+                .horizontal,
+                0.6,
+                .pane(let firstPaneID),
+                let nested
+            ) = root,
+            case .split(
+                let actualCreatedID,
+                .vertical,
+                0.2,
+                .pane(let insertedPaneID),
+                .pane(let nestedSourcePaneID)
+            ) = nested
+        else {
+            Issue.record("Expected exact first-side nested split")
+            return
+        }
+        #expect(actualAncestorID == ancestorSplitID)
+        #expect(createdSplitID == actualCreatedID)
+        #expect(createdSplitID != ancestorSplitID)
+        #expect(sourcePaneID == paneID(2))
+        #expect(newPane == thirdDescriptor)
+        #expect(firstPaneID == paneID(1))
+        #expect(insertedPaneID == paneID(3))
+        #expect(nestedSourcePaneID == paneID(2))
+        #expect(activePaneID == paneID(3))
+
+        let tab = try #require(store.tab(id: tabID(1)))
+        #expect(tab.paneDescriptors == [descriptor(paneID(1)), thirdDescriptor, secondDescriptor])
+        #expect(tab.activePaneID == paneID(3))
+        try tab.validateInvariant()
+    }
+
+    @Test
+    func terminalSplitDirectionsMapToAxisAndInsertionSide() {
+        #expect(
+            TerminalSplitDirection.left.splitPlacement
+                == SplitPlacement(axis: .horizontal, insertionSide: .first)
+        )
+        #expect(
+            TerminalSplitDirection.right.splitPlacement
+                == SplitPlacement(axis: .horizontal, insertionSide: .second)
+        )
+        #expect(
+            TerminalSplitDirection.up.splitPlacement
+                == SplitPlacement(axis: .vertical, insertionSide: .first)
+        )
+        #expect(
+            TerminalSplitDirection.down.splitPlacement
+                == SplitPlacement(axis: .vertical, insertionSide: .second)
+        )
     }
 
     @Test

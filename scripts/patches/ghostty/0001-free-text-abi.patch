@@ -1,0 +1,20 @@
+Subject: [PATCH 1/2] apprt/embedded: match the existing free-text C ABI
+Upstream-Commit: 4803d58bb4ea8d2a71ebc1e5239f09a060e9e7c3
+Base-Commit: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28 (v1.3.1)
+
+Exact one-line upstream backport. The C header already takes a surface and
+text pointer; accepting both arguments prevents freeing the surface as text.
+No C header changes. Ghostty's MIT license applies.
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1675,7 +1675,7 @@
+         return true;
+     }
+ 
+-    export fn ghostty_surface_free_text(ptr: *Text) void {
++    export fn ghostty_surface_free_text(_: *Surface, ptr: *Text) void {
+         ptr.deinit();
+     }
+ 

@@ -38,26 +38,39 @@ struct AgentResumeRuntimeTests {
         #expect(fixture.runtime.begin(attempt))
         fixture.runtime.surfaceDidBecomeLive(attempt.reference)
 
-        fixture.runtime.register(
-            attempt.reference,
-            adapterID: attempt.claimKey.adapterID,
-            sessionID: "wrong"
+        #expect(
+            !fixture.runtime.register(
+                attempt.reference,
+                adapterID: attempt.claimKey.adapterID,
+                sessionID: "wrong"
+            )
         )
-        fixture.runtime.register(
-            AgentResumeAttemptReference(
-                paneID: attempt.paneID,
-                attemptID: attempt.id,
-                generation: 8
-            ),
-            adapterID: attempt.claimKey.adapterID,
-            sessionID: attempt.claimKey.sessionID
+        #expect(
+            !fixture.runtime.register(
+                AgentResumeAttemptReference(
+                    paneID: attempt.paneID,
+                    attemptID: attempt.id,
+                    generation: 8
+                ),
+                adapterID: attempt.claimKey.adapterID,
+                sessionID: attempt.claimKey.sessionID
+            )
         )
         #expect(fixture.actions.count == 1)
 
-        fixture.runtime.register(
-            attempt.reference,
-            adapterID: attempt.claimKey.adapterID,
-            sessionID: attempt.claimKey.sessionID
+        #expect(
+            fixture.runtime.register(
+                attempt.reference,
+                adapterID: attempt.claimKey.adapterID,
+                sessionID: attempt.claimKey.sessionID
+            )
+        )
+        #expect(
+            !fixture.runtime.register(
+                attempt.reference,
+                adapterID: attempt.claimKey.adapterID,
+                sessionID: attempt.claimKey.sessionID
+            )
         )
 
         #expect(

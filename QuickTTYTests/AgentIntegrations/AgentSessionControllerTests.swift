@@ -5,6 +5,7 @@ import Testing
 
 @testable import QuickTTY
 
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct AgentSessionControllerTests {
     private let instanceID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
@@ -659,6 +660,164 @@ struct AgentSessionControllerTests {
         #expect(staleError == .serverAuthenticationFailed)
         #expect(recorder.actions.count == 1)
         await server.stop()
+    }
+
+    @Test
+    func controlEnvironmentUsesTheSameRotatingAndRevocableCredentials() throws {
+        let controlPath = "/tmp/quicktty-test/control.sock"
+        let controller = try AgentSessionController(
+            socketPath: socketPath, helperPath: helperPath, controlSocketPath: controlPath,
+            instanceID: instanceID,
+            tokenGenerator: AgentTokenSequence([
+                Array(repeating: 0xaa, count: 32), Array(repeating: 0xbb, count: 32),
+            ]).next,
+            onAction: { _ in true }
+        )
+        let origin = PaneID()
+        let preflight = try TerminalControlPreflight(
+            instanceID: instanceID, paneID: origin.rawValue,
+            nonce: Data(repeating: 1, count: TerminalControlProtocol.nonceSize))
+        #expect(controller.credential(for: preflight) == nil)
+        let initial = try #require(controller.register(paneID: origin))
+        #expect(initial["QUICKTTY_CONTROL_SOCKET"] == controlPath)
+        #expect(controller.credential(for: preflight) == initial["QUICKTTY_PANE_TOKEN"])
+        let rotated = try #require(controller.rotate(paneID: origin))
+        #expect(rotated["QUICKTTY_CONTROL_SOCKET"] == controlPath)
+        #expect(rotated["QUICKTTY_PANE_TOKEN"] != initial["QUICKTTY_PANE_TOKEN"])
+        #expect(controller.credential(for: preflight) == rotated["QUICKTTY_PANE_TOKEN"])
+        let foreign = try TerminalControlPreflight(
+            instanceID: UUID(), paneID: origin.rawValue,
+            nonce: Data(repeating: 1, count: TerminalControlProtocol.nonceSize))
+        #expect(controller.credential(for: foreign) == nil)
+        controller.revoke(paneID: origin)
+        #expect(controller.credential(for: preflight) == nil)
+        controller.freeze()
+        #expect(controller.register(paneID: origin) == nil)
+        #expect(controller.environment(for: origin) == nil)
+    }
+
+    @Test
+    func rejectsInvalidControlPathsAndLifecycleEndpointAliases() {
+        for path in [
+            "", "relative/control.sock", "/tmp/control\n.sock", "/tmp/control\u{0}.sock",
+            "/" + String(repeating: "x", count: 104), socketPath,
+            "/tmp/quicktty-test/../quicktty-test/agent.sock",
+            "/private/tmp/quicktty-test/agent.sock", "//tmp/control.sock", "/tmp/control.sock/",
+        ] {
+            #expect(
+                throws: AgentSessionControllerValidationError.invalidControlSocketPath,
+                "Control path: \(String(reflecting: path))"
+            ) {
+                try AgentSessionController(
+                    socketPath: socketPath, helperPath: helperPath, controlSocketPath: path,
+                    onAction: { _ in true })
+            }
+        }
+    }
+
+    @Test
+    func comparesEndpointsThroughOwnedSymlinkAncestorsWithoutRequiringLeaves() throws {
+        // Short, canonical ASCII paths leave ample room in sockaddr_un.sun_path.
+        let baseDirectory = "/private/tmp/qp-\(UUID().uuidString)"
+        guard mkdir(baseDirectory, 0o700) == 0 else {
+            throw AgentSessionControllerTestError.couldNotCreateTemporaryDirectory(errno)
+        }
+        defer { _ = rmdir(baseDirectory) }
+
+        let realDirectory = "\(baseDirectory)/real"
+        guard mkdir(realDirectory, 0o700) == 0 else {
+            throw AgentSessionControllerTestError.couldNotCreateTemporaryDirectory(errno)
+        }
+        defer { _ = rmdir(realDirectory) }
+        let aliasDirectory = "\(baseDirectory)/alias"
+        try #require(symlink(realDirectory, aliasDirectory) == 0)
+        // Unlink the symlink itself, never remove children through its path.
+        defer { _ = unlink(aliasDirectory) }
+
+        let existingEndpoint = "\(realDirectory)/agent.sock"
+        try #require(FileManager.default.createFile(atPath: existingEndpoint, contents: Data()))
+        defer { _ = unlink(existingEndpoint) }
+        let existingControl = "\(realDirectory)/control.sock"
+        try #require(FileManager.default.createFile(atPath: existingControl, contents: Data()))
+        defer { _ = unlink(existingControl) }
+        let leafAlias = "\(baseDirectory)/leaf.sock"
+        try #require(symlink(existingEndpoint, leafAlias) == 0)
+        defer { _ = unlink(leafAlias) }
+
+        for (suffix, distinctSuffix) in [
+            ("agent.sock", "control.sock"),
+            ("absent.sock", "other.sock"),
+            ("missing/nested/agent.sock", "missing/nested/control.sock"),
+        ] {
+            let endpoint = "\(realDirectory)/\(suffix)"
+            let alias = "\(aliasDirectory)/\(suffix)"
+            let distinctEndpoint = "\(aliasDirectory)/\(distinctSuffix)"
+            for path in [endpoint, alias, distinctEndpoint] {
+                try #require(AgentWorkingDirectoryValidator.isCanonicalAbsolutePath(path))
+                try #require(path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
+                _ = try AgentUnixSocketAddress(path: path)
+            }
+            let leafExists = suffix == "agent.sock"
+            #expect(FileManager.default.fileExists(atPath: endpoint) == leafExists)
+            #expect(FileManager.default.fileExists(atPath: alias) == leafExists)
+            #expect(FileManager.default.fileExists(atPath: distinctEndpoint) == leafExists)
+
+            for (lifecyclePath, controlPath) in [
+                (endpoint, endpoint), (endpoint, alias), (alias, endpoint),
+            ] {
+                #expect(
+                    throws: AgentSessionControllerValidationError.invalidControlSocketPath,
+                    "Lifecycle: \(lifecyclePath); control: \(controlPath)"
+                ) {
+                    try AgentSessionController(
+                        socketPath: lifecyclePath, helperPath: helperPath,
+                        controlSocketPath: controlPath, onAction: { _ in true })
+                }
+            }
+            // Positive cases prevent lexical/length/fixture errors from masquerading as alias rejection.
+            for lifecyclePath in [endpoint, alias] {
+                let controller = try AgentSessionController(
+                    socketPath: lifecyclePath, helperPath: helperPath,
+                    controlSocketPath: distinctEndpoint, onAction: { _ in true })
+                let environment = try #require(controller.register(paneID: PaneID()))
+                #expect(environment["QUICKTTY_AGENT_SOCKET"] == lifecyclePath)
+                #expect(environment["QUICKTTY_CONTROL_SOCKET"] == distinctEndpoint)
+            }
+        }
+
+        // An existing leaf symlink must still be resolved, not just its parent.
+        try #require(AgentWorkingDirectoryValidator.isCanonicalAbsolutePath(leafAlias))
+        _ = try AgentUnixSocketAddress(path: leafAlias)
+        #expect(throws: AgentSessionControllerValidationError.invalidControlSocketPath) {
+            try AgentSessionController(
+                socketPath: existingEndpoint, helperPath: helperPath,
+                controlSocketPath: leafAlias, onAction: { _ in true })
+        }
+        _ = try AgentSessionController(
+            socketPath: leafAlias, helperPath: helperPath,
+            controlSocketPath: existingControl, onAction: { _ in true })
+    }
+
+    @Test
+    func preservesRootLegacyLifecycleAndOptionalControlPathBehavior() throws {
+        #expect(throws: AgentSessionControllerValidationError.invalidControlSocketPath) {
+            try AgentSessionController(
+                socketPath: "/", helperPath: helperPath, controlSocketPath: "/",
+                onAction: { _ in true })
+        }
+        let controlPaths: [String?] = [nil, "/tmp/distinct-control.sock"]
+        for lifecyclePath in ["/", "/tmp//legacy/../agent.sock"] {
+            for controlPath in controlPaths {
+                let legacyHelperPath = "/tmp/../helper"
+                let controller = try AgentSessionController(
+                    socketPath: lifecyclePath, helperPath: legacyHelperPath,
+                    controlSocketPath: controlPath, onAction: { _ in true })
+                let environment = try #require(controller.register(paneID: PaneID()))
+                #expect(environment["QUICKTTY_AGENT_SOCKET"] == lifecyclePath)
+                #expect(environment["QUICKTTY_AGENT_HELPER"] == legacyHelperPath)
+                #expect(environment["QUICKTTY_CONTROL_SOCKET"] == controlPath)
+            }
+        }
     }
 
     @Test

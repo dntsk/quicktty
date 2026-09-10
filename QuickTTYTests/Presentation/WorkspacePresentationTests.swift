@@ -1787,6 +1787,89 @@ struct WorkspacePresentationTests {
         #expect(window.firstResponder === surface)
     }
 
+    @Test
+    func managedMapThroughDisplayTerminalKeepsHostConstraintsFocusAndLatestCallback() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/cat"))
+        let controller = WorkspaceViewController()
+        let window = Self.mountWorkspace(controller)
+        defer { window.orderOut(nil) }
+        let firstTaskID = UUID()
+        let secondTaskID = UUID()
+        var calls: [(Int, UUID)] = []
+        var hostID: ObjectIdentifier?
+        var constraints: [ObjectIdentifier] = []
+        var badgeID: ObjectIdentifier?
+        let reloadGeneration = controller.tabBarViewController.dataReloadGenerationForTesting
+        for (index, taskID) in [firstTaskID, secondTaskID].enumerated() {
+            let value = TerminalAutomationPresentation(
+                taskID: taskID, adapterDisplayName: "Agent", taskState: .waitingForUser,
+                controlOwner: .user, canReturnControl: true)
+            controller.displayTerminal(
+                root: .pane(surface.paneID), surfaces: [surface.paneID: surface], failures: [:],
+                agentResumePresentations: [surface.paneID: .unverified],
+                terminalAutomationPresentations: [surface.paneID: value],
+                palette: .fallback, activePaneID: surface.paneID,
+                onResize: { _, _ in }, onEqualize: { _ in },
+                onRetryUnavailablePane: { _ in }, onCloseUnavailablePane: { _ in },
+                onReturnControlToAgent: { calls.append((index, $0)) })
+            for _ in 0..<4 {
+                Self.layoutWorkspace(controller, in: window)
+                await Task.yield()
+            }
+            Self.layoutWorkspace(controller, in: window)
+            if index == 0 {
+                #expect(window.makeFirstResponder(surface))
+                hostID = controller.splitHostingControllerIdentifierForTesting
+                constraints = controller.splitHostingConstraintIdentifiersForTesting
+            }
+            let views = managedViews(in: controller.view)
+            let badge = try #require(views.compactMap { $0 as? TerminalAutomationBadgeView }.first)
+            if index == 0 { badgeID = ObjectIdentifier(badge) }
+            #expect(ObjectIdentifier(badge) == badgeID)
+            #expect(!views.contains { $0 is SurfaceErrorPlaceholderView })
+            #expect(
+                controller.hostedTerminalAutomationPresentationsForTesting == [
+                    surface.paneID: value
+                ])
+            #expect(
+                controller.hostedAgentResumePresentationsForTesting == [surface.paneID: .unverified]
+            )
+            #expect(controller.splitHostingControllerIdentifierForTesting == hostID)
+            #expect(controller.splitHostingConstraintIdentifiersForTesting == constraints)
+            #expect(controller.splitHostingConstraintsAreActiveForTesting)
+            #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(surface)])
+            #expect(
+                controller.tabBarViewController.dataReloadGenerationForTesting == reloadGeneration)
+            let button = try #require(
+                views.compactMap { $0 as? NSButton }.first {
+                    $0.title == TerminalAutomationPresentation.returnControlTitle
+                })
+            button.performClick(nil)
+            #expect(calls.count == index + 1)
+            #expect(calls.last?.0 == index && calls.last?.1 == taskID)
+            #expect(window.firstResponder === surface)
+        }
+        let oldButton = try #require(
+            managedViews(in: controller.view).compactMap { $0 as? NSButton }.first {
+                $0.title == TerminalAutomationPresentation.returnControlTitle
+            })
+        controller.displayTerminal(
+            root: nil, surfaces: [:], failures: [:], palette: .fallback,
+            onResize: { _, _ in }, onEqualize: { _ in },
+            onRetryUnavailablePane: { _ in }, onCloseUnavailablePane: { _ in })
+        oldButton.performClick(nil)
+        #expect(calls.count == 2)
+        #expect(controller.hostedTerminalAutomationPresentationsForTesting.isEmpty)
+        #expect(controller.splitHostingControllerIdentifierForTesting == nil)
+    }
+
+    private func managedViews(in view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { managedViews(in: $0) }
+    }
+
     private static func normalizedRGBA(_ color: GhosttyRGB, alpha: CGFloat) -> [CGFloat] {
         [
             CGFloat(color.red) / 255,

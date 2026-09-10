@@ -32,6 +32,102 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     typealias AgentRestoreWorkingDirectoryExists = @MainActor (String) -> Bool
     typealias AgentRestorePlanning =
         @MainActor (AgentRestorePlanner.Input) -> [PaneID: AgentRestoreDecision]
+    typealias ManagedTaskIDProvider = @MainActor () -> UUID
+    typealias TerminalAutomationPermissionPresenter =
+        @MainActor (TerminalAutomationResolvedSession) async -> TerminalAutomationPermissionDecision
+
+    private enum ManagedSnapshotState: Equatable {
+        case running
+        case runningReadFailed
+        case pendingFinal
+        case readingFinal
+        case finalReadFailed
+        case finalCaptured
+        case closedFallback
+        case revoked
+    }
+
+    private struct ManagedTerminalTaskRecord {
+        var task: TerminalControlTask
+        let session: TerminalAutomationSessionIdentity
+        let splitID: UUID?
+        let previousFocus: ManagedTaskFocusContext?
+        let createdTask: TerminalControlTask
+        let processGeneration = UUID()
+        var surfaceIdentity: ObjectIdentifier?
+        var isAccepted = false
+        // WHY: Direct host creation is accepted for cleanup, but has no domain grant to advertise.
+        var hasDomainAcceptance = false
+        var rendered = GhosttyRenderedText(text: "", isTruncated: false)
+        var lastRefresh: TimeInterval?
+        var snapshotState: ManagedSnapshotState = .running
+        var completionObserved = false
+        var completionExitCode: Int32?
+        var isRevoked = false
+        var completionTask: Task<Void, Never>?
+
+        mutating func update(
+            rendered: GhosttyRenderedText? = nil,
+            state: TerminalTaskState? = nil,
+            owner: TerminalPaneControlOwner? = nil,
+            exitCode: Int32? = nil
+        ) {
+            let output = rendered ?? self.rendered
+            let exitCode = state == nil ? task.exitCode : exitCode
+            let state = state ?? task.state
+            let owner = owner ?? task.owner
+            guard
+                !output.text.utf8.elementsEqual(self.rendered.text.utf8)
+                    || output.isTruncated != self.rendered.isTruncated
+                    || state != task.state || owner != task.owner || exitCode != task.exitCode
+            else { return }
+            // WHY: Content-only revisions do not invalidate capture for the same lifecycle.
+            if snapshotState == .finalCaptured,
+                state != task.state || owner != task.owner || exitCode != task.exitCode
+            {
+                snapshotState = .finalReadFailed
+            }
+            precondition(task.revision < UInt64.max, "Terminal revision exhausted")
+            task = TerminalControlTask(
+                taskID: task.taskID, paneID: task.paneID, tabID: task.tabID,
+                workspaceID: task.workspaceID, state: state, owner: owner, policy: task.policy,
+                revision: task.revision + 1, exitCode: exitCode
+            )
+            self.rendered = output
+        }
+    }
+
+    @MainActor
+    private final class ManagedCloseDecision {
+        let paneID: PaneID
+        let session: TerminalAutomationSessionIdentity
+        let processGeneration: UUID
+        let surfaceIdentity: ObjectIdentifier?
+        var response: GhosttyClipboardConfirmationResponse?
+        var isCancelled = false
+        var participantCount = 0
+        var confirmationToken: GhosttyConfirmationQueue.CloseToken?
+
+        init(_ record: ManagedTerminalTaskRecord) {
+            paneID = PaneID(rawValue: record.task.paneID)
+            session = record.session
+            processGeneration = record.processGeneration
+            surfaceIdentity = record.surfaceIdentity
+        }
+    }
+
+    private struct ManagedTaskFocusContext {
+        let selectionGeneration: UInt64
+        let activeWorkspaceID: WorkspaceID
+        let targetActiveTabID: TabID?
+        let targetActivePaneID: PaneID?
+    }
+
+    private struct DiscardedManagedTaskRecord {
+        let created: TerminalAutomationCreatedTaskResponse
+        let session: TerminalAutomationSessionIdentity
+        var compensationCompleted: Bool
+    }
 
     private let ghosttyBridge: GhosttyBridge
     private let normalWindowController: NormalWindowController
@@ -51,6 +147,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let agentResumeRegistrationTimeout: TimeInterval
     private let agentResumeStableConfirmationThreshold: TimeInterval
     private let agentResumeClaimLifetime: TimeInterval
+    private let managedTaskIDProvider: ManagedTaskIDProvider
+    private let terminalAutomationNow: @MainActor () -> TimeInterval
+    private let terminalAutomationPermissionPresenter: TerminalAutomationPermissionPresenter?
+    private let terminalControlPermissionController: TerminalControlPermissionController
     private let terminalActivityController: TerminalActivityController
     private var terminalNotificationController: TerminalNotificationController?
     private let confirmationPresenter: GhosttyConfirmationQueue.Presenter?
@@ -61,6 +161,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let workspaceViewController = WorkspaceViewController()
     private let splitCoordinator = SplitCoordinator()
     private var workspaceStore: WorkspaceStore
+    private var selectionGeneration: UInt64 = 0
     private var createWorkspaceController: CreateWorkspaceController?
     private var agentIntegrationsSheetController: AgentIntegrationsSheetController?
     private var agentIntegrationUpdateOfferStore: AgentIntegrationUpdateOfferStore?
@@ -74,6 +175,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var agentResumePresentations: [PaneID: AgentResumePresentation] = [:]
     private var agentResumeAttempts: [PaneID: AgentResumeAttempt] = [:]
     private var agentResumeGenerationByPane: [PaneID: UInt64] = [:]
+    private var agentCredentialGenerationByPane: [PaneID: UInt64] = [:]
+    private var managedTasks: [UUID: ManagedTerminalTaskRecord] = [:]
+    private var managedCloseDecisions: [UUID: ManagedCloseDecision] = [:]
+    private var managedPresentationRefreshTask: Task<Void, Never>?
+    private var managedTaskOrder: [UUID] = []
+    private var managedTaskIDByPane: [PaneID: UUID] = [:]
+    private var discardedManagedTasks: [UUID: DiscardedManagedTaskRecord] = [:]
     private var shouldRestoreAgentSessions = false
     private var closingTabIDs: Set<TabID> = []
     private var closingPaneIDs: Set<PaneID> = []
@@ -83,8 +191,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var tabRenameTransientInteraction: QuakeWindowController.TransientInteraction?
     private var isTabRenameEditing = false
     private var isPreparingForTermination = false
+    private var isTerminalControlFrozen = false
     private var activityConfiguration: GhosttyActivityConfiguration
     private var activityCallbackGeneration = 0
+
+    private lazy var terminalAutomationHostFacade = WindowCoordinatorTerminalAutomationHost(
+        coordinator: self
+    )
+
+    private lazy var terminalAutomationCoordinator = TerminalAutomationCoordinator(
+        host: terminalAutomationHostFacade
+    )
 
     private lazy var agentResumeRuntime = AgentResumeRuntime(
         scheduler: agentResumeScheduler,
@@ -96,6 +213,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     var terminalActivityEffectHandler: TerminalActivityEffectHandler?
+    var terminalAutomationPresentationHandler:
+        (@MainActor (TerminalAutomationPresentationEvent) -> Void)?
+    var terminalAutomationAttentionHandler: (@MainActor (TerminalAutomationAttention) -> Void)?
 
     var terminalActivityConfiguration: GhosttyActivityConfiguration {
         activityConfiguration
@@ -104,6 +224,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     #if DEBUG
         private var failsNextStartupModelMutationForTesting = false
         private var failsNextSplitMutationForTesting = false
+        private var failsNextManagedTabMutationForTesting = false
+        private var failsNextManagedSplitMutationForTesting = false
+        private var failsNextManagedCommitForTesting = false
+        var managedCloseWaiterJoinedForTesting: ((Int) -> Void)?
         private var refreshWorkspacePresentationInvocationCountForTestingStorage = 0
         private var refreshWorkspaceStatusesInvocationCountForTestingStorage = 0
         private var activeWindowIsKeyOverrideForTesting: Bool?
@@ -114,7 +238,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private lazy var confirmationQueue = GhosttyConfirmationQueue {
         [weak self] presentation, completion in
-        guard let self else {
+        // WHY: Queued work may reach the presenter only after freeze. Resolve it without
+        // opening either an injected presenter or a native sheet, so callbacks cannot hang.
+        guard let self, !isPreparingForTermination else {
             completion(.deny)
             return nil
         }
@@ -228,7 +354,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     let window = activeWindow,
                     surface.window === window
                 else { return }
-                _ = window.makeFirstResponder(surface)
+                // WHY: Sheet dismissal can outlive the early termination freeze.
+                focus(surface, paneID: paneID)
             }
         )
     }
@@ -274,6 +401,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func presentAgentIntegrations() {
+        guard !isPreparingForTermination else { return }
         cancelAgentIntegrationUpdateOffer(onlyIfPending: true)
         guard let sheetController = agentIntegrationsSheetController else { return }
         do {
@@ -282,12 +410,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             onError(error)
             return
         }
-        guard let window = activeWindow else { return }
+        guard !isPreparingForTermination, let window = activeWindow else { return }
         sheetController.present(on: window)
     }
 
     private func isCurrentAgentIntegrationUpdateOffer(_ taskID: UUID) -> Bool {
-        agentIntegrationUpdateOfferTaskID == taskID && !Task.isCancelled
+        !isPreparingForTermination && agentIntegrationUpdateOfferTaskID == taskID
+            && !Task.isCancelled
     }
 
     private func finishAgentIntegrationUpdateOffer(_ taskID: UUID) {
@@ -373,6 +502,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         agentResumeRegistrationTimeout: TimeInterval = 10,
         agentResumeStableConfirmationThreshold: TimeInterval = 1,
         agentResumeClaimLifetime: TimeInterval = 30,
+        managedTaskIDProvider: @escaping ManagedTaskIDProvider = { UUID() },
+        terminalAutomationNow: @escaping @MainActor () -> TimeInterval = {
+            ProcessInfo.processInfo.systemUptime
+        },
+        terminalAutomationPermissionPresenter: TerminalAutomationPermissionPresenter? = nil,
+        terminalAutomationPermissionTimeout: TimeInterval = 60,
         persistWorkspaceStore: @escaping WorkspacePersistence = { _ in },
         confirmationPresenter: GhosttyConfirmationQueue.Presenter? = nil,
         workspaceDeletionConfirmationPresenter: WorkspaceDeletionConfirmationPresenter? = nil,
@@ -381,15 +516,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         persistNormalWindowFrame: @escaping NormalWindowFramePersistence = { _ in },
         onError: @escaping ErrorHandler = { _ in },
         hotKeyController: (any HotKeyControlling)? = nil,
+        quakeWindowController: QuakeWindowController? = nil,
         visibleScreenFrames: @escaping @MainActor () -> [NSRect] = {
             NSScreen.screens.map(\.visibleFrame)
         }
     ) {
         let normalWindowController = NormalWindowController()
-        let quakeWindowController = QuakeWindowController(
-            configuration: quakeConfiguration,
-            persistQuakeHeight: persistQuakeHeight
-        )
+        // WHY: Inject the concrete controller to exercise real freeze wiring with manual drivers.
+        let quakeWindowController =
+            quakeWindowController
+            ?? QuakeWindowController(
+                configuration: quakeConfiguration,
+                persistQuakeHeight: persistQuakeHeight
+            )
         let hotKeyRelay = HotKeyActionRelay()
         let resolvedHotKeyController =
             hotKeyController
@@ -404,7 +543,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.normalWindowController = normalWindowController
         self.quakeWindowController = quakeWindowController
         self.hotKeyController = resolvedHotKeyController
-        self.menuBarManager = MenuBarManager()
+        self.menuBarManager = MenuBarManager(
+            systemPresentationEnabled: !ApplicationEnvironment.isRunningHostedTests
+        )
         self.surfaceConfiguration = surfaceConfiguration
         self.executableSearchPath = executableSearchPath
         self.agentSessionController = agentSessionController
@@ -417,6 +558,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         self.agentResumeRegistrationTimeout = agentResumeRegistrationTimeout
         self.agentResumeStableConfirmationThreshold = agentResumeStableConfirmationThreshold
         self.agentResumeClaimLifetime = agentResumeClaimLifetime
+        self.managedTaskIDProvider = managedTaskIDProvider
+        self.terminalAutomationNow = terminalAutomationNow
+        self.terminalAutomationPermissionPresenter = terminalAutomationPermissionPresenter
+        terminalControlPermissionController = TerminalControlPermissionController(
+            timeout: terminalAutomationPermissionTimeout)
         self.terminalActivityController =
             terminalActivityController ?? TerminalActivityController()
         self.terminalNotificationController = terminalNotificationController
@@ -448,6 +594,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         menuBarManager.setToggleCallback { [weak self] in
             self?.presentationController.toggleQuakeVisibility()
         }
+        ghosttyBridge.manualInputHandler = { [weak self] paneID in
+            self?.takeManualControl(of: paneID)
+        }
         ghosttyBridge.surfaceFocusHandler = { [weak self] paneID in
             self?.surfaceDidBecomeFirstResponder(id: paneID)
         }
@@ -477,7 +626,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.clipboardConfirmationHandler = { [weak self] event in
             switch event {
             case .request(let request, let response):
-                guard let self else {
+                // WHY: A late request must not wait behind an already-present confirmation.
+                guard let self, !isPreparingForTermination else {
                     response(.deny)
                     return
                 }
@@ -486,12 +636,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 self?.confirmationQueue.invalidateClipboard(for: paneID)
             }
         }
+        // WHY: Teardown may be their first use; creating a weak self during deinit traps.
+        _ = terminalAutomationCoordinator
+        _ = confirmationQueue
+        _ = agentResumeRuntime
         configurePresentationCallbacks()
     }
 
     isolated deinit {
         prepareForApplicationTermination()
         try? hotKeyController.unregister()
+        ghosttyBridge.manualInputHandler = nil
         ghosttyBridge.surfaceFocusHandler = nil
         ghosttyBridge.surfaceTitleHandler = nil
         ghosttyBridge.surfaceTabTitleHandler = nil
@@ -499,6 +654,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceWorkingDirectoryHandler = nil
         ghosttyBridge.surfaceProgressHandler = nil
         ghosttyBridge.surfaceCommandFinishedHandler = nil
+        ghosttyBridge.surfaceProcessExitedHandler = nil
         terminalActivityController.scheduledEffectHandler = nil
         ghosttyBridge.inputTargetProvider = { [$0] }
         ghosttyBridge.clipboardConfirmationHandler = nil
@@ -573,7 +729,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func start() throws {
-        guard case .notStarted = startupState else { return }
+        guard !isPreparingForTermination, case .notStarted = startupState else { return }
         startupState = .starting
 
         do {
@@ -594,11 +750,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     @discardableResult
     private func commitWorkspaceStore(_ candidate: WorkspaceStore) -> Bool {
+        // WHY: Retained callbacks share this boundary; freeze protects the model, selection epoch,
+        // persistence and search deactivation even when a caller ignores the commit result.
+        guard !isPreparingForTermination else { return false }
         let previousActivePaneID = activePaneID
         guard candidate != workspaceStore else { return false }
+        selectionGeneration = selectionGeneration(after: candidate)
         workspaceStore = candidate
         let committedActivePaneID = activePaneID
         persistWorkspaceStore(workspaceStore)
+        // WHY: Persistence can freeze reentrantly after this commit was already accepted.
+        guard !isPreparingForTermination else { return true }
         if previousActivePaneID != committedActivePaneID,
             let previousActivePaneID,
             let previousSurface = surfaces[previousActivePaneID]
@@ -606,6 +768,27 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             previousSurface.endSearchForDeactivation()
         }
         return true
+    }
+
+    private func selectionGeneration(after candidate: WorkspaceStore) -> UInt64 {
+        // WHY: Track local selections even in background workspaces/tabs, but ignore content updates.
+        let selectionChanged =
+            candidate.activeWorkspaceID != workspaceStore.activeWorkspaceID
+            || candidate.workspaces.count != workspaceStore.workspaces.count
+            || workspaceStore.workspaces.contains { workspace in
+                guard let updated = candidate.workspace(id: workspace.id) else { return true }
+                return updated.activeTabID != workspace.activeTabID
+                    || updated.tabs.count != workspace.tabs.count
+                    || workspace.tabs.contains { tab in
+                        guard let updatedTab = updated.tabs.first(where: { $0.id == tab.id }) else {
+                            return true
+                        }
+                        return updatedTab.activePaneID != tab.activePaneID
+                    }
+            }
+        guard selectionChanged else { return selectionGeneration }
+        precondition(selectionGeneration < UInt64.max, "Selection generation exhausted")
+        return selectionGeneration + 1
     }
 
     func handleAgentSessionLifecycleAction(_ action: AgentSessionLifecycleAction) -> Bool {
@@ -630,11 +813,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 guard binding.adapterID == attempt.claimKey.adapterID,
                     binding.sessionID == attempt.claimKey.sessionID
                 else { return false }
-                agentResumeRuntime.register(
+                let changedLifecycle = agentResumeRuntime.register(
                     attempt.reference,
                     adapterID: binding.adapterID,
                     sessionID: binding.sessionID
                 )
+                if changedLifecycle {
+                    advancePaneAuthorizationEpoch(for: paneID)
+                }
                 return true
             case .unregister(_, let adapterID, let sessionID):
                 guard adapterID == attempt.claimKey.adapterID,
@@ -645,6 +831,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     adapterID: adapterID,
                     sessionID: sessionID
                 )
+                advancePaneAuthorizationEpoch(for: paneID)
                 return true
             case .replace:
                 return false
@@ -665,6 +852,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             let updated = updateAgentResumeBinding(binding, for: paneID)
             if updated {
                 agentResumePresentations.removeValue(forKey: paneID)
+                advancePaneAuthorizationEpoch(for: paneID)
             }
             return updated
         case .replace(_, let previousSessionID, let binding):
@@ -676,6 +864,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             let updated = updateAgentResumeBinding(binding, for: paneID)
             if updated {
                 agentResumePresentations.removeValue(forKey: paneID)
+                advancePaneAuthorizationEpoch(for: paneID)
             }
             return updated
         case .unregister(_, let adapterID, let sessionID):
@@ -686,9 +875,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             let updated = updateAgentResumeBinding(nil, for: paneID)
             if updated {
                 agentResumePresentations.removeValue(forKey: paneID)
+                advancePaneAuthorizationEpoch(for: paneID)
             }
             return updated
         }
+    }
+
+    private func advancePaneAuthorizationEpoch(for paneID: PaneID) {
+        let current = agentCredentialGenerationByPane[paneID] ?? 0
+        precondition(current < UInt64.max, "Pane authorization epoch exhausted")
+        agentCredentialGenerationByPane[paneID] = current + 1
+        revokeManagedOrigin(paneID)
     }
 
     private func updateAgentResumeBinding(
@@ -729,6 +926,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             agentResumePresentations.removeValue(forKey: paneID)
         }
 
+        switch agentResumeBinding(for: paneID)?.restoreState {
+        case .some(.active):
+            break
+        default:
+            revokeManagedOrigin(paneID)
+        }
         if case .started = startupState, activeTab?.root.contains(paneID) == true {
             refreshWorkspacePresentation(focusTerminal: false)
         }
@@ -737,15 +940,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private func makeConfiguredSurface(
         id paneID: PaneID,
         configuration: GhosttySurfaceConfiguration,
-        additionalAppOwnedEnvironment: [String: String] = [:]
+        additionalAppOwnedEnvironment: [String: String] = [:],
+        includesAgentIdentityEnvironment: Bool = true
     ) throws -> GhosttySurfaceView {
+        // WHY: Creation precedes model commit in tab/split/editor paths; rejecting only the
+        // commit would still spawn a process and install credentials after freeze.
+        guard !isPreparingForTermination else { throw CancellationError() }
         var configuredSurface = configuration
+        if includesAgentIdentityEnvironment {
+            // WHY: Normal/restore/agent paths cannot inherit a managed launch opt-in.
+            configuredSurface.managedHelperPath = nil
+        }
         configuredSurface.environment.removeValue(
             forKey: AgentInvocationPayloadEnvironment.payloadKey
         )
         var installedAgentCredentials = false
+        var controlSocketPath: String?
 
-        if let agentSessionController {
+        if includesAgentIdentityEnvironment, let agentSessionController {
             let identityEnvironment: [String: String]?
             if agentSessionController.environment(for: paneID) == nil {
                 identityEnvironment = agentSessionController.register(paneID: paneID)
@@ -755,19 +967,34 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             if let identityEnvironment {
                 configuredSurface.environment.merge(identityEnvironment) { _, appValue in appValue }
                 installedAgentCredentials = true
+                controlSocketPath = identityEnvironment["QUICKTTY_CONTROL_SOCKET"]
+                advancePaneAuthorizationEpoch(for: paneID)
             }
         }
         configuredSurface.environment.merge(additionalAppOwnedEnvironment) {
             _, appValue in appValue
         }
+        // WHY: Only the live app-owned endpoint may survive any environment merge layer.
+        configuredSurface.environment["QUICKTTY_CONTROL_SOCKET"] = controlSocketPath
+        if !includesAgentIdentityEnvironment {
+            for key in Self.managedTaskExcludedEnvironmentKeys {
+                configuredSurface.environment.removeValue(forKey: key)
+            }
+        }
 
         do {
-            return try ghosttyBridge.makeSurface(
+            let surface = try ghosttyBridge.makeSurface(
                 id: paneID,
                 configuration: configuredSurface
             ) { [weak self] paneID, processAlive in
                 self?.surfaceDidRequestClose(id: paneID, processAlive: processAlive)
             }
+            // WHY: A creation callback may freeze reentrantly; the temporary surface is not accepted.
+            guard !isPreparingForTermination else {
+                closeCreatedSurface(id: paneID)
+                throw CancellationError()
+            }
+            return surface
         } catch {
             if installedAgentCredentials {
                 agentSessionController?.revoke(paneID: paneID)
@@ -776,12 +1003,22 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
     }
 
+    private static let managedTaskExcludedEnvironmentKeys: Set<String> = [
+        "QUICKTTY_PANE_ID",
+        "QUICKTTY_AGENT_SOCKET",
+        "QUICKTTY_INSTANCE_ID",
+        "QUICKTTY_PANE_TOKEN",
+        "QUICKTTY_AGENT_HELPER",
+        "QUICKTTY_CONTROL_SOCKET",
+    ]
+
     private func closeCreatedSurface(id paneID: PaneID) {
         agentSessionController?.revoke(paneID: paneID)
         ghosttyBridge.closeSurface(id: paneID)
     }
 
     private func installSurfaceActivityHandlers() {
+        guard !isPreparingForTermination else { return }
         activityCallbackGeneration += 1
         let generation = activityCallbackGeneration
         ghosttyBridge.surfaceProgressHandler = { [weak self] paneID, report in
@@ -791,6 +1028,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         ghosttyBridge.surfaceCommandFinishedHandler = { [weak self] paneID, command in
             guard let self, generation == activityCallbackGeneration else { return }
             handleSurfaceCommandFinished(command, for: paneID)
+        }
+        ghosttyBridge.surfaceProcessExitedHandler = { [weak self] paneID, process in
+            guard let self, !isPreparingForTermination,
+                generation == activityCallbackGeneration
+            else { return }
+            observeManagedCompletion(process, paneID: paneID)
         }
     }
 
@@ -809,6 +1052,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ command: GhosttyCommandFinished,
         for paneID: PaneID
     ) {
+        // WHY: A command can finish while the managed shell remains alive and accepts input.
         guard activityConfiguration.progressStyleEnabled,
             liveOwningTab(for: paneID) != nil
         else { return }
@@ -841,6 +1085,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func refreshWorkspaceStatuses() {
+        guard !isPreparingForTermination else { return }
         #if DEBUG
             refreshWorkspaceStatusesInvocationCountForTestingStorage += 1
         #endif
@@ -866,6 +1111,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func synchronizeTerminalAcknowledgements() {
+        guard !isPreparingForTermination else { return }
         for paneID in terminalActivityController.statuses.keys {
             acknowledgeTerminalStatus(for: paneID)
         }
@@ -912,6 +1158,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func surfaceDidRequestTabTitlePrompt(id paneID: PaneID) {
+        guard !isPreparingForTermination else { return }
         guard let tab = liveOwningTab(for: paneID), tab.id == activeTab?.id else { return }
         workspaceViewController.presentTabTitlePrompt(for: tab.id)
     }
@@ -940,6 +1187,1515 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             try createShellTab()
         } catch {
             onError(error)
+        }
+    }
+
+    var terminalAutomationHost: any TerminalAutomationHost {
+        terminalAutomationHostFacade
+    }
+
+    func handleTerminalAutomationRequest(
+        _ authenticatedRequest: TerminalControlSocketRequest,
+        context: TerminalControlRequestContext
+    ) async -> TerminalControlResponse {
+        guard !isTerminalControlFrozen, context.isActive, !Task.isCancelled else {
+            return TerminalControlResponse(
+                result: .failure(
+                    try! TerminalControlError(
+                        code: .cancelled, message: "Terminal control request cancelled")))
+        }
+        return await terminalAutomationCoordinator.handle(authenticatedRequest, context: context)
+    }
+
+    func resolveTerminalAutomationSession(
+        instanceID: UUID,
+        originPaneID: PaneID
+    ) -> TerminalAutomationResolvedSession? {
+        guard !isTerminalControlFrozen, let agentSessionController,
+            agentSessionController.instanceID == instanceID,
+            agentSessionController.environment(for: originPaneID) != nil,
+            surfaces[originPaneID] != nil,
+            let credentialGeneration = agentCredentialGenerationByPane[originPaneID]
+        else {
+            return nil
+        }
+
+        for workspace in workspaceStore.workspaces {
+            guard let originTab = workspace.tabs.first(where: { $0.root.contains(originPaneID) }),
+                let binding = originTab.paneDescriptor(for: originPaneID)?.agentResumeBinding,
+                case .active = binding.restoreState,
+                let activeTabID = workspace.activeTabID
+            else {
+                continue
+            }
+            return TerminalAutomationResolvedSession(
+                identity: TerminalAutomationSessionIdentity(
+                    instanceID: instanceID,
+                    originPaneID: originPaneID,
+                    adapterID: binding.adapterID,
+                    sessionID: binding.sessionID,
+                    paneCredentialGeneration: credentialGeneration
+                ),
+                workspace: TerminalAutomationWorkspaceContext(
+                    workspaceID: workspace.id,
+                    name: workspace.name,
+                    originTabID: originTab.id,
+                    activeTabID: activeTabID,
+                    tabCount: workspace.tabs.count,
+                    paneCount: workspace.tabs.reduce(0) { $0 + $1.root.leaves.count },
+                    tabIDs: Set(workspace.tabs.map(\.id)),
+                    paneIDs: Set(workspace.tabs.flatMap(\.root.leaves))
+                )
+            )
+        }
+        return nil
+    }
+
+    func createManagedTab(
+        in workspaceID: WorkspaceID,
+        launchConfiguration: TerminalTaskLaunchConfiguration,
+        workingDirectory: String,
+        policy: TerminalTaskLifecyclePolicy,
+        focus: Bool,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        guard resolvedTerminalAutomationSession(expectedSession, in: workspaceID) != nil else {
+            return .failure(.staleSession)
+        }
+
+        guard canCreateManagedTask(for: expectedSession) else { return .failure(.resourceLimit) }
+        let paneID = PaneID()
+        let tabID = TabID()
+        let taskID = managedTaskIDProvider()
+        var configuration = surfaceConfiguration
+        configuration.workingDirectory = workingDirectory
+        configuration.command = launchConfiguration.command
+        configuration.initialInput = nil
+        configuration.waitAfterCommand = true
+        configuration.managedHelperPath = launchConfiguration.helperPath
+        configuration.context = .newTab
+
+        let surface: GhosttySurfaceView
+        do {
+            surface = try makeConfiguredSurface(
+                id: paneID,
+                configuration: configuration,
+                additionalAppOwnedEnvironment: launchConfiguration.environment,
+                includesAgentIdentityEnvironment: false
+            )
+        } catch {
+            agentSessionController?.revoke(paneID: paneID)
+            return .failure(.surfaceCreationFailed)
+        }
+
+        var candidate = workspaceStore
+        do {
+            #if DEBUG
+                if failsNextManagedTabMutationForTesting {
+                    failsNextManagedTabMutationForTesting = false
+                    throw WorkspaceError.workspaceNotFound(workspaceID)
+                }
+            #endif
+            let descriptor = TerminalPaneDescriptor(id: paneID, cwd: workingDirectory)
+            let tab = TerminalTab(id: tabID, title: "Shell", pane: descriptor)
+            try candidate.addTab(tab, to: workspaceID)
+            if focus {
+                try candidate.activateWorkspace(workspaceID)
+                try candidate.activateTab(tabID, in: workspaceID)
+            }
+        } catch {
+            closeCreatedSurface(id: paneID)
+            return .failure(.modelMutationFailed)
+        }
+
+        let task = TerminalControlTask(
+            taskID: taskID,
+            paneID: paneID.rawValue,
+            tabID: tabID.rawValue,
+            workspaceID: workspaceID.rawValue,
+            state: .running,
+            owner: .agent,
+            policy: policy,
+            revision: 1,
+            exitCode: nil
+        )
+        guard
+            registerManagedTask(
+                task,
+                session: expectedSession,
+                splitID: nil,
+                surface: surface,
+                previousFocus: focus
+                    ? managedTaskFocusContext(in: workspaceID, candidate: candidate) : nil
+            )
+        else {
+            closeCreatedSurface(id: paneID)
+            return .failure(.modelMutationFailed)
+        }
+        surfaces[paneID] = surface
+
+        #if DEBUG
+            if failsNextManagedCommitForTesting {
+                failsNextManagedCommitForTesting = false
+                rollbackManagedCreation(taskID: taskID, paneID: paneID)
+                return .failure(.modelMutationFailed)
+            }
+        #endif
+        guard resolvedTerminalAutomationSession(expectedSession, in: workspaceID) != nil else {
+            rollbackManagedCreation(taskID: taskID, paneID: paneID)
+            return .failure(.staleSession)
+        }
+        guard commitWorkspaceStore(candidate) else {
+            rollbackManagedCreation(taskID: taskID, paneID: paneID)
+            return .failure(.modelMutationFailed)
+        }
+
+        installSurfaceActivityHandlers()
+        refreshWorkspacePresentation(focusTerminal: focus)
+        trimManagedTasks(for: expectedSession)
+        return .createdTask(
+            TerminalAutomationCreatedTaskResponse(task: task, splitID: nil)
+        )
+    }
+
+    func splitManagedPane(
+        anchorPaneID: PaneID,
+        in workspaceID: WorkspaceID,
+        placement: SplitPlacement,
+        ratio: Double,
+        launchConfiguration: TerminalTaskLaunchConfiguration,
+        workingDirectory: String,
+        policy: TerminalTaskLifecyclePolicy,
+        focus: Bool,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        guard resolvedTerminalAutomationSession(expectedSession, in: workspaceID) != nil else {
+            return .failure(.staleSession)
+        }
+        guard let anchorOwnership = ownership(for: anchorPaneID),
+            anchorOwnership.workspace.id == workspaceID,
+            anchorIsValid(anchorPaneID, for: expectedSession)
+        else {
+            return .failure(.targetNotOwned)
+        }
+
+        guard canCreateManagedTask(for: expectedSession) else { return .failure(.resourceLimit) }
+        let paneID = PaneID()
+        let taskID = managedTaskIDProvider()
+        let previousActivePaneID = anchorOwnership.tab.activePaneID
+        var configuration = surfaceConfiguration
+        configuration.workingDirectory = workingDirectory
+        configuration.command = launchConfiguration.command
+        configuration.initialInput = nil
+        configuration.waitAfterCommand = true
+        configuration.managedHelperPath = launchConfiguration.helperPath
+        configuration.context = .split
+
+        let surface: GhosttySurfaceView
+        do {
+            surface = try makeConfiguredSurface(
+                id: paneID,
+                configuration: configuration,
+                additionalAppOwnedEnvironment: launchConfiguration.environment,
+                includesAgentIdentityEnvironment: false
+            )
+        } catch {
+            agentSessionController?.revoke(paneID: paneID)
+            return .failure(.surfaceCreationFailed)
+        }
+
+        var candidate = workspaceStore
+        let splitID: UUID
+        do {
+            #if DEBUG
+                if failsNextManagedSplitMutationForTesting {
+                    failsNextManagedSplitMutationForTesting = false
+                    throw SplitCoordinatorError.paneNotFound(anchorPaneID)
+                }
+            #endif
+            let delta = try splitCoordinator.apply(
+                .split(
+                    workspaceID: workspaceID,
+                    tabID: anchorOwnership.tab.id,
+                    paneID: anchorPaneID,
+                    axis: placement.axis,
+                    insertionSide: placement.insertionSide,
+                    newPane: TerminalPaneDescriptor(id: paneID, cwd: workingDirectory),
+                    ratio: ratio
+                ),
+                to: &candidate
+            )
+            guard case .paneSplit(_, _, let createdSplitID, _, _, _, _, _, _, _) = delta else {
+                closeCreatedSurface(id: paneID)
+                return .failure(.modelMutationFailed)
+            }
+            splitID = createdSplitID
+            if focus {
+                try candidate.activateWorkspace(workspaceID)
+                try candidate.activateTab(anchorOwnership.tab.id, in: workspaceID)
+            } else {
+                _ = try splitCoordinator.apply(
+                    .activatePane(
+                        workspaceID: workspaceID,
+                        tabID: anchorOwnership.tab.id,
+                        paneID: previousActivePaneID
+                    ),
+                    to: &candidate
+                )
+            }
+        } catch {
+            closeCreatedSurface(id: paneID)
+            return .failure(.modelMutationFailed)
+        }
+
+        let task = TerminalControlTask(
+            taskID: taskID,
+            paneID: paneID.rawValue,
+            tabID: anchorOwnership.tab.id.rawValue,
+            workspaceID: workspaceID.rawValue,
+            state: .running,
+            owner: .agent,
+            policy: policy,
+            revision: 1,
+            exitCode: nil
+        )
+        guard
+            registerManagedTask(
+                task,
+                session: expectedSession,
+                splitID: splitID,
+                surface: surface,
+                previousFocus: focus
+                    ? managedTaskFocusContext(
+                        in: workspaceID,
+                        splitTabID: anchorOwnership.tab.id,
+                        candidate: candidate
+                    ) : nil
+            )
+        else {
+            closeCreatedSurface(id: paneID)
+            return .failure(.modelMutationFailed)
+        }
+        surfaces[paneID] = surface
+
+        #if DEBUG
+            if failsNextManagedCommitForTesting {
+                failsNextManagedCommitForTesting = false
+                rollbackManagedCreation(taskID: taskID, paneID: paneID)
+                return .failure(.modelMutationFailed)
+            }
+        #endif
+        guard resolvedTerminalAutomationSession(expectedSession, in: workspaceID) != nil,
+            anchorIsValid(anchorPaneID, for: expectedSession)
+        else {
+            rollbackManagedCreation(taskID: taskID, paneID: paneID)
+            return .failure(.staleSession)
+        }
+        guard commitWorkspaceStore(candidate) else {
+            rollbackManagedCreation(taskID: taskID, paneID: paneID)
+            return .failure(.modelMutationFailed)
+        }
+
+        installSurfaceActivityHandlers()
+        refreshWorkspacePresentation(focusTerminal: focus)
+        trimManagedTasks(for: expectedSession)
+        return .createdTask(
+            TerminalAutomationCreatedTaskResponse(task: task, splitID: splitID)
+        )
+    }
+
+    func presentTerminalAutomationPermission(
+        for session: TerminalAutomationResolvedSession
+    ) async -> TerminalAutomationPermissionDecision {
+        guard !isPreparingForTermination,
+            resolvedTerminalAutomationSession(session.identity, in: session.workspace.workspaceID)
+                != nil,
+            let window = activeWindow
+        else { return .unavailable }
+        let decision = await terminalControlPermissionController.present(
+            for: session, on: window, using: terminalAutomationPermissionPresenter,
+            isCurrent: { [weak self, weak window] in
+                guard let self, let window, !isPreparingForTermination,
+                    activeWindow === window,
+                    presentationMode != .quake
+                        || quakeWindowController.requestedVisibility == .shown
+                else { return false }
+                return resolvedTerminalAutomationSession(
+                    session.identity, in: session.workspace.workspaceID) != nil
+            })
+        guard !Task.isCancelled, !isPreparingForTermination, activeWindow === window,
+            window.isVisible, !window.isMiniaturized,
+            presentationMode != .quake || quakeWindowController.requestedVisibility == .shown,
+            resolvedTerminalAutomationSession(session.identity, in: session.workspace.workspaceID)
+                != nil
+        else { return .unavailable }
+        return decision
+    }
+
+    func prepareTerminalTaskLaunchConfiguration(
+        for launch: TerminalControlLaunch
+    ) throws -> TerminalTaskLaunchConfiguration {
+        guard let helperPath = agentSessionController?.bundledHelperPath else {
+            throw AgentLaunchConfigurationError.invalidHelperPath
+        }
+        return try TerminalTaskLaunchConfiguration(
+            launch: launch,
+            bundledHelperPath: helperPath,
+            executableSearchPath: executableSearchPath
+        )
+    }
+
+    private func resolvedTerminalAutomationSession(
+        _ expectedSession: TerminalAutomationSessionIdentity,
+        in workspaceID: WorkspaceID
+    ) -> TerminalAutomationResolvedSession? {
+        guard
+            let resolved = resolveTerminalAutomationSession(
+                instanceID: expectedSession.instanceID,
+                originPaneID: expectedSession.originPaneID
+            ), resolved.identity == expectedSession,
+            resolved.workspace.workspaceID == workspaceID
+        else {
+            return nil
+        }
+        return resolved
+    }
+
+    private func ownership(for paneID: PaneID) -> (workspace: Workspace, tab: TerminalTab)? {
+        for workspace in workspaceStore.workspaces {
+            if let tab = workspace.tabs.first(where: { $0.root.contains(paneID) }) {
+                return (workspace, tab)
+            }
+        }
+        return nil
+    }
+
+    private func anchorIsValid(
+        _ paneID: PaneID,
+        for session: TerminalAutomationSessionIdentity
+    ) -> Bool {
+        if paneID == session.originPaneID {
+            return true
+        }
+        guard let taskID = managedTaskIDByPane[paneID],
+            let record = managedTasks[taskID]
+        else {
+            return false
+        }
+        return record.session == session && !record.isRevoked && isCurrentManagedSurface(record)
+    }
+
+    private func managedTaskFocusContext(
+        in workspaceID: WorkspaceID,
+        splitTabID: TabID? = nil,
+        candidate: WorkspaceStore
+    ) -> ManagedTaskFocusContext {
+        // WHY: Claim only this commit's epoch before persistence/presentation can reenter selection.
+        ManagedTaskFocusContext(
+            selectionGeneration: selectionGeneration(after: candidate),
+            activeWorkspaceID: workspaceStore.activeWorkspaceID,
+            targetActiveTabID: workspaceStore.workspace(id: workspaceID)?.activeTabID,
+            targetActivePaneID: splitTabID.flatMap { workspaceStore.tab(id: $0)?.activePaneID }
+        )
+    }
+
+    private func registerManagedTask(
+        _ task: TerminalControlTask,
+        session: TerminalAutomationSessionIdentity,
+        splitID: UUID?,
+        surface: GhosttySurfaceView,
+        previousFocus: ManagedTaskFocusContext?
+    ) -> Bool {
+        let paneID = PaneID(rawValue: task.paneID)
+        guard managedTasks[task.taskID] == nil,
+            discardedManagedTasks[task.taskID] == nil,
+            managedTaskIDByPane[paneID] == nil
+        else {
+            return false
+        }
+        managedTasks[task.taskID] = ManagedTerminalTaskRecord(
+            task: task,
+            session: session,
+            splitID: splitID,
+            previousFocus: previousFocus,
+            createdTask: task,
+            surfaceIdentity: ObjectIdentifier(surface),
+            isAccepted: !terminalAutomationCoordinator.hasPendingHostCreation(for: session)
+        )
+        managedTaskOrder.append(task.taskID)
+        managedTaskIDByPane[paneID] = task.taskID
+        return true
+    }
+
+    private func rollbackManagedCreation(taskID: UUID, paneID: PaneID) {
+        managedTaskOrder.removeAll { $0 == taskID }
+        managedTasks.removeValue(forKey: taskID)?.completionTask?.cancel()
+        managedTaskIDByPane.removeValue(forKey: paneID)
+        surfaces.removeValue(forKey: paneID)
+        closeCreatedSurface(id: paneID)
+    }
+
+    func discardManagedTask(
+        _ created: TerminalAutomationCreatedTaskResponse,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) -> Bool {
+        let task = created.task
+        if let discarded = discardedManagedTasks[task.taskID] {
+            guard discarded.created == created, discarded.session == expectedSession else {
+                return false
+            }
+            discardedManagedTasks[task.taskID]?.compensationCompleted = true
+            return true
+        }
+
+        let paneID = PaneID(rawValue: task.paneID)
+        guard let record = managedTasks[task.taskID],
+            record.createdTask == task,
+            record.session == expectedSession,
+            record.splitID == created.splitID,
+            managedTaskIDByPane[paneID] == nil
+                || managedTaskIDByPane[paneID] == task.taskID
+        else {
+            return false
+        }
+
+        if let surface = surfaces[paneID], ObjectIdentifier(surface) != record.surfaceIdentity {
+            return false
+        }
+        // WHY: Exact pending-creation compensation must still release its runtime after freeze,
+        // but may neither edit the frozen model nor discard an accepted user-visible task.
+        guard !isPreparingForTermination || !record.isAccepted else { return false }
+        var shouldFocus = false
+        if !isPreparingForTermination, let ownership = ownership(for: paneID) {
+            let workspaceID = ownership.workspace.id
+            let tabID = ownership.tab.id
+            shouldFocus =
+                workspaceStore.activeWorkspaceID == workspaceID
+                && ownership.workspace.activeTabID == tabID
+                && ownership.tab.activePaneID == paneID
+            var candidate = workspaceStore
+            let delta: SplitDelta
+            do {
+                delta = try splitCoordinator.apply(
+                    .closePane(workspaceID: workspaceID, tabID: tabID, paneID: paneID),
+                    to: &candidate
+                )
+            } catch {
+                return false
+            }
+            switch delta {
+            case .tabClosed, .paneClosed:
+                break
+            case .paneSplit, .ratioUpdated, .splitsEqualized, .focusChanged:
+                return false
+            }
+            restoreManagedTaskFocus(record, ownership: ownership, in: &candidate)
+            guard commitWorkspaceStore(candidate) else { return false }
+        }
+
+        if let current = managedTasks[task.taskID],
+            current.processGeneration != record.processGeneration
+        {
+            return false
+        }
+        if let surface = surfaces[paneID], ObjectIdentifier(surface) != record.surfaceIdentity {
+            return false
+        }
+        // WHY: Persistence above may freeze too; only unaccepted creation has this exception.
+        guard !isPreparingForTermination || !record.isAccepted else { return false }
+        // WHY: The task record is the authority after creation; tabs can move before rollback.
+        guard
+            removeManagedTaskRuntime(
+                taskID: task.taskID, paneID: paneID,
+                allowDuringTermination: !record.isAccepted
+            )
+        else { return false }
+        discardedManagedTasks[task.taskID] = DiscardedManagedTaskRecord(
+            created: created,
+            session: expectedSession,
+            compensationCompleted: true
+        )
+        if case .started = startupState {
+            refreshWorkspacePresentation(focusTerminal: shouldFocus)
+        }
+        return true
+    }
+
+    private func restoreManagedTaskFocus(
+        _ record: ManagedTerminalTaskRecord,
+        ownership: (workspace: Workspace, tab: TerminalTab),
+        in candidate: inout WorkspaceStore
+    ) {
+        guard let previous = record.previousFocus,
+            previous.selectionGeneration == selectionGeneration,
+            ownership.tab.id.rawValue == record.task.tabID,
+            ownership.tab.activePaneID.rawValue == record.task.paneID
+        else { return }
+
+        // WHY: Equality of IDs alone cannot distinguish creation focus from a later user return.
+        if let paneID = previous.targetActivePaneID,
+            candidate.tab(id: ownership.tab.id)?.root.contains(paneID) == true
+        {
+            _ = try? splitCoordinator.apply(
+                .activatePane(
+                    workspaceID: ownership.workspace.id,
+                    tabID: ownership.tab.id,
+                    paneID: paneID
+                ),
+                to: &candidate
+            )
+        }
+
+        // WHY: Moving a tab or selecting another target transfers workspace/tab focus ownership.
+        guard ownership.workspace.id.rawValue == record.task.workspaceID,
+            ownership.workspace.activeTabID == ownership.tab.id
+        else { return }
+        if let tabID = previous.targetActiveTabID, tabID != ownership.tab.id,
+            candidate.workspace(id: ownership.workspace.id)?.tabs.contains(where: {
+                $0.id == tabID
+            }) == true
+        {
+            try? candidate.activateTab(tabID, in: ownership.workspace.id)
+        }
+        if workspaceStore.activeWorkspaceID == ownership.workspace.id,
+            previous.activeWorkspaceID != ownership.workspace.id,
+            candidate.workspace(id: previous.activeWorkspaceID) != nil
+        {
+            // WHY: Other workspaces' local selections were never changed by creation.
+            try? candidate.activateWorkspace(previous.activeWorkspaceID)
+        }
+    }
+
+    private func removeManagedTaskRuntime(
+        taskID: UUID, paneID: PaneID, allowDuringTermination: Bool
+    ) -> Bool {
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
+        if surfaces[paneID] != nil {
+            // WHY: Only the exact unaccepted creation checked by discardManagedTask may
+            // compensate while frozen; ordinary removal must stop at callback boundaries.
+            guard
+                removeSurface(
+                    id: paneID, closeBridgeSurface: true,
+                    allowDuringTermination: allowDuringTermination
+                )
+            else { return false }
+        } else {
+            if let attempt = agentResumeAttempts.removeValue(forKey: paneID) {
+                agentResumeRuntime.surfaceDidClose(attempt.reference)
+            }
+            agentResumePresentations.removeValue(forKey: paneID)
+            agentSessionController?.revoke(paneID: paneID)
+            cleanUpPaneLifecycle(paneID)
+            guard !isPreparingForTermination || allowDuringTermination else { return false }
+            confirmationQueue.invalidatePane(paneID)
+            guard !isPreparingForTermination || allowDuringTermination else { return false }
+            ghosttyBridge.closeSurface(id: paneID)
+        }
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
+        managedTasks.removeValue(forKey: taskID)?.completionTask?.cancel()
+        managedTaskOrder.removeAll { $0 == taskID }
+        if managedTaskIDByPane[paneID] == taskID {
+            managedTaskIDByPane.removeValue(forKey: paneID)
+        }
+        agentCredentialGenerationByPane.removeValue(forKey: paneID)
+        surfaceFailures.removeValue(forKey: paneID)
+        return true
+    }
+
+    func inspectManagedTask(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationTaskInspection {
+        guard let record = managedTasks[taskID] else { return .notFound }
+        guard record.session == expectedSession, !record.isRevoked else { return .notOwned }
+        guard
+            resolvedTerminalAutomationSession(
+                expectedSession, in: WorkspaceID(rawValue: record.task.workspaceID)) != nil
+        else {
+            return .notOwned
+        }
+        let paneID = PaneID(rawValue: record.task.paneID)
+        if record.surfaceIdentity == nil, record.task.owner == .finished {
+            return .owned(record.task)
+        }
+        guard let surface = surfaces[paneID], ObjectIdentifier(surface) == record.surfaceIdentity,
+            let ownership = ownership(for: paneID),
+            ownership.workspace.id.rawValue == record.task.workspaceID,
+            ownership.tab.id.rawValue == record.task.tabID
+        else {
+            return .notFound
+        }
+        return .owned(record.task)
+    }
+
+    private func isCurrentManagedSurface(_ record: ManagedTerminalTaskRecord) -> Bool {
+        let paneID = PaneID(rawValue: record.task.paneID)
+        guard let surface = surfaces[paneID], surface.isReady,
+            ObjectIdentifier(surface) == record.surfaceIdentity,
+            managedTaskIDByPane[paneID] == record.task.taskID,
+            let location = ownership(for: paneID)
+        else { return false }
+        return location.workspace.id.rawValue == record.task.workspaceID
+            && location.tab.id.rawValue == record.task.tabID
+    }
+
+    private func managedAccessError(
+        taskID: UUID, session: TerminalAutomationSessionIdentity
+    ) -> TerminalControlErrorCode? {
+        guard
+            let resolved = resolveTerminalAutomationSession(
+                instanceID: session.instanceID, originPaneID: session.originPaneID
+            ), resolved.identity == session
+        else { return .staleSession }
+        guard let record = managedTasks[taskID] else { return .targetNotFound }
+        guard record.session == session, !record.isRevoked,
+            record.task.workspaceID == resolved.workspace.workspaceID.rawValue
+        else { return .targetNotOwned }
+        if record.surfaceIdentity == nil, record.task.owner == .finished { return nil }
+        return isCurrentManagedSurface(record) ? nil : .targetNotFound
+    }
+
+    private func refreshManagedSnapshot(
+        taskID: UUID, capturesDeferredCompletion: Bool = false
+    ) -> Bool {
+        guard !isTerminalControlFrozen, !isPreparingForTermination,
+            let initial = managedTasks[taskID], !initial.isRevoked
+        else { return false }
+        switch initial.snapshotState {
+        case .finalCaptured, .closedFallback:
+            return true
+        case .pendingFinal where !capturesDeferredCompletion, .readingFinal:
+            // WHY: Interim reads must neither steal the later-turn capture nor fail a waiting client.
+            return true
+        case .revoked:
+            return false
+        case .running, .runningReadFailed, .pendingFinal, .finalReadFailed:
+            break
+        }
+        guard isCurrentManagedSurface(initial) else { return false }
+        let now = terminalAutomationNow()
+        if let previous = initial.lastRefresh, now - previous < 0.25 {
+            return initial.snapshotState == .running
+        }
+        if initial.completionObserved {
+            // WHY: A retry after timeout may see more text without EOF; that is still not final.
+            let outputState = ghosttyBridge.outputState(id: PaneID(rawValue: initial.task.paneID))
+            guard !isTerminalControlFrozen, !isPreparingForTermination,
+                let current = managedTasks[taskID], !current.isRevoked,
+                current.processGeneration == initial.processGeneration,
+                current.surfaceIdentity == initial.surfaceIdentity,
+                current.session == initial.session, current.task == initial.task,
+                current.isAccepted == initial.isAccepted,
+                current.snapshotState == initial.snapshotState,
+                isCurrentManagedSurface(current)
+            else { return false }
+            guard outputState == .complete else { return false }
+        }
+        // WHY: Only the deferred path can start the first final attempt; explicit reads can retry it.
+        let attemptState: ManagedSnapshotState =
+            initial.completionObserved ? .readingFinal : .runningReadFailed
+        // WHY: Reserve the read window before crossing an injectable bridge boundary.
+        managedTasks[taskID]?.lastRefresh = now
+        managedTasks[taskID]?.snapshotState = attemptState
+        defer {
+            // WHY: Reentrant invalidation must not strand a same-generation final read in progress.
+            if let current = managedTasks[taskID], !current.isRevoked,
+                current.processGeneration == initial.processGeneration,
+                current.surfaceIdentity == initial.surfaceIdentity,
+                current.snapshotState == .readingFinal
+            {
+                managedTasks[taskID]?.snapshotState = .finalReadFailed
+            }
+        }
+        let output: GhosttyRenderedText
+        do {
+            output = try ghosttyBridge.readRenderedText(
+                id: PaneID(rawValue: initial.task.paneID),
+                maximumUTF8Bytes: TerminalControlProtocol.maximumSnapshotSize
+            )
+        } catch {
+            if let current = managedTasks[taskID], !current.isRevoked,
+                current.processGeneration == initial.processGeneration,
+                current.surfaceIdentity == initial.surfaceIdentity,
+                current.snapshotState == .readingFinal
+            {
+                managedTasks[taskID]?.snapshotState = .finalReadFailed
+            }
+            return false
+        }
+        guard !isTerminalControlFrozen, !isPreparingForTermination,
+            var current = managedTasks[taskID], !current.isRevoked,
+            current.processGeneration == initial.processGeneration,
+            current.session == initial.session, current.isAccepted == initial.isAccepted,
+            current.task == initial.task, isCurrentManagedSurface(current),
+            current.surfaceIdentity == initial.surfaceIdentity,
+            current.snapshotState == attemptState,
+            current.completionObserved == initial.completionObserved,
+            current.completionExitCode == initial.completionExitCode
+        else { return false }
+        current.update(rendered: output)
+        current.snapshotState = current.completionObserved ? .finalCaptured : .running
+        managedTasks[taskID] = current
+        return true
+    }
+
+    func readManagedTask(
+        taskID: UUID, expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationHostResponse {
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard !Task.isCancelled else { return .failure(.cancelled) }
+        guard refreshManagedSnapshot(taskID: taskID) else {
+            return .failure(
+                managedAccessError(taskID: taskID, session: expectedSession) ?? .internalFailure)
+        }
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard let record = managedTasks[taskID],
+            let snapshot = try? TerminalControlSnapshot(
+                task: record.task, text: record.rendered.text,
+                isTruncated: record.rendered.isTruncated
+            )
+        else { return .failure(.internalFailure) }
+        // WHY: Delegate closure only after retaining output, outside any bridge/close reentrancy.
+        scheduleManagedSuccessfulClosure(taskID: taskID)
+        return .snapshot(snapshot)
+    }
+
+    private func canAutomaticallyCloseManagedTask(_ record: ManagedTerminalTaskRecord) -> Bool {
+        !record.isRevoked && record.isAccepted && record.completionObserved
+            && record.snapshotState == .finalCaptured && record.task.state == .succeeded
+            && record.task.owner == .finished && record.task.policy == .closeOnSuccess
+            && !isPreparingForTermination && !isTerminalControlFrozen
+            && managedAccessError(taskID: record.task.taskID, session: record.session) == nil
+            && !closingPaneIDs.contains(PaneID(rawValue: record.task.paneID))
+            && isCurrentManagedSurface(record)
+    }
+
+    private func scheduleManagedSuccessfulClosure(taskID: UUID) {
+        guard let record = managedTasks[taskID], record.completionTask == nil,
+            canAutomaticallyCloseManagedTask(record)
+        else { return }
+        let generation = record.processGeneration
+        let surfaceIdentity = record.surfaceIdentity
+        managedTasks[taskID]?.completionTask = Task { @MainActor [weak self] in
+            // WHY: Reads and creation acceptance must not close inside an outer model mutation.
+            await Task.yield()
+            guard let self, !Task.isCancelled, let current = managedTasks[taskID],
+                current.processGeneration == generation, current.surfaceIdentity == surfaceIdentity,
+                current.session == record.session, !current.isRevoked
+            else { return }
+            managedTasks[taskID]?.completionTask = nil
+            guard canAutomaticallyCloseManagedTask(current) else { return }
+            finishSurfaceClosure(
+                id: PaneID(rawValue: current.task.paneID), closeBridgeSurface: true)
+        }
+    }
+
+    func sendManagedInput(
+        taskID: UUID, expectedRevision: UInt64,
+        text: String? = nil, key: TerminalControlKey? = nil,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationHostResponse {
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard let initial = managedTasks[taskID] else { return .failure(.targetNotFound) }
+        guard !isPreparingForTermination,
+            !closingPaneIDs.contains(PaneID(rawValue: initial.task.paneID))
+        else {
+            return .failure(.cancelled)
+        }
+        guard !initial.completionObserved,
+            initial.task.state == .running || initial.task.state == .waitingForUser
+        else { return .failure(.processFinished) }
+        guard initial.task.owner == .agent, initial.task.state == .running else {
+            return .failure(.userControlsPane)
+        }
+        guard refreshManagedSnapshot(taskID: taskID) else {
+            return .failure(
+                managedAccessError(taskID: taskID, session: expectedSession) ?? .internalFailure)
+        }
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard !Task.isCancelled else { return .failure(.cancelled) }
+        guard let current = managedTasks[taskID],
+            current.processGeneration == initial.processGeneration,
+            current.surfaceIdentity == initial.surfaceIdentity, isCurrentManagedSurface(current)
+        else { return .failure(.targetNotOwned) }
+        guard current.task.revision == expectedRevision else {
+            return .failure(.staleTerminalRevision)
+        }
+        guard !current.completionObserved,
+            current.task.state == .running || current.task.state == .waitingForUser
+        else { return .failure(.processFinished) }
+        guard current.task.owner == .agent, current.task.state == .running else {
+            return .failure(.userControlsPane)
+        }
+        // WHY: No suspension is allowed between exact capability validation and bridge delivery.
+        do {
+            let paneID = PaneID(rawValue: current.task.paneID)
+            if let text {
+                try ghosttyBridge.sendAutomationText(id: paneID, text: text)
+            } else if let key, let bridgeKey = GhosttyAutomationKey(rawValue: key.rawValue) {
+                try ghosttyBridge.sendAutomationKey(id: paneID, key: bridgeKey)
+            } else {
+                return .failure(.invalidRequest)
+            }
+        } catch { return .failure(.internalFailure) }
+        return .acknowledged(taskID: taskID, revision: current.task.revision)
+    }
+
+    private func liveManagedTask(taskID: UUID) -> ManagedTerminalTaskRecord? {
+        guard !isPreparingForTermination, let record = managedTasks[taskID], !record.isRevoked,
+            !record.completionObserved,
+            record.task.state == .running || record.task.state == .waitingForUser,
+            record.task.owner == .agent || record.task.owner == .user,
+            !closingPaneIDs.contains(PaneID(rawValue: record.task.paneID)),
+            managedAccessError(taskID: taskID, session: record.session) == nil
+        else { return nil }
+        return record
+    }
+
+    private func liveGrantedManagedTask(taskID: UUID) -> ManagedTerminalTaskRecord? {
+        guard let record = liveManagedTask(taskID: taskID),
+            terminalAutomationCoordinator.currentGrantedTask(
+                taskID: taskID, session: record.session)
+                == record.task
+        else { return nil }
+        return record
+    }
+
+    private func takeManualControl(of paneID: PaneID) {
+        guard let taskID = managedTaskIDByPane[paneID],
+            var record = liveManagedTask(taskID: taskID), record.task.owner == .agent
+        else { return }
+        // WHY: The bridge calls this synchronously before delivery, including each broadcast target.
+        // No input bytes or synthetic terminal text cross this boundary.
+        record.update(owner: .user)
+        managedTasks[taskID] = record
+        scheduleManagedPresentationRefresh()
+    }
+
+    @discardableResult
+    func returnControlToAgent(taskID: UUID) -> Bool {
+        guard var record = liveGrantedManagedTask(taskID: taskID), record.task.owner == .user else {
+            return false
+        }
+        record.update(state: .running, owner: .agent)
+        managedTasks[taskID] = record
+        scheduleManagedPresentationRefresh()
+        return true
+    }
+
+    func requestManagedUserInput(
+        taskID: UUID, expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationHostResponse {
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard !Task.isCancelled, !isPreparingForTermination else { return .failure(.cancelled) }
+        guard let initial = managedTasks[taskID], !initial.completionObserved,
+            initial.task.state == .running || initial.task.state == .waitingForUser
+        else { return .failure(.processFinished) }
+        let focused = focusManagedTask(taskID: taskID, expectedSession: expectedSession)
+        guard case .task(let focusedTask) = focused else { return focused }
+        guard var record = liveGrantedManagedTask(taskID: taskID),
+            record.session == expectedSession, record.task == focusedTask
+        else { return .failure(.targetNotOwned) }
+        // WHY: Password prompts may never change rendered text; ownership itself invalidates input.
+        record.update(state: .waitingForUser, owner: .user)
+        managedTasks[taskID] = record
+        scheduleManagedPresentationRefresh()
+        return .task(record.task)
+    }
+
+    func focusManagedTask(
+        taskID: UUID, expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationHostResponse {
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard !Task.isCancelled, !isPreparingForTermination else { return .failure(.cancelled) }
+        guard let record = managedTasks[taskID], !record.completionObserved,
+            record.task.state == .running || record.task.state == .waitingForUser
+        else { return .failure(.processFinished) }
+        guard let initial = liveGrantedManagedTask(taskID: taskID),
+            initial.session == expectedSession
+        else { return .failure(.targetNotOwned) }
+        guard let window = activeWindow else { return .failure(.modelMutationFailed) }
+        let mode = presentationMode
+        let paneID = PaneID(rawValue: initial.task.paneID)
+        let workspaceID = WorkspaceID(rawValue: initial.task.workspaceID)
+        let tabID = TabID(rawValue: initial.task.tabID)
+        guard let surface = surfaces[paneID] else { return .failure(.targetNotFound) }
+
+        func validationError() -> TerminalControlErrorCode? {
+            guard !Task.isCancelled, !isPreparingForTermination else { return .cancelled }
+            if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+                return error
+            }
+            guard let record = managedTasks[taskID], !record.completionObserved,
+                record.task.state == .running || record.task.state == .waitingForUser
+            else { return .processFinished }
+            guard let current = liveGrantedManagedTask(taskID: taskID),
+                current.session == expectedSession,
+                current.processGeneration == initial.processGeneration,
+                current.surfaceIdentity == initial.surfaceIdentity
+            else { return .targetNotOwned }
+            guard current.task == initial.task else { return .staleTerminalRevision }
+            guard activeWindow === window, presentationMode == mode,
+                window.isVisible, !window.isMiniaturized, window.attachedSheet == nil,
+                window.sheetParent == nil,
+                mode != .quake || quakeWindowController.requestedVisibility == .shown
+            else { return .modelMutationFailed }
+            return nil
+        }
+
+        // WHY: A busy parent must fail before any selection, ownership or presentation changes.
+        if let error = validationError() { return .failure(error) }
+        let previous = workspaceStore
+        var candidate = previous
+        do {
+            try candidate.activateWorkspace(workspaceID)
+            try candidate.activateTab(tabID, in: workspaceID)
+            _ = try splitCoordinator.apply(
+                .activatePane(workspaceID: workspaceID, tabID: tabID, paneID: paneID),
+                to: &candidate)
+            #if DEBUG
+                if candidate != previous, failsNextManagedCommitForTesting {
+                    failsNextManagedCommitForTesting = false
+                    return .failure(.modelMutationFailed)
+                }
+            #endif
+            try presentationController.showCurrentPresentation()
+        } catch { return .failure(.modelMutationFailed) }
+        if let error = validationError() { return .failure(error) }
+        // WHY: Showing or persisting can reenter; never overwrite a later model/selection change.
+        guard workspaceStore == previous else { return .failure(.modelMutationFailed) }
+        if candidate != previous, !commitWorkspaceStore(candidate) {
+            return .failure(.modelMutationFailed)
+        }
+        if let error = validationError() { return .failure(error) }
+        guard workspaceStore == candidate else { return .failure(.modelMutationFailed) }
+        // WHY: Automation cannot report success on the UI helper's deferred, unchecked focus path.
+        refreshWorkspacePresentation(focusTerminal: false)
+        if let error = validationError() { return .failure(error) }
+        guard workspaceStore == candidate, surface.window === window else {
+            return .failure(.modelMutationFailed)
+        }
+        let didFocus = window.makeFirstResponder(surface)
+        if let error = validationError() { return .failure(error) }
+        guard didFocus, window.firstResponder === surface, surface.window === window,
+            workspaceStore == candidate
+        else { return .failure(.modelMutationFailed) }
+        return .task(initial.task)
+    }
+
+    func resizeManagedTask(
+        taskID: UUID, ratio: Double, expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationHostResponse {
+        guard ratio.isFinite,
+            (TerminalControlProtocol.minimumRatio...TerminalControlProtocol.maximumRatio)
+                .contains(ratio)
+        else { return .failure(.invalidRequest) }
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard !Task.isCancelled, !isPreparingForTermination else { return .failure(.cancelled) }
+        guard let record = managedTasks[taskID], !record.completionObserved,
+            record.task.state == .running || record.task.state == .waitingForUser
+        else { return .failure(.processFinished) }
+        guard let initial = liveGrantedManagedTask(taskID: taskID),
+            initial.session == expectedSession
+        else { return .failure(.targetNotOwned) }
+        guard let splitID = initial.splitID else { return .failure(.invalidRequest) }
+        let paneID = PaneID(rawValue: initial.task.paneID)
+        let workspaceID = WorkspaceID(rawValue: initial.task.workspaceID)
+        let tabID = TabID(rawValue: initial.task.tabID)
+
+        func firstChildRatio(in node: SplitNode) -> Double? {
+            guard case .split(let id, _, _, let first, let second) = node else { return nil }
+            if id == splitID {
+                // WHY: A share belongs to the live adjacent leaf, not its former direction or subtree.
+                if first == .pane(paneID) { return ratio }
+                if second == .pane(paneID) { return 1 - ratio }
+                return nil
+            }
+            return firstChildRatio(in: first) ?? firstChildRatio(in: second)
+        }
+
+        func validationError() -> TerminalControlErrorCode? {
+            guard !Task.isCancelled, !isPreparingForTermination else { return .cancelled }
+            if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+                return error
+            }
+            guard let record = managedTasks[taskID], !record.completionObserved,
+                record.task.state == .running || record.task.state == .waitingForUser
+            else { return .processFinished }
+            guard let current = liveGrantedManagedTask(taskID: taskID),
+                current.session == expectedSession,
+                current.processGeneration == initial.processGeneration,
+                current.surfaceIdentity == initial.surfaceIdentity
+            else { return .targetNotOwned }
+            return nil
+        }
+
+        let previous = workspaceStore
+        guard let tab = previous.workspace(id: workspaceID)?.tabs.first(where: { $0.id == tabID }),
+            let storedRatio = firstChildRatio(in: tab.root)
+        else { return .failure(.invalidRequest) }
+        var candidate = previous
+        do {
+            _ = try splitCoordinator.apply(
+                .updateRatio(
+                    workspaceID: workspaceID, tabID: tabID, splitID: splitID, ratio: storedRatio),
+                to: &candidate)
+        } catch { return .failure(.modelMutationFailed) }
+        if let error = validationError() { return .failure(error) }
+        guard workspaceStore == previous else { return .failure(.modelMutationFailed) }
+        // WHY: Quantized equality must not persist, rebuild presentation or consume a commit failure.
+        guard candidate != previous else { return .task(initial.task) }
+        #if DEBUG
+            if failsNextManagedCommitForTesting {
+                failsNextManagedCommitForTesting = false
+                return .failure(.modelMutationFailed)
+            }
+        #endif
+        guard commitWorkspaceStore(candidate) else { return .failure(.modelMutationFailed) }
+        // WHY: An accepted ratio survives reentrant invalidation; only further presentation is denied.
+        if let error = validationError() { return .failure(error) }
+        guard workspaceStore == candidate else { return .failure(.modelMutationFailed) }
+        if workspaceStore.activeWorkspaceID == workspaceID,
+            workspaceStore.workspace(id: workspaceID)?.activeTabID == tabID,
+            let window = activeWindow, window.isVisible, !window.isMiniaturized,
+            presentationMode != .quake || quakeWindowController.requestedVisibility == .shown
+        {
+            refreshWorkspacePresentation(focusTerminal: false)
+            if let error = validationError() { return .failure(error) }
+            guard workspaceStore == candidate else { return .failure(.modelMutationFailed) }
+        }
+        guard let current = managedTasks[taskID] else { return .failure(.targetNotFound) }
+        // WHY: Geometry is not terminal output or control transfer; return any callback-updated task.
+        return .task(current.task)
+    }
+
+    func publishTerminalAutomationPresentation(_ presentation: TerminalAutomationPresentationEvent)
+    {
+        if case .taskRequiresPresentation(let taskID) = presentation {
+            guard liveGrantedManagedTask(taskID: taskID)?.task.state == .waitingForUser else {
+                return
+            }
+        }
+        terminalAutomationPresentationHandler?(presentation)
+    }
+
+    func publishTerminalAutomationAttention(_ attention: TerminalAutomationAttention) {
+        if case .taskRequiresAttention(let taskID) = attention {
+            guard liveGrantedManagedTask(taskID: taskID)?.task.state == .waitingForUser else {
+                return
+            }
+        }
+        terminalAutomationAttentionHandler?(attention)
+    }
+
+    private func observeManagedCompletion(_ process: GhosttyProcessExited, paneID: PaneID) {
+        guard let taskID = managedTaskIDByPane[paneID], var record = managedTasks[taskID],
+            !record.isRevoked, !record.completionObserved,
+            record.task.state == .running || record.task.state == .waitingForUser,
+            isCurrentManagedSurface(record)
+        else { return }
+        record.completionObserved = true
+        record.snapshotState = .pendingFinal
+        record.completionExitCode = process.exitCode.map { Int32($0) }
+        let generation = record.processGeneration
+        let surfaceIdentity = record.surfaceIdentity
+        let session = record.session
+        let clock = ContinuousClock()
+        // WHY: Descendants can hold the PTY open forever; output never renews this deadline.
+        let deadline = clock.now.advanced(by: .seconds(2))
+        record.completionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if let current = managedTasks[taskID],
+                    current.processGeneration == generation,
+                    current.surfaceIdentity == surfaceIdentity, !current.isRevoked
+                {
+                    managedTasks[taskID]?.completionTask = nil
+                }
+            }
+            @MainActor
+            func pendingRecord() -> ManagedTerminalTaskRecord? {
+                guard !Task.isCancelled, !isPreparingForTermination, !isTerminalControlFrozen,
+                    let current = managedTasks[taskID], current.session == session,
+                    current.processGeneration == generation,
+                    current.surfaceIdentity == surfaceIdentity,
+                    current.task.state == .running || current.task.state == .waitingForUser,
+                    current.completionObserved, current.snapshotState == .pendingFinal,
+                    current.completionExitCode == process.exitCode.map({ Int32($0) }),
+                    !current.isRevoked, !closingPaneIDs.contains(paneID),
+                    isCurrentManagedSurface(current),
+                    managedAccessError(taskID: taskID, session: session) == nil
+                else { return nil }
+                return current
+            }
+            while true {
+                guard let before = pendingRecord() else { return }
+                let outputState = ghosttyBridge.outputState(id: paneID)
+                // WHY: Even the injectable state accessor is a reentrancy boundary.
+                guard let current = pendingRecord(), current.task == before.task,
+                    current.isAccepted == before.isAccepted
+                else { return }
+                if outputState == .failed || clock.now >= deadline {
+                    managedTasks[taskID]?.snapshotState = .finalReadFailed
+                    break
+                }
+                let refreshAllowed =
+                    current.lastRefresh.map {
+                        terminalAutomationNow() - $0 >= 0.25
+                    } ?? true
+                if outputState == .complete && refreshAllowed {
+                    if !refreshManagedSnapshot(taskID: taskID, capturesDeferredCompletion: true),
+                        pendingRecord() != nil
+                    {
+                        managedTasks[taskID]?.snapshotState = .finalReadFailed
+                    }
+                    break
+                }
+                // WHY: Polling schedules another observation; elapsed time is never EOF evidence.
+                do {
+                    try await clock.sleep(
+                        until: min(deadline, clock.now.advanced(by: .milliseconds(250))))
+                } catch { return }
+            }
+            guard !Task.isCancelled, !isPreparingForTermination, !isTerminalControlFrozen,
+                var final = managedTasks[taskID], final.session == session,
+                final.processGeneration == generation, final.surfaceIdentity == surfaceIdentity,
+                !final.isRevoked, isCurrentManagedSurface(final),
+                managedAccessError(taskID: taskID, session: session) == nil,
+                final.task.state == .running || final.task.state == .waitingForUser,
+                final.completionObserved,
+                final.completionExitCode == process.exitCode.map({ Int32($0) }),
+                final.snapshotState == .finalCaptured || final.snapshotState == .finalReadFailed
+            else { return }
+            let captureState = final.snapshotState
+            let state: TerminalTaskState =
+                process.exitCode.map { $0 == 0 ? .succeeded : .failed } ?? .finishedUnknown
+            final.update(
+                state: state, owner: .finished, exitCode: process.exitCode.map { Int32($0) })
+            // WHY: Classification belongs to this capture; unrelated lifecycle changes invalidate it.
+            final.snapshotState = captureState
+            final.completionTask = nil
+            managedTasks[taskID] = final
+            scheduleManagedPresentationRefresh()
+            // WHY: Failed capture keeps the surface alive; only an explicit read retries it.
+            if canAutomaticallyCloseManagedTask(final) {
+                finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
+            }
+        }
+        managedTasks[taskID] = record
+        scheduleManagedPresentationRefresh()
+    }
+
+    private func retainManagedClosure(paneID: PaneID, allowDuringTermination: Bool) {
+        guard let taskID = managedTaskIDByPane[paneID], let initial = managedTasks[taskID] else {
+            return
+        }
+        if initial.isRevoked {
+            rememberClosedManagedCreation(initial)
+            forgetManagedTask(taskID: taskID, expectedSession: initial.session)
+            return
+        }
+        _ = refreshManagedSnapshot(taskID: taskID)
+        // WHY: A bridge read may freeze before removal was accepted. Keep the live record
+        // for later teardown rather than treating freeze's revocation as a completed close.
+        guard !isPreparingForTermination || allowDuringTermination else { return }
+        guard var record = managedTasks[taskID],
+            record.processGeneration == initial.processGeneration
+        else { return }
+        if record.isRevoked {
+            rememberClosedManagedCreation(record)
+            forgetManagedTask(taskID: taskID, expectedSession: record.session)
+            return
+        }
+        record.completionTask?.cancel()
+        record.completionTask = nil
+        let captured = record.snapshotState == .finalCaptured
+        // WHY: User-forced closure preserves the bounded cache, but may omit the final tail.
+        let retainedOutput =
+            captured
+            ? record.rendered : GhosttyRenderedText(text: record.rendered.text, isTruncated: true)
+        if record.task.owner != .finished {
+            let state: TerminalTaskState =
+                record.completionObserved
+                ? record.completionExitCode.map { $0 == 0 ? .succeeded : .failed }
+                    ?? .finishedUnknown
+                : .cancelled
+            record.update(
+                rendered: retainedOutput, state: state, owner: .finished,
+                exitCode: record.completionExitCode)
+        } else {
+            record.update(rendered: retainedOutput)
+        }
+        // WHY: Closing preserves a successful capture, but cannot turn cached output into one.
+        record.snapshotState = captured ? .finalCaptured : .closedFallback
+        record.surfaceIdentity = nil
+        managedTasks[taskID] = record
+        managedTaskIDByPane.removeValue(forKey: paneID)
+        scheduleManagedPresentationRefresh()
+    }
+
+    func requestManagedClose(
+        taskID: UUID, expectedSession: TerminalAutomationSessionIdentity,
+        context: TerminalControlRequestContext
+    ) async -> TerminalAutomationHostResponse {
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard context.isActive, !Task.isCancelled else { return .failure(.cancelled) }
+        guard let initial = managedTasks[taskID] else { return .failure(.targetNotFound) }
+        let paneID = PaneID(rawValue: initial.task.paneID)
+        if initial.surfaceIdentity == nil { return .task(initial.task) }
+        if initial.task.owner != .finished, ghosttyBridge.surfaceNeedsConfirmQuit(id: paneID) {
+            let decision: ManagedCloseDecision
+            if let existing = managedCloseDecisions[taskID],
+                existing.session == expectedSession,
+                existing.processGeneration == initial.processGeneration,
+                existing.surfaceIdentity == initial.surfaceIdentity
+            {
+                decision = existing
+            } else {
+                decision = ManagedCloseDecision(initial)
+                managedCloseDecisions[taskID] = decision
+                let token = confirmationQueue.enqueueClose(paneID: paneID) {
+                    [weak decision] response in
+                    guard let decision, !decision.isCancelled, decision.response == nil else {
+                        return
+                    }
+                    decision.response = response
+                }
+                decision.confirmationToken = token
+                // WHY: A synchronous presenter can revoke the cohort before enqueue returns its token.
+                if decision.isCancelled { confirmationQueue.cancelClose(token) }
+            }
+            decision.participantCount += 1
+            defer {
+                decision.participantCount -= 1
+                if decision.participantCount == 0, managedCloseDecisions[taskID] === decision {
+                    managedCloseDecisions.removeValue(forKey: taskID)
+                }
+            }
+            #if DEBUG
+                managedCloseWaiterJoinedForTesting?(decision.participantCount)
+            #endif
+            while decision.response == nil && !decision.isCancelled {
+                guard context.isActive, !Task.isCancelled else {
+                    cancelManagedClose(taskID: taskID, decision: decision)
+                    return .failure(.cancelled)
+                }
+                if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+                    cancelManagedClose(taskID: taskID, decision: decision)
+                    return .failure(error)
+                }
+                guard managedTasks[taskID]?.processGeneration == initial.processGeneration,
+                    managedTasks[taskID]?.surfaceIdentity == initial.surfaceIdentity
+                else {
+                    cancelManagedClose(taskID: taskID, decision: decision)
+                    return .failure(.cancelled)
+                }
+                do { try await Task.sleep(for: .milliseconds(25)) } catch {
+                    cancelManagedClose(taskID: taskID, decision: decision)
+                    return .failure(.cancelled)
+                }
+            }
+            guard context.isActive, !Task.isCancelled else {
+                cancelManagedClose(taskID: taskID, decision: decision)
+                return .failure(.cancelled)
+            }
+            if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+                cancelManagedClose(taskID: taskID, decision: decision)
+                return .failure(error)
+            }
+            guard !decision.isCancelled else { return .failure(.cancelled) }
+            guard decision.response == .allow else { return .failure(.closeConfirmationDenied) }
+        }
+        guard context.isActive, !Task.isCancelled else { return .failure(.cancelled) }
+        if let error = managedAccessError(taskID: taskID, session: expectedSession) {
+            return .failure(error)
+        }
+        guard let current = managedTasks[taskID],
+            current.processGeneration == initial.processGeneration,
+            current.surfaceIdentity == initial.surfaceIdentity, isCurrentManagedSurface(current)
+        else { return .failure(.cancelled) }
+        finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
+        guard let final = managedTasks[taskID], final.surfaceIdentity == nil else {
+            return .failure(.internalFailure)
+        }
+        return .task(final.task)
+    }
+
+    private func cancelManagedClose(taskID: UUID, decision: ManagedCloseDecision) {
+        // WHY: Automation owns one queue participant, not the UI's coalesced close requests.
+        decision.isCancelled = true
+        guard managedCloseDecisions[taskID] === decision else { return }
+        managedCloseDecisions.removeValue(forKey: taskID)
+        if let token = decision.confirmationToken {
+            decision.confirmationToken = nil
+            confirmationQueue.cancelClose(token)
+        }
+    }
+
+    private func revokeManagedOrigin(_ paneID: PaneID) {
+        let sessions = Set(
+            managedTasks.values.filter { $0.session.originPaneID == paneID }.map(\.session))
+        for session in sessions { revokeManagedSession(session) }
+        terminalAutomationCoordinator.originSessionDidChange(originPaneID: paneID)
+    }
+
+    func revokeManagedSession(_ session: TerminalAutomationSessionIdentity) {
+        terminalControlPermissionController.cancel(session: session)
+        let ids = managedTaskOrder.filter { managedTasks[$0]?.session == session }
+        guard !ids.isEmpty else { return }
+        defer { scheduleManagedPresentationRefresh() }
+        for id in ids {
+            guard var record = managedTasks[id], !record.isRevoked else { continue }
+            record.completionTask?.cancel()
+            record.completionTask = nil
+            // WHY: Revocation clears output, so preserve only closure authority already verified.
+            let shouldClose =
+                record.snapshotState == .finalCaptured
+                && record.completionObserved && record.completionExitCode == 0
+                && record.task.state == .succeeded && record.task.owner == .finished
+                && record.task.policy == .closeOnSuccess && record.isAccepted
+            record.isRevoked = true
+            record.hasDomainAcceptance = false
+            record.snapshotState = .revoked
+            // WHY: Retain exact compensating identity for surviving panes, not revoked output.
+            record.update(rendered: GhosttyRenderedText(text: "", isTruncated: false), owner: .user)
+            if shouldClose, !isPreparingForTermination, isCurrentManagedSurface(record) {
+                let generation = record.processGeneration
+                let surfaceIdentity = record.surfaceIdentity
+                let paneID = PaneID(rawValue: record.task.paneID)
+                // WHY: Origin removal may still own an uncommitted model; close against the next turn's store.
+                record.completionTask = Task { @MainActor [weak self] in
+                    guard let self, let current = managedTasks[id],
+                        current.session == session, current.processGeneration == generation,
+                        current.surfaceIdentity == surfaceIdentity, current.isRevoked
+                    else { return }
+                    managedTasks[id]?.completionTask = nil
+                    guard !Task.isCancelled, !isPreparingForTermination, !isTerminalControlFrozen,
+                        shouldClose, current.isAccepted, current.task.policy == .closeOnSuccess,
+                        current.task.state == .succeeded,
+                        isCurrentManagedSurface(current)
+                    else { return }
+                    finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
+                }
+            }
+            managedTasks[id] = record
+            if let decision = managedCloseDecisions[id] {
+                cancelManagedClose(taskID: id, decision: decision)
+            }
+            if record.surfaceIdentity == nil {
+                rememberClosedManagedCreation(record)
+                forgetManagedTask(taskID: id, expectedSession: session)
+            }
+        }
+    }
+
+    private func rememberClosedManagedCreation(_ record: ManagedTerminalTaskRecord) {
+        // WHY: Accepted lifecycle cleanup has no outstanding creation response to compensate.
+        guard !record.isAccepted else { return }
+        discardedManagedTasks[record.task.taskID] = DiscardedManagedTaskRecord(
+            created: TerminalAutomationCreatedTaskResponse(
+                task: record.createdTask, splitID: record.splitID),
+            session: record.session,
+            compensationCompleted: false
+        )
+    }
+
+    func acceptManagedCreation(
+        _ created: TerminalAutomationCreatedTaskResponse,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) {
+        let taskID = created.task.taskID
+        guard var record = managedTasks[taskID], record.session == expectedSession,
+            record.createdTask == created.task, record.splitID == created.splitID,
+            !record.isRevoked, !record.isAccepted
+        else { return }
+        record.isAccepted = true
+        record.hasDomainAcceptance = true
+        managedTasks[taskID] = record
+        scheduleManagedPresentationRefresh()
+        // WHY: Acceptance alone cannot authorize closure after a failed final capture.
+        scheduleManagedSuccessfulClosure(taskID: taskID)
+    }
+
+    func forgetManagedTask(taskID: UUID, expectedSession: TerminalAutomationSessionIdentity) {
+        guard let record = managedTasks[taskID], record.session == expectedSession else { return }
+        record.completionTask?.cancel()
+        if let decision = managedCloseDecisions[taskID] {
+            cancelManagedClose(taskID: taskID, decision: decision)
+        }
+        managedTasks.removeValue(forKey: taskID)
+        managedTaskOrder.removeAll { $0 == taskID }
+        let paneID = PaneID(rawValue: record.task.paneID)
+        if managedTaskIDByPane[paneID] == taskID { managedTaskIDByPane.removeValue(forKey: paneID) }
+        scheduleManagedPresentationRefresh()
+    }
+
+    func canEvictManagedTask(
+        taskID: UUID, expectedSession: TerminalAutomationSessionIdentity
+    ) -> Bool {
+        guard let record = managedTasks[taskID], record.session == expectedSession else {
+            return false
+        }
+        // WHY: Neither failed capture nor a scheduled close releases mandatory cleanup authority.
+        let unfinishedClose =
+            record.surfaceIdentity != nil && record.task.policy == .closeOnSuccess
+            && (record.task.state == .succeeded
+                || (record.completionObserved && record.completionExitCode == 0))
+        return record.isAccepted && !unfinishedClose
+    }
+
+    private func canCreateManagedTask(for session: TerminalAutomationSessionIdentity) -> Bool {
+        let records = managedTasks.values.filter { $0.session == session }
+        guard
+            records.filter({
+                !$0.isRevoked && ($0.task.state == .running || $0.task.state == .waitingForUser)
+            }).count < 8
+        else {
+            return false
+        }
+        return records.count < TerminalControlLimits.maximumRetainedTaskCount
+            || records.contains {
+                $0.task.owner == .finished
+                    && canEvictManagedTask(taskID: $0.task.taskID, expectedSession: session)
+                    && terminalAutomationCoordinator.canEvictHostTask(
+                        taskID: $0.task.taskID, session: session)
+            }
+    }
+
+    private func trimManagedTasks(for session: TerminalAutomationSessionIdentity) {
+        // WHY: Domain creation must pass post-await validation before any retained task is evicted.
+        guard !terminalAutomationCoordinator.hasPendingHostCreation(for: session) else { return }
+        while managedTasks.values.filter({ $0.session == session }).count
+            > TerminalControlLimits.maximumRetainedTaskCount
+        {
+            guard
+                let id = managedTaskOrder.first(where: {
+                    guard let record = managedTasks[$0], record.session == session else {
+                        return false
+                    }
+                    return record.task.owner == .finished
+                        && canEvictManagedTask(taskID: $0, expectedSession: session)
+                        && terminalAutomationCoordinator.canEvictHostTask(
+                            taskID: $0, session: session)
+                })
+            else { return }
+            forgetManagedTask(taskID: id, expectedSession: session)
         }
     }
 
@@ -1019,7 +2775,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         surfaces[paneID] = surface
         installSurfaceActivityHandlers()
-        _ = commitWorkspaceStore(candidate)
+        guard commitWorkspaceStore(candidate) else {
+            surfaces.removeValue(forKey: paneID)
+            closeCreatedSurface(id: paneID)
+            return
+        }
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -1157,6 +2917,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 in: workspaceID
             )
             guard commitWorkspaceStore(candidate) else { return }
+            guard !isPreparingForTermination else { return }
             workspaceViewController.apply(
                 workspaceStore,
                 liveTitles: liveSurfaceTitles,
@@ -1246,7 +3007,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         )
         surfaces[prepared.paneID] = prepared.surface
         installSurfaceActivityHandlers()
-        _ = commitWorkspaceStore(candidate)
+        guard commitWorkspaceStore(candidate) else {
+            surfaces.removeValue(forKey: prepared.paneID)
+            closeCreatedSurface(id: prepared.paneID)
+            return
+        }
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
         }
@@ -1324,7 +3089,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         )
         surfaces[paneID] = surface
         installSurfaceActivityHandlers()
-        _ = commitWorkspaceStore(candidate)
+        guard commitWorkspaceStore(candidate) else {
+            surfaces.removeValue(forKey: paneID)
+            closeCreatedSurface(id: paneID)
+            return
+        }
         if refreshPresentation {
             refreshWorkspacePresentation(focusTerminal: true)
         }
@@ -1617,7 +3386,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     @MainActor
     private func retryUnavailablePane(_ paneID: PaneID) {
-        guard surfaces[paneID] == nil, surfaceFailures[paneID] != nil else { return }
+        guard !isPreparingForTermination,
+            surfaces[paneID] == nil, surfaceFailures[paneID] != nil
+        else { return }
 
         var owningWorkspace: Workspace?
         var owningTab: TerminalTab?
@@ -1674,6 +3445,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func retryAgentResume(_ paneID: PaneID) {
+        // WHY: Retry can remove an existing surface before its binding reaches the commit boundary.
+        guard !isPreparingForTermination else { return }
         let panes = orderedSavedRestorePanes()
         guard
             let pane = panes.first(where: {
@@ -1698,7 +3471,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             explicitRetry: [paneID],
             retryPaneID: paneID
         )
-        guard let decision = decisions[paneID] else { return }
+        guard !isPreparingForTermination, let decision = decisions[paneID] else { return }
         switch decision {
         case .freshShell(let retainedBinding):
             applyFreshShellAgentPresentation(retainedBinding, paneID: paneID)
@@ -1710,11 +3483,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             let replacesResumeSurface = agentResumeAttempts[paneID] != nil
             let shouldFocus = activePaneID == paneID && surfaces[paneID] != nil
             if replacesResumeSurface, surfaces[paneID] != nil {
-                _ = removeSurface(
-                    id: paneID,
-                    closeBridgeSurface: true,
-                    preserveAgentPresentation: true
-                )
+                guard
+                    removeSurface(
+                        id: paneID,
+                        closeBridgeSurface: true,
+                        preserveAgentPresentation: true
+                    )
+                else { return }
             } else if let previousAttempt = agentResumeAttempts.removeValue(forKey: paneID) {
                 agentResumeRuntime.surfaceDidClose(previousAttempt.reference)
             }
@@ -1744,11 +3519,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         case .resume(let attempt):
             let shouldFocus = activePaneID == paneID && surfaces[paneID] != nil
             if surfaces[paneID] != nil {
-                _ = removeSurface(
-                    id: paneID,
-                    closeBridgeSurface: true,
-                    preserveAgentPresentation: true
-                )
+                guard
+                    removeSurface(
+                        id: paneID,
+                        closeBridgeSurface: true,
+                        preserveAgentPresentation: true
+                    )
+                else { return }
             } else if let previousAttempt = agentResumeAttempts.removeValue(forKey: paneID) {
                 agentResumeRuntime.surfaceDidClose(previousAttempt.reference)
             }
@@ -1800,6 +3577,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func forgetAgentResume(_ paneID: PaneID) {
+        guard !isPreparingForTermination else { return }
         guard
             let pane = orderedSavedRestorePanes().first(where: {
                 $0.descriptor.id == paneID
@@ -1813,6 +3591,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             _ = updateAgentResumeBinding(nil, for: paneID)
         }
         agentResumePresentations.removeValue(forKey: paneID)
+        revokeManagedOrigin(paneID)
 
         if surfaces[paneID] == nil {
             do {
@@ -1837,7 +3616,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func closeUnavailablePane(_ paneID: PaneID) {
-        guard surfaces[paneID] == nil,
+        guard !isPreparingForTermination, surfaces[paneID] == nil,
             workspaceStore.workspaces.contains(where: { workspace in
                 workspace.tabs.contains(where: { $0.root.contains(paneID) })
             }),
@@ -1878,13 +3657,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         guard commitWorkspaceStore(candidate) else { return }
+        guard !isPreparingForTermination else { return }
         cleanUpPaneLifecycle(paneID)
         surfaceFailures.removeValue(forKey: paneID)
         agentResumePresentations.removeValue(forKey: paneID)
         if let attempt = agentResumeAttempts.removeValue(forKey: paneID) {
             agentResumeRuntime.surfaceDidClose(attempt.reference)
         }
-        guard ownerWorkspaceWasActive else { return }
+        guard !isPreparingForTermination, ownerWorkspaceWasActive else { return }
         guard ownerTabWasActive else {
             workspaceViewController.apply(
                 workspaceStore,
@@ -1908,10 +3688,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func applyConfigurationDiagnostics(_ presentation: ConfigDiagnosticPresentation?) {
+        guard !isPreparingForTermination else { return }
         workspaceViewController.applyConfigurationDiagnostics(presentation)
     }
 
     func applyConfiguration(_ config: QuickTTYConfig) {
+        guard !isPreparingForTermination else { return }
         shouldRestoreAgentSessions = config.shouldRestoreAgentSessions
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
@@ -1937,6 +3719,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         configuredGlobalChord = config.globalToggle
         do {
             try transitionPresentation(to: config.presentationMode, persist: false)
+            guard !isPreparingForTermination else { return }
             if presentationMode == .quake {
                 try hotKeyController.replace(with: configuredGlobalChord)
             } else {
@@ -1949,9 +3732,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func togglePresentationMode() {
+        guard !isPreparingForTermination else { return }
         let target: PresentationMode = presentationMode == .normal ? .quake : .normal
         do {
             try transitionPresentation(to: target)
+            guard !isPreparingForTermination else { return }
             menuBarManager.applyMode(target)
             if target == .quake {
                 try hotKeyController.replace(with: configuredGlobalChord)
@@ -1968,12 +3753,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         to target: PresentationMode,
         persist: Bool = true
     ) throws {
-        guard target != presentationMode else { return }
+        guard !isPreparingForTermination, target != presentationMode else { return }
+        terminalAutomationCoordinator.cancelPendingPermissions()
+        guard !isPreparingForTermination else { return }
+        terminalControlPermissionController.cancel()
+        guard !isPreparingForTermination else { return }
         let wasPresented = agentIntegrationsSheetController?.detachForWindowTransition() ?? false
+        // WHY: Ending a native sheet may reenter persistence; do not start a host transition
+        // after that callback has frozen the coordinator.
+        guard !isPreparingForTermination else { return }
         do {
             try presentationController.transition(to: target, persist: persist)
         } catch {
-            if let window = activeWindow {
+            if !isPreparingForTermination, let window = activeWindow {
                 agentIntegrationsSheetController?.reattachAfterWindowTransition(
                     to: window,
                     wasPresented: wasPresented
@@ -1981,7 +3773,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             }
             throw error
         }
-        if let window = activeWindow {
+        if !isPreparingForTermination, let window = activeWindow {
             agentIntegrationsSheetController?.reattachAfterWindowTransition(
                 to: window,
                 wasPresented: wasPresented
@@ -2047,7 +3839,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func commitTabRename(_ tabID: TabID, title: String) {
-        guard
+        // WHY: Ending native editing during dismissal must not persist a late rename.
+        guard !isPreparingForTermination,
             let workspace = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID),
             let tab = workspace.tabs.first(where: { $0.id == tabID }),
             surfaces[tab.activePaneID] != nil
@@ -2184,13 +3977,66 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func refreshWorkspaceTitlePresentation() {
+        guard !isPreparingForTermination else { return }
         workspaceViewController.refreshTabTitles(
             in: workspaceStore,
             liveTitles: liveSurfaceTitles
         )
     }
 
+    private var activeTerminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] {
+        var presentations: [PaneID: TerminalAutomationPresentation] = [:]
+        for paneID in activeTab?.root.leaves ?? [] {
+            guard let taskID = managedTaskIDByPane[paneID], let record = managedTasks[taskID] else {
+                continue
+            }
+            // WHY: Domain accept/revoke/forget callbacks mirror eligibility without revalidating
+            // or mutating domain records while rendering. The action still checks the exact grant.
+            let canReturn =
+                record.hasDomainAcceptance && !record.isRevoked
+                && !record.completionObserved && !isPreparingForTermination
+                && record.task.owner == .user
+                && (record.task.state == .running || record.task.state == .waitingForUser)
+                && !closingPaneIDs.contains(paneID) && isCurrentManagedSurface(record)
+                && resolvedTerminalAutomationSession(
+                    record.session, in: WorkspaceID(rawValue: record.task.workspaceID)) != nil
+            presentations[paneID] = TerminalAutomationPresentation(
+                taskID: taskID,
+                adapterDisplayName: AgentIntegrationRegistry.definition(
+                    for: record.session.adapterID)?
+                    .displayName ?? "Agent",
+                taskState: record.task.state,
+                controlOwner: record.task.owner,
+                isRevoked: record.isRevoked,
+                canReturnControl: canReturn
+            )
+        }
+        return presentations
+    }
+
+    private func scheduleManagedPresentationRefresh() {
+        guard !isPreparingForTermination, managedPresentationRefreshTask == nil else { return }
+        // WHY: Manual takeover must finish before native input, and lifecycle callbacks may
+        // still be inside a model commit. Coalesce only visual changes onto the next actor turn.
+        managedPresentationRefreshTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, !isPreparingForTermination else { return }
+            managedPresentationRefreshTask = nil
+            workspaceViewController.refreshTerminalAutomationPresentations(
+                activeTerminalAutomationPresentations)
+        }
+    }
+
+    private func returnControlFromPresentation(taskID: UUID) {
+        guard let record = managedTasks[taskID],
+            activeTab?.root.contains(PaneID(rawValue: record.task.paneID)) == true
+        else { return }
+        _ = returnControlToAgent(taskID: taskID)
+    }
+
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
+        // WHY: Some callers refresh after an ignored/reentrant commit; freeze must not rebuild
+        // hosts or restore responders. Explicit teardown bypasses this presentation boundary.
+        guard !isPreparingForTermination else { return }
         #if DEBUG
             refreshWorkspacePresentationInvocationCountForTestingStorage += 1
         #endif
@@ -2199,6 +4045,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             liveTitles: liveSurfaceTitles,
             paneStatuses: terminalActivityController.statuses
         )
+        guard !isPreparingForTermination else { return }
         let activePaneIDs = activeTab?.root.leaves ?? []
         let activeTabSurfaces = Dictionary(
             uniqueKeysWithValues: activePaneIDs.compactMap { paneID in
@@ -2231,6 +4078,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             surfaces: activeTabSurfaces,
             failures: activeSurfaceFailures,
             agentResumePresentations: activeAgentResumePresentations,
+            terminalAutomationPresentations: activeTerminalAutomationPresentations,
             palette: ghosttyBridge.chromePalette,
             activePaneID: activePaneID,
             splitAppearance: ghosttyBridge.splitAppearance,
@@ -2247,6 +4095,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             },
             onForgetAgentResume: { [weak self] paneID in
                 self?.forgetAgentResume(paneID)
+            },
+            onReturnControlToAgent: { [weak self] taskID in
+                self?.returnControlFromPresentation(taskID: taskID)
             }
         )
         if focusTerminal, let surface, let paneID = activePaneID {
@@ -2260,11 +4111,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         paneID: PaneID,
         retryingAfterPresentation: Bool = false
     ) {
-        guard let window = activeWindow else { return }
+        guard !isPreparingForTermination, let window = activeWindow else { return }
         guard surface.window === window else {
             guard !retryingAfterPresentation else { return }
             DispatchQueue.main.async { [weak self, weak surface] in
-                guard let self, let surface, self.activePaneID == paneID else { return }
+                guard let self, !self.isPreparingForTermination,
+                    let surface, self.activePaneID == paneID
+                else { return }
                 self.focus(surface, paneID: paneID, retryingAfterPresentation: true)
             }
             return
@@ -2273,6 +4126,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func surfaceDidBecomeFirstResponder(id paneID: PaneID) {
+        guard !isPreparingForTermination else { return }
         let workspaceID = workspaceStore.activeWorkspaceID
         guard
             let workspace = workspaceStore.workspace(id: workspaceID),
@@ -2341,14 +4195,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func presentCreateWorkspace() {
-        guard createWorkspaceController == nil, let window = activeWindow else { return }
+        guard !isPreparingForTermination,
+            createWorkspaceController == nil, let window = activeWindow
+        else { return }
 
         let controller = CreateWorkspaceController(
             existingNames: { [weak self] in
                 self?.workspaceStore.workspaces.map(\.name) ?? []
             },
             submit: { [weak self] name in
-                guard let self else {
+                guard let self, !isPreparingForTermination else {
                     return .failure(.workspaceNotFound(WorkspaceID()))
                 }
                 var candidate = workspaceStore
@@ -2382,6 +4238,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func presentRenameWorkspace() {
         guard
+            !isPreparingForTermination,
             createWorkspaceController == nil,
             let window = activeWindow,
             let workspace = workspaceStore.workspace(id: workspaceStore.activeWorkspaceID)
@@ -2400,7 +4257,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 } ?? []
             },
             submit: { [weak self] name in
-                guard let self, workspaceStore.activeWorkspaceID == workspaceID else {
+                guard let self, !isPreparingForTermination,
+                    workspaceStore.activeWorkspaceID == workspaceID
+                else {
                     return .failure(.workspaceNotFound(workspaceID))
                 }
                 var candidate = workspaceStore
@@ -2423,6 +4282,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ controller: CreateWorkspaceController,
         for window: NSWindow
     ) {
+        // WHY: All workspace editors share this last boundary before ownership and AppKit focus.
+        guard !isPreparingForTermination else { return }
         controller.onDismiss = { [weak self, weak controller] in
             guard self?.createWorkspaceController === controller else { return }
             self?.createWorkspaceController = nil
@@ -2437,6 +4298,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func requestDeleteWorkspace(_ workspaceID: WorkspaceID) {
         guard
+            !isPreparingForTermination,
             pendingWorkspaceDeletionID == nil,
             workspaceID == workspaceStore.activeWorkspaceID,
             workspaceStore.workspaces.count > 1,
@@ -2478,7 +4340,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func deleteWorkspace(_ workspaceID: WorkspaceID) {
-        guard
+        // WHY: A retained confirmation must not detach the selected workspace after freeze.
+        guard !isPreparingForTermination,
             workspaceID == workspaceStore.activeWorkspaceID,
             workspaceStore.workspaces.count > 1
         else {
@@ -2492,23 +4355,34 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             return
         }
 
-        detachActiveWorkspacePresentation()
+        guard detachActiveWorkspacePresentation() else { return }
         for paneID in removedWorkspace.tabs.flatMap(\.root.leaves) {
-            surfaceFailures.removeValue(forKey: paneID)
-            agentResumePresentations.removeValue(forKey: paneID)
-            if !removeSurface(id: paneID, closeBridgeSurface: true) {
+            guard !isPreparingForTermination else { return }
+            if surfaces[paneID] != nil {
+                guard removeSurface(id: paneID, closeBridgeSurface: true) else { return }
+            } else {
                 if let attempt = agentResumeAttempts.removeValue(forKey: paneID) {
                     agentResumeRuntime.surfaceDidClose(attempt.reference)
                 }
+                guard !isPreparingForTermination else { return }
                 cleanUpPaneLifecycle(paneID)
             }
+            // WHY: Removal can reenter too; do not clean up another pane or commit deletion
+            // after freeze. An already executing native operation may itself finish.
+            guard !isPreparingForTermination else { return }
+            surfaceFailures.removeValue(forKey: paneID)
+            agentResumePresentations.removeValue(forKey: paneID)
         }
         guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
-    private func detachActiveWorkspacePresentation() {
-        _ = activeWindow?.makeFirstResponder(nil)
+    // WHY: Ending a fully active rename can persist and freeze inside AppKit. Returning
+    // early from a Void helper does not cancel its caller's model/runtime removal.
+    private func detachActiveWorkspacePresentation() -> Bool {
+        guard !isPreparingForTermination else { return false }
+        if let window = activeWindow, !window.makeFirstResponder(nil) { return false }
+        guard !isPreparingForTermination else { return false }
         workspaceViewController.displayTerminal(
             root: nil,
             surfaces: [:],
@@ -2519,13 +4393,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             onRetryUnavailablePane: { _ in },
             onCloseUnavailablePane: { _ in }
         )
+        // WHY: Host updates are callback-capable as well as responder changes.
+        return !isPreparingForTermination
     }
 
     private func presentWorkspaceDeletionConfirmation(
         _ confirmation: WorkspaceDeletionConfirmation,
         completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let window = activeWindow else {
+        guard !isPreparingForTermination, let window = activeWindow else {
             completion(false)
             return
         }
@@ -2554,16 +4430,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func presentMoveToNewWorkspace(_ tabIDs: [TabID]) {
-        guard !tabIDs.isEmpty, createWorkspaceController == nil, let window = activeWindow else {
-            return
-        }
+        guard !isPreparingForTermination, !tabIDs.isEmpty,
+            createWorkspaceController == nil, let window = activeWindow
+        else { return }
         let sourceWorkspaceID = workspaceStore.activeWorkspaceID
         let controller = CreateWorkspaceController(
             existingNames: { [weak self] in
                 self?.workspaceStore.workspaces.map(\.name) ?? []
             },
             submit: { [weak self] name in
-                guard let self else {
+                guard let self, !isPreparingForTermination else {
                     return .failure(.workspaceNotFound(sourceWorkspaceID))
                 }
                 var updatedStore = workspaceStore
@@ -2577,6 +4453,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     guard commitWorkspaceStore(updatedStore) else {
                         return .success(())
                     }
+                    // WHY: The commit remains successful if persistence froze reentrantly.
+                    guard !isPreparingForTermination else { return .success(()) }
                     workspaceViewController.tabBarViewController.clearSelectionAfterMove()
                     refreshWorkspacePresentation(focusTerminal: true)
                     return .success(())
@@ -2600,6 +4478,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 to: destinationWorkspaceID
             )
             guard commitWorkspaceStore(candidate) else { return }
+            guard !isPreparingForTermination else { return }
             workspaceViewController.tabBarViewController.clearSelectionAfterMove()
             refreshWorkspacePresentation(focusTerminal: true)
         } catch {
@@ -2621,6 +4500,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func finishTabReorder() {
+        guard !isPreparingForTermination else { return }
         refreshWorkspacePresentation(focusTerminal: true)
     }
 
@@ -2628,7 +4508,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ paneID: PaneID,
         requiresConfirmation: Bool
     ) {
-        guard surfaces[paneID] != nil else { return }
+        // WHY: Enqueueing a close can preempt an existing clipboard sheet before presentation.
+        guard !isPreparingForTermination, surfaces[paneID] != nil else { return }
         guard requiresConfirmation else {
             finishSurfaceClosure(id: paneID, closeBridgeSurface: true)
             return
@@ -2641,7 +4522,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func requestCloseTab(_ tabID: TabID) {
-        guard let tab = workspaceStore.tab(id: tabID) else { return }
+        guard !isPreparingForTermination, let tab = workspaceStore.tab(id: tabID) else { return }
         let paneIDs = tab.root.leaves
         if let confirmationPaneID = paneIDs.first(where: {
             ghosttyBridge.surfaceNeedsConfirmQuit(id: $0)
@@ -2656,7 +4537,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func closeTab(_ tabID: TabID, paneIDs: [PaneID]) {
-        guard closingTabIDs.insert(tabID).inserted else { return }
+        guard !isPreparingForTermination, closingTabIDs.insert(tabID).inserted else { return }
         defer { closingTabIDs.remove(tabID) }
         guard
             let owner = workspaceStore.workspaces.first(where: {
@@ -2696,11 +4577,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                     surfaceContext: .newTab
                 )
             } catch {
+                // WHY: Frozen creation already released its temporary surface; keep the old tab
+                // intact instead of treating cancellation as an ordinary replacement failure.
+                guard !isPreparingForTermination else { return }
                 for paneID in paneIDs {
-                    _ = removeSurface(id: paneID, closeBridgeSurface: true)
+                    guard removeSurface(id: paneID, closeBridgeSurface: true) else { return }
                 }
                 _ = commitWorkspaceStore(candidate)
                 refreshWorkspacePresentation(focusTerminal: owner.id == candidate.activeWorkspaceID)
+                guard !isPreparingForTermination else { return }
                 if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
                     normalWindowController.close()
                 }
@@ -2725,6 +4610,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         }
         _ = commitWorkspaceStore(candidate)
         refreshWorkspacePresentation(focusTerminal: owner.id == candidate.activeWorkspaceID)
+        guard !isPreparingForTermination else { return }
         if ghosttyBridge.activeSurfaceCount == 0, presentationMode == .normal {
             normalWindowController.close()
         }
@@ -2734,28 +4620,76 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private func removeSurface(
         id: PaneID,
         closeBridgeSurface: Bool,
-        preserveAgentPresentation: Bool = false
+        preserveAgentPresentation: Bool = false,
+        allowDuringTermination: Bool = false
     ) -> Bool {
-        guard surfaces.removeValue(forKey: id) != nil else { return false }
+        guard !isPreparingForTermination || allowDuringTermination,
+            surfaces[id] != nil
+        else { return false }
+        let insertedClosingID = closingPaneIDs.insert(id).inserted
+        defer { if insertedClosingID { closingPaneIDs.remove(id) } }
+        if let taskID = managedTaskIDByPane[id], let decision = managedCloseDecisions[taskID] {
+            cancelManagedClose(taskID: taskID, decision: decision)
+        }
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
+        retainManagedClosure(paneID: id, allowDuringTermination: allowDuringTermination)
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
+        revokeManagedOrigin(id)
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
         if let attempt = agentResumeAttempts.removeValue(forKey: id) {
             agentResumeRuntime.surfaceDidClose(attempt.reference)
         }
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
         if !preserveAgentPresentation {
             agentResumePresentations.removeValue(forKey: id)
         }
         agentSessionController?.revoke(paneID: id)
         cleanUpPaneLifecycle(id)
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
         if !isPreparingForTermination {
             installSurfaceActivityHandlers()
         }
         confirmationQueue.invalidatePane(id)
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
+        // WHY: Keep the live surface discoverable for intentional teardown if any of the
+        // callbacks above freeze. Once native close begins it may finish, but not its caller.
+        surfaces.removeValue(forKey: id)
         if closeBridgeSurface {
             ghosttyBridge.closeSurface(id: id)
         }
-        return true
+        return !isPreparingForTermination || allowDuringTermination
+    }
+
+    func freezeTerminalControlForApplicationTermination() {
+        guard !isTerminalControlFrozen else { return }
+        // WHY: Revoking successful close-on-success tasks must not detach panes before persistence.
+        isTerminalControlFrozen = true
+        isPreparingForTermination = true
+        // WHY: Native callers continue after coordinator callbacks return. Retire their
+        // deferred work before any other freeze callback, without changing visible UI.
+        presentationController.retireForApplicationTermination()
+        normalWindowController.retireForApplicationTermination()
+        workspaceViewController.tabBarViewController.retireForApplicationTermination()
+        createWorkspaceController?.retireForApplicationTermination()
+        quakeWindowController.invalidateForApplicationTermination()
+        cancelAgentIntegrationUpdateOffer(onlyIfPending: false)
+        // WHY: Late focus must not change the selection before the final application snapshot.
+        ghosttyBridge.surfaceFocusHandler = nil
+        ghosttyBridge.surfaceProcessExitedHandler = nil
+        managedPresentationRefreshTask?.cancel()
+        managedPresentationRefreshTask = nil
+        let origins = Set(agentCredentialGenerationByPane.keys)
+            .union(managedTasks.values.map { $0.session.originPaneID })
+        for origin in origins { revokeManagedOrigin(origin) }
+        terminalAutomationCoordinator.cancelPendingPermissions()
+        terminalControlPermissionController.cancel()
     }
 
     func prepareForApplicationTermination() {
+        freezeTerminalControlForApplicationTermination()
+        ghosttyBridge.manualInputHandler = nil
+        terminalAutomationPresentationHandler = nil
+        terminalAutomationAttentionHandler = nil
         cancelAgentIntegrationUpdateOffer(onlyIfPending: false)
         terminalActivityController.scheduledEffectHandler = nil
         terminalActivityEffectHandler = nil
@@ -2765,11 +4699,20 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         tearDownSurfaces()
         ghosttyBridge.surfaceProgressHandler = nil
         ghosttyBridge.surfaceCommandFinishedHandler = nil
+        ghosttyBridge.surfaceProcessExitedHandler = nil
     }
 
     #if DEBUG
         var windowForTesting: NSWindow? {
             normalWindowController.window
+        }
+
+        var presentationControllerForTesting: PresentationController {
+            presentationController
+        }
+
+        var normalWindowControllerForTesting: NormalWindowController {
+            normalWindowController
         }
 
         var activeWindowForTesting: NSWindow? {
@@ -2830,6 +4773,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var agentResumeDateForTesting: Date {
             agentResumeScheduler.date
+        }
+
+        func paneAuthorizationEpochForTesting(_ paneID: PaneID) -> UInt64? {
+            agentCredentialGenerationByPane[paneID]
         }
 
         func agentResumeAttemptReferenceForTesting(
@@ -2928,12 +4875,92 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             try splitActivePane(axis: axis)
         }
 
+        func focusActivePaneForTesting() {
+            guard let paneID = activePaneID, let surface = surfaces[paneID] else { return }
+            focus(surface, paneID: paneID)
+        }
+
         func failNextStartupModelMutationForTesting() {
             failsNextStartupModelMutationForTesting = true
         }
 
         func failNextSplitMutationForTesting() {
             failsNextSplitMutationForTesting = true
+        }
+
+        func failNextManagedTabMutationForTesting() {
+            failsNextManagedTabMutationForTesting = true
+        }
+
+        func failNextManagedSplitMutationForTesting() {
+            failsNextManagedSplitMutationForTesting = true
+        }
+
+        func failNextManagedCommitForTesting() {
+            failsNextManagedCommitForTesting = true
+        }
+
+        func waitForManagedPresentationForTesting() async {
+            await managedPresentationRefreshTask?.value
+        }
+
+        func managedCompletionTaskForTesting(taskID: UUID) -> Task<Void, Never>? {
+            managedTasks[taskID]?.completionTask
+        }
+
+        func waitForManagedCompletionForTesting(taskID: UUID) async {
+            // WHY: Revocation during the final read can replace completion with deferred cleanup.
+            await managedTasks[taskID]?.completionTask?.value
+            if managedTasks[taskID]?.isRevoked == true {
+                await managedTasks[taskID]?.completionTask?.value
+            }
+        }
+
+        var managedCloseDecisionCountForTesting: Int {
+            managedCloseDecisions.count
+        }
+
+        func managedTaskForTesting(taskID: UUID) -> TerminalControlTask? {
+            managedTasks[taskID]?.task
+        }
+
+        func managedSplitIDForTesting(taskID: UUID) -> UUID? {
+            managedTasks[taskID]?.splitID
+        }
+
+        func moveTabToNewWorkspaceForTesting(_ tabID: TabID, name: String) -> WorkspaceID? {
+            guard
+                let sourceWorkspaceID = workspaceStore.workspaces.first(where: {
+                    $0.tabs.contains(where: { $0.id == tabID })
+                })?.id
+            else { return nil }
+            var candidate = workspaceStore
+            guard let destinationWorkspaceID = try? candidate.createWorkspace(named: name),
+                (try? candidate.moveTabs(
+                    [tabID],
+                    from: sourceWorkspaceID,
+                    to: destinationWorkspaceID
+                )) != nil,
+                commitWorkspaceStore(candidate)
+            else {
+                return nil
+            }
+            refreshWorkspacePresentation(focusTerminal: true)
+            return destinationWorkspaceID
+        }
+
+        var managedTaskCountForTesting: Int {
+            managedTasks.count
+        }
+
+        func hasPendingTerminalControlWaitForTesting(
+            taskID: UUID, session: TerminalAutomationSessionIdentity
+        ) -> Bool {
+            !terminalAutomationCoordinator.canEvictHostTask(taskID: taskID, session: session)
+        }
+
+        var managedCompensationRecordCountForTesting: Int {
+            discardedManagedTasks.count
         }
 
         func requestCloseTabForTesting(_ tabID: TabID) {
@@ -2977,12 +5004,23 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             confirmationQueue.pendingCount
         }
 
-        func enqueueCloseConfirmationForTesting(_ paneID: PaneID) {
-            confirmationQueue.enqueueClose(paneID: paneID) { _ in }
+        func enqueueCloseConfirmationForTesting(
+            _ paneID: PaneID,
+            completion: @escaping GhosttyConfirmationQueue.Completion = { _ in }
+        ) {
+            confirmationQueue.enqueueClose(paneID: paneID, completion: completion)
+        }
+
+        var pendingWorkspaceDeletionIDForTesting: WorkspaceID? {
+            pendingWorkspaceDeletionID
         }
 
         var workspaceStoreForTesting: WorkspaceStore {
             workspaceStore
+        }
+
+        var selectionGenerationForTesting: UInt64 {
+            selectionGeneration
         }
 
         var agentIntegrationsSheetControllerForTesting: AgentIntegrationsSheetController? {
@@ -3016,6 +5054,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === normalWindowController.window else { return true }
+        guard !isPreparingForTermination else { return false }
         let activeSurfaceIDs = ghosttyBridge.activeSurfaceIDs
         guard !activeSurfaceIDs.isEmpty else { return true }
         guard
@@ -3023,36 +5062,41 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 ghosttyBridge.surfaceNeedsConfirmQuit(id: $0)
             })
         else {
-            closeActiveSurfaces()
-            return true
+            return closeActiveSurfaces()
         }
 
         let window = sender
         confirmationQueue.enqueueClose(paneID: confirmationPaneID) {
             [weak self, weak window] response in
             guard response == .allow,
-                let self,
+                let self, !isPreparingForTermination,
                 let window,
                 normalWindowController.window === window
             else { return }
 
-            closeActiveSurfaces()
+            guard closeActiveSurfaces() else { return }
             window.close()
         }
         return false
     }
 
     func windowWillClose(_ notification: Notification) {
+        // WHY: Native close notifications are not the later explicit termination teardown.
+        guard !isPreparingForTermination else { return }
         guard let window = notification.object as? NSWindow,
             window === normalWindowController.window
         else { return }
 
+        terminalAutomationCoordinator.cancelPendingPermissions()
+        guard !isPreparingForTermination else { return }
+        terminalControlPermissionController.cancel()
+        guard !isPreparingForTermination else { return }
         confirmationQueue.invalidateAll()
         closeActiveSurfaces()
     }
 
     private func persistNormalWindowFrameIfNeeded(from notification: Notification) {
-        guard
+        guard !isPreparingForTermination,
             let window = notification.object as? NSWindow,
             window === normalWindowController.window,
             let frame = Self.normalWindowFrame(from: window.frame)
@@ -3063,12 +5107,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     private func tearDownSurfaces() {
         isPreparingForTermination = true
+        // WHY: Early freeze retains the editor; only this explicit teardown ends its sheet.
+        createWorkspaceController?.dismissForApplicationTermination()
+        createWorkspaceController = nil
         workspaceViewController.cancelTabRename()
         tabRenameTransientInteraction?.end()
         tabRenameTransientInteraction = nil
         isTabRenameEditing = false
         endWorkspaceMenuTracking()
-        _ = activeWindow?.makeFirstResponder(nil)
+        // WHY: Retirement can stop reparenting before mode commits. Either physical window
+        // may still own content or be visible, independently of the persisted mode.
+        _ = normalWindowController.window?.makeFirstResponder(nil)
+        _ = quakeWindowController.appKitWindow?.makeFirstResponder(nil)
         workspaceViewController.displayTerminal(
             root: nil,
             surfaces: [:],
@@ -3079,28 +5129,53 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             onRetryUnavailablePane: { _ in },
             onCloseUnavailablePane: { _ in }
         )
-        activeWindow?.orderOut(nil)
-        closeActiveSurfaces()
+        normalWindowController.window?.orderOut(nil)
+        quakeWindowController.appKitWindow?.orderOut(nil)
+        closeActiveSurfaces(allowDuringTermination: true)
         surfaceFailures.removeAll()
+        // WHY: Unaccepted responses may still arrive after teardown and require exact compensation.
+        discardedManagedTasks = discardedManagedTasks.filter { !$0.value.compensationCompleted }
     }
 
-    private func closeActiveSurfaces() {
+    @discardableResult
+    private func closeActiveSurfaces(allowDuringTermination: Bool = false) -> Bool {
+        // WHY: Only explicit teardown may close all panes while frozen. UI close callbacks
+        // must honor reentrant cancellation, including between panes and before window.close.
+        guard !isPreparingForTermination || allowDuringTermination else { return false }
         for paneID in Array(surfaces.keys) {
-            _ = removeSurface(id: paneID, closeBridgeSurface: true)
+            // WHY: A previous close callback may already have removed a sibling.
+            guard surfaces[paneID] != nil else { continue }
+            guard
+                removeSurface(
+                    id: paneID, closeBridgeSurface: true,
+                    allowDuringTermination: allowDuringTermination
+                )
+            else { return false }
         }
+        return !isPreparingForTermination || allowDuringTermination
     }
 
     private func surfaceDidRequestClose(id: PaneID, processAlive: Bool) {
+        guard !isPreparingForTermination else { return }
+        if !processAlive, surfaces[id]?.isManagedTask == true {
+            // WHY: A native exit-close cannot bypass EOF or keep policy. Explicit UI close remains available.
+            if let taskID = managedTaskIDByPane[id] {
+                scheduleManagedSuccessfulClosure(taskID: taskID)
+            }
+            return
+        }
         if !processAlive, let attempt = agentResumeAttempts[id] {
             if agentResumeRuntime.isCurrent(attempt.reference) {
                 agentResumeRuntime.processExited(attempt.reference)
             }
             if case .failed(.immediateExit, _) = agentResumeBinding(for: id)?.restoreState {
-                _ = removeSurface(
-                    id: id,
-                    closeBridgeSurface: true,
-                    preserveAgentPresentation: true
-                )
+                guard
+                    removeSurface(
+                        id: id,
+                        closeBridgeSurface: true,
+                        preserveAgentPresentation: true
+                    )
+                else { return }
                 surfaceFailures.removeValue(forKey: id)
                 if case .started = startupState, activeTab?.root.contains(id) == true {
                     refreshWorkspacePresentation(focusTerminal: false)
@@ -3122,7 +5197,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ presentation: GhosttyConfirmationPresentation,
         completion: @escaping GhosttyConfirmationQueue.Completion
     ) -> GhosttyConfirmationQueue.Dismiss? {
-        guard let window = activeWindow else {
+        guard !isPreparingForTermination, let window = activeWindow else {
             completion(.deny)
             return nil
         }
@@ -3235,7 +5310,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         id: PaneID,
         closeBridgeSurface: Bool
     ) {
-        guard surfaces[id] != nil, closingPaneIDs.insert(id).inserted else { return }
+        // WHY: Late close decisions must leave live panes intact until explicit teardown.
+        guard !isPreparingForTermination,
+            surfaces[id] != nil, closingPaneIDs.insert(id).inserted
+        else { return }
         defer { closingPaneIDs.remove(id) }
         let location = workspaceStore.workspaces.lazy
             .flatMap(\.tabs)
@@ -3292,12 +5370,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
                 refreshWorkspacePresentation(
                     focusTerminal: workspace.id == candidate.activeWorkspaceID)
             } catch {
+                // WHY: A replacement cancelled by freeze must not close the original pane.
+                guard !isPreparingForTermination else { return }
                 guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else {
                     return
                 }
                 _ = commitWorkspaceStore(candidate)
                 refreshWorkspacePresentation(
                     focusTerminal: workspace.id == candidate.activeWorkspaceID)
+                guard !isPreparingForTermination else { return }
                 onError(error)
             }
             return
@@ -3306,6 +5387,205 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         guard removeSurface(id: id, closeBridgeSurface: closeBridgeSurface) else { return }
         guard commitWorkspaceStore(candidate) else { return }
         refreshWorkspacePresentation(focusTerminal: workspace.id == candidate.activeWorkspaceID)
+    }
+}
+
+@MainActor
+private final class WindowCoordinatorTerminalAutomationHost: TerminalAutomationHost {
+    private weak var coordinator: WindowCoordinator?
+
+    init(coordinator: WindowCoordinator) {
+        self.coordinator = coordinator
+    }
+
+    func resolveAuthenticatedSession(
+        instanceID: UUID,
+        originPaneID: PaneID
+    ) -> TerminalAutomationResolvedSession? {
+        coordinator?.resolveTerminalAutomationSession(
+            instanceID: instanceID,
+            originPaneID: originPaneID
+        )
+    }
+
+    func presentPermission(
+        for session: TerminalAutomationResolvedSession
+    ) async -> TerminalAutomationPermissionDecision {
+        guard let coordinator else { return .unavailable }
+        return await coordinator.presentTerminalAutomationPermission(for: session)
+    }
+
+    func createTab(
+        in workspaceID: WorkspaceID,
+        launch: TerminalControlLaunch,
+        policy: TerminalTaskLifecyclePolicy,
+        focus: Bool,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        guard let coordinator else { return .failure(.cancelled) }
+        let configuration: TerminalTaskLaunchConfiguration
+        do {
+            configuration = try coordinator.prepareTerminalTaskLaunchConfiguration(for: launch)
+        } catch {
+            return .failure(.invalidLaunchRequest)
+        }
+        return await coordinator.createManagedTab(
+            in: workspaceID,
+            launchConfiguration: configuration,
+            workingDirectory: launch.cwd,
+            policy: policy,
+            focus: focus,
+            expectedSession: expectedSession
+        )
+    }
+
+    func createSplit(
+        anchorPaneID: PaneID,
+        in workspaceID: WorkspaceID,
+        direction: TerminalSplitDirection,
+        ratio: Double,
+        launch: TerminalControlLaunch,
+        policy: TerminalTaskLifecyclePolicy,
+        focus: Bool,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        guard let coordinator else { return .failure(.cancelled) }
+        let configuration: TerminalTaskLaunchConfiguration
+        do {
+            configuration = try coordinator.prepareTerminalTaskLaunchConfiguration(for: launch)
+        } catch {
+            return .failure(.invalidLaunchRequest)
+        }
+        return await coordinator.splitManagedPane(
+            anchorPaneID: anchorPaneID,
+            in: workspaceID,
+            placement: direction.splitPlacement,
+            ratio: ratio,
+            launchConfiguration: configuration,
+            workingDirectory: launch.cwd,
+            policy: policy,
+            focus: focus,
+            expectedSession: expectedSession
+        )
+    }
+
+    func discardCreatedTask(
+        _ created: TerminalAutomationCreatedTaskResponse,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> Bool {
+        guard let coordinator else { return false }
+        return coordinator.discardManagedTask(created, expectedSession: expectedSession)
+    }
+
+    func inspectTask(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) -> TerminalAutomationTaskInspection {
+        coordinator?.inspectManagedTask(taskID: taskID, expectedSession: expectedSession)
+            ?? .notFound
+    }
+
+    func acceptCreatedTask(
+        _ created: TerminalAutomationCreatedTaskResponse,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) {
+        coordinator?.acceptManagedCreation(created, expectedSession: expectedSession)
+    }
+
+    func revokeSession(_ session: TerminalAutomationSessionIdentity) {
+        coordinator?.revokeManagedSession(session)
+    }
+
+    func forgetTask(taskID: UUID, expectedSession: TerminalAutomationSessionIdentity) {
+        coordinator?.forgetManagedTask(taskID: taskID, expectedSession: expectedSession)
+    }
+
+    func canEvictTask(taskID: UUID, expectedSession: TerminalAutomationSessionIdentity) -> Bool {
+        coordinator?.canEvictManagedTask(taskID: taskID, expectedSession: expectedSession) ?? false
+    }
+
+    func read(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.readManagedTask(taskID: taskID, expectedSession: expectedSession)
+            ?? .failure(.cancelled)
+    }
+
+    func sendText(
+        taskID: UUID,
+        expectedRevision: UInt64,
+        text: String,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.sendManagedInput(
+            taskID: taskID, expectedRevision: expectedRevision, text: text,
+            expectedSession: expectedSession) ?? .failure(.cancelled)
+    }
+
+    func sendKey(
+        taskID: UUID,
+        expectedRevision: UInt64,
+        key: TerminalControlKey,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.sendManagedInput(
+            taskID: taskID, expectedRevision: expectedRevision, key: key,
+            expectedSession: expectedSession) ?? .failure(.cancelled)
+    }
+
+    func requestUserInput(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.requestManagedUserInput(taskID: taskID, expectedSession: expectedSession)
+            ?? .failure(.cancelled)
+    }
+
+    func focus(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.focusManagedTask(taskID: taskID, expectedSession: expectedSession)
+            ?? .failure(.cancelled)
+    }
+
+    func resize(
+        taskID: UUID,
+        ratio: Double,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.resizeManagedTask(
+            taskID: taskID, ratio: ratio, expectedSession: expectedSession)
+            ?? .failure(.cancelled)
+    }
+
+    func interrupt(
+        taskID: UUID,
+        expectedRevision: UInt64,
+        expectedSession: TerminalAutomationSessionIdentity
+    ) async -> TerminalAutomationHostResponse {
+        coordinator?.sendManagedInput(
+            taskID: taskID, expectedRevision: expectedRevision, key: .controlC,
+            expectedSession: expectedSession) ?? .failure(.cancelled)
+    }
+
+    func requestClose(
+        taskID: UUID,
+        expectedSession: TerminalAutomationSessionIdentity,
+        context: TerminalControlRequestContext
+    ) async -> TerminalAutomationHostResponse {
+        guard let coordinator else { return .failure(.cancelled) }
+        return await coordinator.requestManagedClose(
+            taskID: taskID, expectedSession: expectedSession, context: context)
+    }
+
+    func publishPresentation(_ presentation: TerminalAutomationPresentationEvent) {
+        coordinator?.publishTerminalAutomationPresentation(presentation)
+    }
+
+    func publishAttention(_ attention: TerminalAutomationAttention) {
+        coordinator?.publishTerminalAutomationAttention(attention)
     }
 }
 

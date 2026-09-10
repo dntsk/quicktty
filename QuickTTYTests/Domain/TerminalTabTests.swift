@@ -208,9 +208,47 @@ struct TerminalTabTests {
         )
 
         #expect(didSplit)
+        #expect(
+            tab.root
+                == .split(
+                    id: splitID(in: tab.root),
+                    axis: .vertical,
+                    ratio: 0.65,
+                    first: .pane(firstPaneID),
+                    second: .pane(secondPaneID)
+                )
+        )
         #expect(tab.root.leaves == [firstPaneID, secondPaneID])
         #expect(tab.paneDescriptors.map(\.id) == [firstPaneID, secondPaneID])
         #expect(tab.activePaneID == secondPaneID)
+    }
+
+    @Test
+    func splitPaneFirstInsertionKeepsDescriptorAndLeafOrderAlignedAndActivatesNewPane() throws {
+        let sourcePaneID = paneID(1)
+        let newPaneID = paneID(2)
+        var tab = TerminalTab(title: "Tab", pane: descriptor(sourcePaneID))
+
+        let didSplit = try tab.splitPane(
+            sourcePaneID,
+            with: descriptor(newPaneID),
+            axis: .horizontal,
+            ratio: 0.25,
+            insertionSide: .first
+        )
+
+        #expect(didSplit)
+        #expect(tab.root.leaves == [newPaneID, sourcePaneID])
+        #expect(tab.paneDescriptors.map(\.id) == [newPaneID, sourcePaneID])
+        #expect(tab.activePaneID == newPaneID)
+        guard case .split(_, .horizontal, let ratio, let first, let second) = tab.root else {
+            Issue.record("Expected a horizontal split")
+            return
+        }
+        #expect(ratio == 0.25)
+        #expect(first == .pane(newPaneID))
+        #expect(second == .pane(sourcePaneID))
+        try tab.validateInvariant()
     }
 
     @Test
@@ -349,6 +387,13 @@ struct TerminalTabTests {
         let didUpdateUnknownSplit = tab.updateSplitRatio(uuid(999), ratio: 0.2)
         #expect(!didUpdateUnknownSplit)
         #expect(tab == beforeUnknownSplit)
+    }
+
+    private func splitID(in root: SplitNode) -> UUID {
+        guard case .split(let splitID, _, _, _, _) = root else {
+            fatalError("Expected split root")
+        }
+        return splitID
     }
 
     private func makeSplitTab() throws -> TerminalTab {

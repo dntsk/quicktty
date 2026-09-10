@@ -18,6 +18,7 @@ struct SplitCoordinator: Sendable {
             let tabID,
             let paneID,
             let axis,
+            let insertionSide,
             let newPane,
             let ratio
         ):
@@ -36,7 +37,8 @@ struct SplitCoordinator: Sendable {
                         paneID,
                         with: newPane,
                         axis: axis,
-                        ratio: ratio
+                        ratio: ratio,
+                        insertionSide: insertionSide
                     )
                 else {
                     throw SplitCoordinatorError.paneNotFound(paneID)
@@ -57,6 +59,7 @@ struct SplitCoordinator: Sendable {
                 sourcePaneID: paneID,
                 newPane: newPane,
                 axis: axis,
+                insertionSide: createdSplit.insertionSide,
                 ratio: createdSplit.ratio,
                 root: tab.root,
                 activePaneID: tab.activePaneID
@@ -289,13 +292,16 @@ struct SplitCoordinator: Sendable {
         in node: SplitNode,
         sourcePaneID: PaneID,
         newPaneID: PaneID
-    ) throws -> (id: UUID, ratio: Double) {
+    ) throws -> (id: UUID, insertionSide: SplitInsertionSide, ratio: Double) {
         switch node {
         case .pane:
             throw SplitCoordinatorError.paneNotFound(newPaneID)
         case .split(let id, _, let ratio, let first, let second):
             if first == .pane(sourcePaneID), second == .pane(newPaneID) {
-                return (id, ratio)
+                return (id, .second, Self.quantizedRatio(normalizedRatio(1 - ratio)))
+            }
+            if first == .pane(newPaneID), second == .pane(sourcePaneID) {
+                return (id, .first, Self.quantizedRatio(normalizedRatio(ratio)))
             }
             if first.contains(newPaneID) {
                 return try createdSplit(
@@ -304,11 +310,14 @@ struct SplitCoordinator: Sendable {
                     newPaneID: newPaneID
                 )
             }
-            return try createdSplit(
-                in: second,
-                sourcePaneID: sourcePaneID,
-                newPaneID: newPaneID
-            )
+            if second.contains(newPaneID) {
+                return try createdSplit(
+                    in: second,
+                    sourcePaneID: sourcePaneID,
+                    newPaneID: newPaneID
+                )
+            }
+            throw SplitCoordinatorError.paneNotFound(newPaneID)
         }
     }
 
@@ -522,6 +531,10 @@ struct SplitCoordinator: Sendable {
     private func normalizedRatio(_ ratio: Double) -> Double {
         guard ratio.isFinite else { return 0.5 }
         return min(max(ratio, 0.1), 0.9)
+    }
+
+    private static func quantizedRatio(_ ratio: Double) -> Double {
+        (ratio * 1_000_000_000_000).rounded() / 1_000_000_000_000
     }
 }
 

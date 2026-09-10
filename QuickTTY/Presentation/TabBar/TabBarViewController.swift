@@ -82,6 +82,14 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var lastAppliedActiveTabID: TabID?
     private var pendingReorder: PendingReorder?
     private var editedTabID: TabID?
+    private var isRetiredForTermination = false
+
+    func retireForApplicationTermination() {
+        // WHY: Retirement discards deferred drag work without touching the visible selection
+        // or ending native editing; explicit teardown still owns cancelRename().
+        isRetiredForTermination = true
+        pendingReorder = nil
+    }
 
     override func loadView() {
         let rootView = NSView()
@@ -139,6 +147,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         displayedTitles: [TabID: String] = [:],
         statuses: [TabID: TerminalStatusPresentation] = [:]
     ) {
+        guard !isRetiredForTermination else { return }
         let resolvedTitles = Self.resolvedDisplayedTitles(
             for: tabs,
             displayedTitles: displayedTitles
@@ -155,6 +164,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         guard needsReload else { return }
 
         cancelRename()
+        guard !isRetiredForTermination else { return }
         self.tabs = tabs
         self.displayedTitles = resolvedTitles
         self.statuses = resolvedStatuses
@@ -220,6 +230,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     func clearSelectionAfterMove() {
+        guard !isRetiredForTermination else { return }
         selection.clearSelectionAfterMove()
         reloadCollectionView()
     }
@@ -251,6 +262,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         var editedTabIDForTesting: TabID? {
             editedTabID
+        }
+
+        var hasPendingReorderForTesting: Bool {
+            pendingReorder != nil
         }
 
         var dragSessionGenerationForTesting: Int {
@@ -372,7 +387,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         _ collectionView: NSCollectionView,
         pasteboardWriterForItemAt indexPath: IndexPath
     ) -> (any NSPasteboardWriting)? {
-        guard indexPath.section == 0, tabs.indices.contains(indexPath.item) else { return nil }
+        guard !isRetiredForTermination,
+            indexPath.section == 0, tabs.indices.contains(indexPath.item)
+        else { return nil }
         let item = NSPasteboardItem()
         item.setString(tabs[indexPath.item].id.rawValue.uuidString, forType: .quickTTYTab)
         return item
@@ -393,7 +410,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         proposedIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
         dropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>
     ) -> NSDragOperation {
-        guard localDraggedTabID(from: draggingInfo) != nil else { return [] }
+        guard !isRetiredForTermination, localDraggedTabID(from: draggingInfo) != nil else {
+            return []
+        }
         dropOperation.pointee = .before
         return .move
     }
@@ -405,6 +424,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         dropOperation: NSCollectionView.DropOperation
     ) -> Bool {
         guard
+            !isRetiredForTermination,
             pendingReorder == nil,
             dropOperation == .before,
             indexPath.section == 0,
@@ -412,22 +432,27 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             let draggedID = localDraggedTabID(from: draggingInfo)
         else { return false }
 
-        let previousSelection = selection
-        if !selection.selectedTabIDs.contains(draggedID) {
-            selection.select(draggedID, gesture: .click)
+        // WHY: Stage selection locally so rejection needs no rollback, and a callback that
+        // freezes during an accepted model commit cannot leave presentation work behind.
+        var proposedSelection = selection
+        if !proposedSelection.selectedTabIDs.contains(draggedID) {
+            proposedSelection.select(draggedID, gesture: .click)
         }
-        let currentOrder = selection.orderedTabIDs
-        let reorderedIDs = selection.reorderSelection(to: indexPath.item)
-        guard reorderedIDs != currentOrder else { return true }
-        guard
-            let activeTabID = selection.activeTabID,
-            onReorderTabs?(reorderedIDs, activeTabID) == true
-        else {
-            selection = previousSelection
+        let currentOrder = proposedSelection.orderedTabIDs
+        let reorderedIDs = proposedSelection.reorderSelection(to: indexPath.item)
+        guard reorderedIDs != currentOrder else {
+            selection = proposedSelection
+            return true
+        }
+        guard let activeTabID = proposedSelection.activeTabID else { return false }
+        let accepted = onReorderTabs?(reorderedIDs, activeTabID) == true
+        guard !isRetiredForTermination else { return accepted }
+        guard accepted else {
             synchronizeNativeSelection()
             return false
         }
 
+        selection = proposedSelection
         pendingReorder = PendingReorder(
             orderedTabIDs: reorderedIDs,
             activeTabID: activeTabID
@@ -442,7 +467,11 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         endedAt screenPoint: NSPoint,
         dragOperation operation: NSDragOperation
     ) {
-        guard let pendingReorder else { return }
+        guard !isRetiredForTermination, let pendingReorder else { return }
+        // WHY: Consume before callback-capable editing cleanup to prevent completion replay.
+        self.pendingReorder = nil
+        cancelRename()
+        guard !isRetiredForTermination else { return }
 
         tabs = pendingReorder.orderedTabIDs.compactMap { tabID in
             tabs.first { $0.id == tabID }
@@ -453,11 +482,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         )
         lastAppliedActiveTabID = pendingReorder.activeTabID
         reloadCollectionView()
+        guard !isRetiredForTermination else { return }
         onFinishReorderTabs?()
-        self.pendingReorder = nil
     }
 
     private func recordDragSessionStart() {
+        guard !isRetiredForTermination else { return }
         dragSessionGeneration += 1
     }
 
@@ -475,28 +505,36 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     private func beginSelection(_ tabID: TabID, gesture: TabSelectionModel.Gesture) {
+        guard !isRetiredForTermination else { return }
         selection.select(tabID, gesture: gesture)
         synchronizeNativeSelection()
     }
 
     private func finishSelection() {
+        guard !isRetiredForTermination else { return }
         let activeTabID = selection.activeTabID
         let shouldActivate = activeTabID != lastAppliedActiveTabID
         reloadCollectionView()
+        guard !isRetiredForTermination else { return }
         lastAppliedActiveTabID = activeTabID
         guard shouldActivate, let activeTabID else { return }
         onActivateTab?(activeTabID)
     }
 
     private func reloadCollectionView() {
+        guard !isRetiredForTermination else { return }
         cancelRename()
+        // WHY: Ending editing can call back into the coordinator and freeze reentrantly.
+        guard !isRetiredForTermination else { return }
         dataReloadGeneration += 1
         collectionView.reloadData()
+        guard !isRetiredForTermination else { return }
         collectionView.layoutSubtreeIfNeeded()
         synchronizeNativeSelection()
     }
 
     private func synchronizeNativeSelection() {
+        guard !isRetiredForTermination else { return }
         collectionView.selectionIndexPaths = Set(
             selection.selectedTabIDs.compactMap { tabID in
                 tabs.firstIndex { $0.id == tabID }.map { IndexPath(item: $0, section: 0) }
@@ -505,11 +543,14 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     func contextMenu(for tabID: TabID) -> NSMenu {
+        guard !isRetiredForTermination else { return NSMenu() }
         if !selection.selectedTabIDs.contains(tabID) {
             selection.select(tabID, gesture: .click)
             reloadCollectionView()
+            guard !isRetiredForTermination else { return NSMenu() }
             onActivateTab?(tabID)
         }
+        guard !isRetiredForTermination else { return NSMenu() }
 
         let menu = NSMenu()
         let rename = NSMenuItem(
@@ -596,12 +637,12 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     }
 
     func beginRename(_ tabID: TabID) {
-        guard pendingReorder == nil,
+        guard !isRetiredForTermination, pendingReorder == nil,
             let index = tabs.firstIndex(where: { $0.id == tabID })
         else { return }
         if editedTabID == tabID { return }
         cancelRename()
-        guard
+        guard !isRetiredForTermination,
             let item = collectionView.item(
                 at: IndexPath(item: index, section: 0)
             ) as? TabItemView
@@ -609,14 +650,22 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         editedTabID = tabID
         onRenameEditingChanged?(true)
+        guard !isRetiredForTermination, editedTabID == tabID else { return }
         item.beginRenaming(
             title: displayedTitles[tabID] ?? tabs[index].title,
+            allowsAutomaticCompletion: { [weak self] in
+                guard let self else { return false }
+                return !isRetiredForTermination
+            },
             commit: { [weak self] title in
-                guard self?.editedTabID == tabID else { return }
-                self?.onRenameTab?(tabID, title)
+                guard let self, !isRetiredForTermination, editedTabID == tabID else { return }
+                onRenameTab?(tabID, title)
             },
             finish: { [weak self] in
-                self?.finishRename(tabID)
+                // WHY: The commit can freeze after native editing ends. Retain coordinator
+                // editing state until explicit cancelRename(), rather than run a late callback.
+                guard let self, !isRetiredForTermination else { return }
+                finishRename(tabID)
             }
         )
     }
@@ -629,6 +678,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             ) as? TabItemView
         {
             item.cancelRenaming()
+            // WHY: Retirement can interrupt beginRename before the item creates its session,
+            // or suppress its automatic finish callback. Explicit cancellation must still finish.
+            if isRetiredForTermination { finishRename(editedTabID) }
             return
         }
         finishRename(editedTabID)

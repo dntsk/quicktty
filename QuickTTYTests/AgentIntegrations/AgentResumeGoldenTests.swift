@@ -179,7 +179,7 @@ struct AgentResumeGoldenTests {
     }
 
     @Test
-    func executableInvocationEnforcesArgumentBounds() {
+    func executableInvocationEnforcesArgumentBounds() throws {
         let validPath = "/usr/local/bin/agent"
         let workingDirectory = "/tmp"
 
@@ -190,10 +190,16 @@ struct AgentResumeGoldenTests {
                 workingDirectory: workingDirectory
             )
         }
+        let maximumArguments = try ExecutableInvocation(
+            executablePath: validPath,
+            arguments: Array(repeating: "argument", count: 256),
+            workingDirectory: workingDirectory
+        )
+        #expect(maximumArguments.arguments.count == 256)
         #expect(throws: ExecutableInvocationValidationError.invalidInvocation) {
             try ExecutableInvocation(
                 executablePath: validPath,
-                arguments: Array(repeating: "argument", count: 65),
+                arguments: Array(repeating: "argument", count: 257),
                 workingDirectory: workingDirectory
             )
         }

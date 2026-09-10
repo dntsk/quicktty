@@ -229,6 +229,17 @@ enum GhosttyInput {
         ] == (0..<10).map { UInt32(1 << $0) }
     }
 
+    static var keyABIMatchesPinnedHeader: Bool {
+        [
+            UInt32(GHOSTTY_ACTION_RELEASE.rawValue),
+            UInt32(GHOSTTY_ACTION_PRESS.rawValue),
+            UInt32(GHOSTTY_ACTION_REPEAT.rawValue),
+        ] == [0, 1, 2]
+            && MemoryLayout<ghostty_input_key_s>.size == 32
+            && MemoryLayout<ghostty_input_key_s>.stride == 32
+            && MemoryLayout<ghostty_input_key_s>.alignment == 8
+    }
+
     static func modifiers(from flags: NSEvent.ModifierFlags) -> GhosttyInputModifiers {
         var modifiers: GhosttyInputModifiers = []
 

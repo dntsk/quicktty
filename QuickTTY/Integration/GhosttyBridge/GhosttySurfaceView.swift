@@ -76,6 +76,16 @@ import Synchronization
         let result: Bool
     }
 
+    struct GhosttySurfaceAutomationTextObservation: Equatable, Sendable {
+        let bytes: Data
+    }
+
+    struct GhosttySurfaceAutomationKeyObservation: Equatable, Sendable {
+        let key: GhosttyAutomationKey
+        let event: GhosttyKeyEvent
+        let result: Bool
+    }
+
     enum GhosttySurfaceClipboardObservation: Equatable, Sendable {
         case completion(data: String, confirmed: Bool)
         case write(location: GhosttyClipboardLocation, contents: [GhosttyClipboardContent])
@@ -369,6 +379,7 @@ enum GhosttySurfaceCallbackEvent: Sendable {
     case pwdChanged(String)
     case progressReport(GhosttyProgressReport)
     case commandFinished(GhosttyCommandFinished)
+    case processExited(GhosttyProcessExited)
     case scrollbarChanged(GhosttyScrollbarSnapshot)
     case searchStarted(String?)
     case searchEnded
@@ -437,6 +448,7 @@ final class GhosttySearchHostingView: NSHostingView<GhosttySurfaceSearchOverlay>
 @MainActor
 final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     let paneID: PaneID
+    let isManagedTask: Bool
 
     private let inputRoute: GhosttySurfaceInputRoute
     private let focusRoute: GhosttySurfaceFocusRoute
@@ -469,7 +481,16 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     private var searchNeedleCancellable: AnyCancellable?
     private var searchInteractionState: GhosttySearchInteractionState?
     private var searchOverlayView: GhosttySearchHostingView?
+    private(set) var searchReservedTopInset: CGFloat = 0
     private var isSearchFieldFocused = false
+
+    func setSearchReservedTopInset(_ inset: CGFloat) {
+        let inset = inset.isFinite ? max(0, inset) : 0
+        guard searchReservedTopInset != inset else { return }
+        searchReservedTopInset = inset
+        // WHY: Updating only the value preserves the host, search state, corner, and field focus.
+        searchOverlayView?.rootView.reservedTopInset = inset
+    }
 
     var latestWorkingDirectoryForPersistence: String? {
         callbackContextOwnership?.takeUnretainedValue().latestWorkingDirectory
@@ -490,6 +511,8 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         private var bindingActionObservations: [String] = []
         private var searchFocusRequestCountForTesting = 0
         private var scrollbarDeliveryCount = 0
+        private var automationTextObservations: [GhosttySurfaceAutomationTextObservation] = []
+        private var automationKeyObservations: [GhosttySurfaceAutomationKeyObservation] = []
         private var clipboardObservations: [GhosttySurfaceClipboardObservation] = []
         var clipboardObservationHandlerForTesting:
             (@MainActor @Sendable (GhosttySurfaceClipboardObservation) -> Void)?
@@ -553,6 +576,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         clipboardInvalidationRoute: @escaping GhosttyClipboardInvalidationRoute
     ) {
         self.paneID = paneID
+        isManagedTask = configuration.managedHelperPath != nil
         self.inputRoute = inputRoute
         self.focusRoute = focusRoute
         self.shortcutRoute = shortcutRoute
@@ -581,8 +605,14 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         let newSurface = configuration.withCValue(
             view: self,
             userdata: callbackContextOwnership.toOpaque()
-        ) { configuration in
-            ghostty_surface_new(application, &configuration)
+        ) { cConfiguration in
+            if let helperPath = configuration.managedHelperPath {
+                // WHY: Native copies the path before returning; config/env/userdata remain alive here.
+                return helperPath.withCString { helper in
+                    quicktty_surface_new_managed(application, &cConfiguration, helper)
+                }
+            }
+            return ghostty_surface_new(application, &cConfiguration)
         }
 
         guard let newSurface else {
@@ -802,6 +832,8 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             mousePositionObservations
         }
 
+        var pressedMouseButtonsForTesting: Int?
+
         var mouseScrollObservationsForTesting: [GhosttySurfaceMouseScrollObservation] {
             mouseScrollObservations
         }
@@ -898,6 +930,14 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             )
         }
 
+        var automationTextObservationsForTesting: [GhosttySurfaceAutomationTextObservation] {
+            automationTextObservations
+        }
+
+        var automationKeyObservationsForTesting: [GhosttySurfaceAutomationKeyObservation] {
+            automationKeyObservations
+        }
+
         var clipboardObservationsForTesting: [GhosttySurfaceClipboardObservation] {
             clipboardObservations
         }
@@ -956,6 +996,21 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
                 surface: surface,
                 stateRawValue: stateRawValue,
                 progress: progress,
+                target: target
+            )
+        }
+
+        @discardableResult
+        func scheduleProcessExitedCallbackForTesting(
+            exitCode: UInt32,
+            runtimeMilliseconds: UInt64,
+            target: GhosttyActivityCallbackTargetForTesting = .surface
+        ) -> Bool {
+            guard let surface else { return false }
+            return ghosttyRuntimeProcessExitedCallbackForTesting(
+                surface: surface,
+                exitCode: exitCode,
+                runtimeMilliseconds: runtimeMilliseconds,
                 target: target
             )
         }
@@ -1242,9 +1297,12 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
             return event
         }
 
-        let windowPoint = event.locationInWindow
-        let surfacePoint = convert(windowPoint, from: nil)
-        let hitView = hitTest(surfacePoint)
+        guard let contentView = window.contentView else { return event }
+        // WHY: External overlays must win before pane focus; hitTest takes superview coordinates.
+        let contentSuperviewPoint =
+            contentView.superview?.convert(event.locationInWindow, from: nil)
+            ?? event.locationInWindow
+        let hitView = contentView.hitTest(contentSuperviewPoint)
         guard hitView === self else {
             return event
         }
@@ -1352,9 +1410,12 @@ extension GhosttySurfaceView {
 
     override func mouseExited(with event: NSEvent) {
         guard surface != nil else { return }
-        if NSEvent.pressedMouseButtons != 0 {
-            return
-        }
+        #if DEBUG
+            let pressedMouseButtons = pressedMouseButtonsForTesting ?? NSEvent.pressedMouseButtons
+        #else
+            let pressedMouseButtons = NSEvent.pressedMouseButtons
+        #endif
+        if pressedMouseButtons != 0 { return }
         sendMousePosition(event, x: -1, y: -1)
     }
 
@@ -1467,10 +1528,13 @@ extension GhosttySurfaceView {
         captureInputEvent(event).wasProcessed
     }
 
-    func captureInputEvent(_ event: NSEvent) -> GhosttySurfaceInputCapture {
+    func captureInputEvent(
+        _ event: NSEvent,
+        beforeDelivery: @MainActor () -> Void = {}
+    ) -> GhosttySurfaceInputCapture {
         switch event.type {
         case .keyDown:
-            captureKeyDown(event)
+            captureKeyDown(event, beforeDelivery: beforeDelivery)
         case .keyUp:
             GhosttySurfaceInputCapture(
                 wasProcessed: keyAction(.release, event: event),
@@ -1488,7 +1552,8 @@ extension GhosttySurfaceView {
 
     func replayInputEvent(
         _ event: NSEvent,
-        replay: GhosttySurfaceInputReplay
+        replay: GhosttySurfaceInputReplay,
+        beforeDelivery: @MainActor () -> Void = {}
     ) -> Bool {
         switch replay {
         case .keyDown(let action, let text, let composing):
@@ -1496,7 +1561,8 @@ extension GhosttySurfaceView {
                 event,
                 action: action,
                 text: text,
-                composing: composing
+                composing: composing,
+                beforeDelivery: beforeDelivery
             )
         case .keyUp:
             return keyAction(.release, event: event)
@@ -1568,7 +1634,10 @@ extension GhosttySurfaceView {
         NSApp.sendEvent(currentEvent)
     }
 
-    private func captureKeyDown(_ event: NSEvent) -> GhosttySurfaceInputCapture {
+    private func captureKeyDown(
+        _ event: NSEvent,
+        beforeDelivery: @MainActor () -> Void
+    ) -> GhosttySurfaceInputCapture {
         clearPendingViewportRestore()
         guard let translationEvent = translationEvent(for: event) else {
             return GhosttySurfaceInputCapture(wasProcessed: false, replay: nil)
@@ -1595,6 +1664,7 @@ extension GhosttySurfaceView {
         if let accumulatedText = keyTextAccumulator,
             !accumulatedText.isEmpty
         {
+            beforeDelivery()
             let result = sendKeyTexts(
                 accumulatedText,
                 action: action,
@@ -1612,6 +1682,7 @@ extension GhosttySurfaceView {
         }
 
         let composing = markedText.length > 0 || hadMarkedText
+        beforeDelivery()
         let result = keyAction(
             action,
             event: event,
@@ -1633,7 +1704,8 @@ extension GhosttySurfaceView {
         _ event: NSEvent,
         action: GhosttyInputAction,
         text: GhosttySurfaceInputReplay.KeyText,
-        composing: Bool
+        composing: Bool,
+        beforeDelivery: @MainActor () -> Void
     ) -> Bool {
         clearPendingViewportRestore()
         guard let translationEvent = translationEvent(for: event) else { return false }
@@ -1641,6 +1713,7 @@ extension GhosttySurfaceView {
         switch text {
         case .sourceInterpreted(let texts):
             // Marked text belongs to AppKit's current responder, so only committed text is replayed.
+            beforeDelivery()
             return sendKeyTexts(
                 texts,
                 action: action,
@@ -1649,6 +1722,7 @@ extension GhosttySurfaceView {
                 composing: composing
             )
         case .targetFallback:
+            beforeDelivery()
             return keyAction(
                 action,
                 event: event,
@@ -1815,6 +1889,93 @@ extension GhosttySurfaceView {
         else { return nil }
 
         return "_"
+    }
+}
+
+extension GhosttySurfaceView {
+    func readRenderedText(
+        maximumUTF8Bytes: Int,
+        client: GhosttyTerminalAutomationClient
+    ) throws -> GhosttyRenderedText {
+        guard let surface else {
+            throw GhosttyBridgeError.surfaceUnavailable(paneID)
+        }
+
+        let maximumUTF8Bytes = try GhosttyTerminalAutomation.validateRenderedTextLimit(
+            maximumUTF8Bytes
+        )
+        let request = GhosttyTerminalAutomationReadRequest(
+            maximumUTF8Bytes: maximumUTF8Bytes
+        )
+        return try GhosttyTerminalAutomation.renderedText(
+            request: request,
+            liveRead: { [self] in
+                guard self.surface == surface else { return .failure }
+                return GhosttyTerminalAutomation.liveRenderedText(
+                    from: surface,
+                    maximumUTF8Bytes: maximumUTF8Bytes
+                )
+            },
+            client: client,
+            paneID: paneID
+        )
+    }
+
+    func outputState(client: GhosttyTerminalAutomationClient = .live) -> GhosttyOutputState {
+        guard let surface else { return .failed }
+        let state = client.outputState { [self] in
+            guard self.surface == surface else { return .failed }
+            switch quicktty_surface_output_state(surface) {
+            case QUICKTTY_OUTPUT_PENDING: return .pending
+            case QUICKTTY_OUTPUT_COMPLETE: return .complete
+            default: return .failed
+            }
+        }
+        // WHY: An injected observer may close the surface synchronously.
+        return self.surface == surface ? state : .failed
+    }
+
+    func sendAutomationText(_ text: String) throws {
+        guard let surface else {
+            throw GhosttyBridgeError.surfaceUnavailable(paneID)
+        }
+
+        let bytes = try GhosttyTerminalAutomation.automationTextBytes(from: text)
+        bytes.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            ghostty_surface_text(
+                surface,
+                baseAddress.assumingMemoryBound(to: CChar.self),
+                UInt(buffer.count)
+            )
+        }
+
+        #if DEBUG
+            automationTextObservations.append(
+                GhosttySurfaceAutomationTextObservation(bytes: bytes)
+            )
+        #endif
+    }
+
+    func sendAutomationKey(_ key: GhosttyAutomationKey) throws {
+        guard let surface else {
+            throw GhosttyBridgeError.surfaceUnavailable(paneID)
+        }
+
+        let keyEvent = GhosttyTerminalAutomation.keyEvent(for: key)
+        let result = keyEvent.withCValue { value in
+            ghostty_surface_key(surface, value)
+        }
+
+        #if DEBUG
+            automationKeyObservations.append(
+                GhosttySurfaceAutomationKeyObservation(
+                    key: key,
+                    event: keyEvent,
+                    result: result
+                )
+            )
+        #endif
     }
 }
 
@@ -2032,7 +2193,7 @@ extension GhosttySurfaceView {
             break
         case .pwdChanged(let workingDirectory):
             currentWorkingDirectory = workingDirectory
-        case .progressReport, .commandFinished:
+        case .progressReport, .commandFinished, .processExited:
             break
         case .scrollbarChanged(let snapshot):
             latestScrollbarSnapshot = snapshot
@@ -2099,6 +2260,7 @@ extension GhosttySurfaceView {
         let overlay = GhosttySurfaceSearchOverlay(
             searchState: searchState,
             interactionState: interactionState,
+            reservedTopInset: searchReservedTopInset,
             onBindingAction: { [weak self] action in
                 self?.performSearchBinding(action)
             },
@@ -2717,6 +2879,11 @@ final class SurfaceCallbackContext: Sendable {
     @discardableResult
     func scheduleCommandFinished(_ command: GhosttyCommandFinished) -> Bool {
         scheduleActivityEvent(.commandFinished(command))
+    }
+
+    @discardableResult
+    func scheduleProcessExited(_ process: GhosttyProcessExited) -> Bool {
+        scheduleActivityEvent(.processExited(process))
     }
 
     @discardableResult

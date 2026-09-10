@@ -27,6 +27,37 @@ struct AgentSocketServerTests {
     }
 
     @Test
+    func lifecycleSuccessResponseRemainsExactlyOneAcknowledgementByte() async throws {
+        let baseDirectory = try makeTemporaryBaseDirectory()
+        defer { removeTemporaryBaseDirectory(baseDirectory) }
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: baseDirectory,
+            credentialProvider: Self.provideCredential
+        ) { _ in true }
+        let socketPath = try server.start()
+        let fileDescriptor = try connectRaw(to: socketPath)
+        defer { Darwin.close(fileDescriptor) }
+        let message = try makeMessage()
+        let preflight = try authenticate(fileDescriptor, message: message)
+
+        try AgentSocketIO.writeAll(
+            AgentIPCProtocol.encodeFrame(message, for: preflight),
+            to: fileDescriptor
+        )
+        try AgentSocketIO.shutdownWrite(fileDescriptor)
+
+        #expect(
+            try AgentSocketIO.readExactly(
+                1,
+                from: fileDescriptor,
+                deadline: AgentSocketDeadline(timeoutMilliseconds: 2_000)
+            ) == Data([1])
+        )
+        #expect(try AgentSocketIO.readByte(from: fileDescriptor) == nil)
+        await server.stop()
+    }
+
+    @Test
     func transparentRelayCanForwardRequestButCannotObtainPaneToken() async throws {
         let baseDirectory = try makeTemporaryBaseDirectory()
         defer { removeTemporaryBaseDirectory(baseDirectory) }
@@ -178,11 +209,12 @@ struct AgentSocketServerTests {
                     reads += 1
                     return String(repeating: reads == 1 ? "a" : "b", count: 64)
                 }
+            },
+            handler: { _ in
+                deliveryCount.withLock { $0 += 1 }
+                return true
             }
-        ) { _ in
-            deliveryCount.withLock { $0 += 1 }
-            return true
-        }
+        )
         let socketPath = try server.start()
 
         #expect(try !AgentSocketClient.send(makeMessage(), to: socketPath))
@@ -405,10 +437,13 @@ struct AgentSocketServerTests {
                     errors.isEmpty ? nil : errors.removeFirst()
                 }
                 guard let injectedError else {
-                    return Darwin.accept(listenerFileDescriptor, nil, nil)
+                    return AuthenticatedLocalSocketAcceptResult.accept(
+                        from: listenerFileDescriptor
+                    )
                 }
-                errno = injectedError
-                return -1
+                let result = AuthenticatedLocalSocketAcceptResult.failure(injectedError)
+                errno = EAGAIN
+                return result
             },
             acceptRetryBackoff: {
                 backoffCount.withLock { $0 += 1 }
@@ -421,6 +456,33 @@ struct AgentSocketServerTests {
         #expect(try AgentSocketClient.send(makeMessage(), to: socketPath))
         #expect(injectedErrors.withLock { $0.isEmpty })
         #expect(backoffCount.withLock { $0 } == 4)
+        await server.stop()
+    }
+
+    @Test
+    func wouldBlockAcceptErrorFreezesWithoutBackoff() async throws {
+        let baseDirectory = try makeTemporaryBaseDirectory()
+        defer { removeTemporaryBaseDirectory(baseDirectory) }
+        let failureObserved = DispatchSemaphore(value: 0)
+        let backoffCount = Mutex(0)
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: baseDirectory,
+            acceptFunction: { _ in
+                failureObserved.signal()
+                return AuthenticatedLocalSocketAcceptResult.failure(EWOULDBLOCK)
+            },
+            acceptRetryBackoff: {
+                backoffCount.withLock { $0 += 1 }
+            },
+            handler: { _ in true }
+        )
+
+        let socketPath = try server.start()
+        let clientFileDescriptor = try connectRaw(to: socketPath)
+        defer { Darwin.close(clientFileDescriptor) }
+        #expect(await waitForSemaphore(failureObserved))
+        #expect(await waitForCondition { server.socketPath == nil })
+        #expect(backoffCount.withLock { $0 } == 0)
         await server.stop()
     }
 
@@ -439,11 +501,12 @@ struct AgentSocketServerTests {
                     return shouldFail
                 }
                 guard fail else {
-                    return Darwin.accept(listenerFileDescriptor, nil, nil)
+                    return AuthenticatedLocalSocketAcceptResult.accept(
+                        from: listenerFileDescriptor
+                    )
                 }
-                errno = EBADF
                 failureObserved.signal()
-                return -1
+                return AuthenticatedLocalSocketAcceptResult.failure(EBADF)
             },
             acceptRetryBackoff: {},
             credentialProvider: Self.provideCredential,
@@ -454,9 +517,23 @@ struct AgentSocketServerTests {
         )
 
         let firstPath = try server.start()
+        var failedGenerationClient: Int32? = try connectRaw(to: firstPath)
+        defer {
+            if let failedGenerationClient {
+                Darwin.close(failedGenerationClient)
+            }
+        }
         #expect(await waitForSemaphore(failureObserved))
-        while server.socketPath != nil {
-            await Task.yield()
+        let generationFrozen = await waitForCondition { server.socketPath == nil }
+        #expect(generationFrozen)
+        guard generationFrozen else {
+            if let fileDescriptor = failedGenerationClient {
+                Darwin.close(fileDescriptor)
+                failedGenerationClient = nil
+            }
+            server.stopImmediately()
+            #expect(await waitForCondition { access(firstPath, F_OK) != 0 })
+            return
         }
         await server.stop()
         #expect(access(firstPath, F_OK) != 0)
@@ -466,6 +543,101 @@ struct AgentSocketServerTests {
         #expect(try AgentSocketClient.send(makeMessage(), to: secondPath))
         #expect(deliveryCount.withLock { $0 } == 1)
         await server.stop()
+    }
+
+    @Test
+    func stoppedListenerCannotAcceptThroughReusedDescriptorOrNextGeneration() async throws {
+        let baseDirectory = try makeTemporaryBaseDirectory()
+        defer { removeTemporaryBaseDirectory(baseDirectory) }
+        let firstAccept = Mutex(true)
+        let acceptFileDescriptor = Mutex<Int32?>(nil)
+        let closedListenerFileDescriptor = Mutex<Int32?>(nil)
+        let listenerDescriptorWasReused = Mutex(false)
+        let staleListenerOperations = Mutex(0)
+        let closedAcceptFileDescriptors = Mutex<[Int32]>([])
+        let deliveryCount = Mutex(0)
+        let acceptEntered = DispatchSemaphore(value: 0)
+        let acceptRelease = DispatchSemaphore(value: 0)
+        let listenerClosed = DispatchSemaphore(value: 0)
+        let stopCompleted = DispatchSemaphore(value: 0)
+        defer { acceptRelease.signal() }
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: baseDirectory,
+            acceptFunction: { fileDescriptor in
+                let shouldBlock = firstAccept.withLock { firstAccept in
+                    guard firstAccept else { return false }
+                    firstAccept = false
+                    return true
+                }
+                guard shouldBlock else {
+                    return AuthenticatedLocalSocketAcceptResult.accept(from: fileDescriptor)
+                }
+                acceptFileDescriptor.withLock { $0 = fileDescriptor }
+                acceptEntered.signal()
+                guard acceptRelease.wait(timeout: .now() + 2) == .success else {
+                    return AuthenticatedLocalSocketAcceptResult.failure(ETIMEDOUT)
+                }
+                return AuthenticatedLocalSocketAcceptResult.failure(EAGAIN)
+            },
+            listenerShutdownFunction: { fileDescriptor, direction in
+                let isStale =
+                    listenerDescriptorWasReused.withLock { $0 }
+                    && closedListenerFileDescriptor.withLock { $0 } == fileDescriptor
+                if isStale {
+                    staleListenerOperations.withLock { $0 += 1 }
+                } else {
+                    _ = Darwin.shutdown(fileDescriptor, direction)
+                }
+            },
+            listenerCloseFunction: { fileDescriptor in
+                let isStale =
+                    listenerDescriptorWasReused.withLock { $0 }
+                    && closedListenerFileDescriptor.withLock { $0 } == fileDescriptor
+                if isStale {
+                    staleListenerOperations.withLock { $0 += 1 }
+                } else {
+                    _ = Darwin.close(fileDescriptor)
+                    closedListenerFileDescriptor.withLock { $0 = fileDescriptor }
+                    listenerDescriptorWasReused.withLock { $0 = true }
+                }
+            },
+            listenerCloseObserver: { _ in listenerClosed.signal() },
+            acceptFileDescriptorCloseObserver: { fileDescriptor in
+                closedAcceptFileDescriptors.withLock { $0.append(fileDescriptor) }
+            },
+            credentialProvider: Self.provideCredential,
+            handler: { _ in
+                deliveryCount.withLock { $0 += 1 }
+                return true
+            }
+        )
+
+        let firstPath = try server.start()
+        let pendingClient = try connectRaw(to: firstPath)
+        defer { Darwin.close(pendingClient) }
+        #expect(await waitForSemaphore(acceptEntered))
+        _ = Task {
+            await server.stop()
+            stopCompleted.signal()
+        }
+        #expect(await waitForSemaphore(listenerClosed))
+
+        let acceptDescriptor = try #require(acceptFileDescriptor.withLock { $0 })
+        let closedDescriptor = try #require(closedListenerFileDescriptor.withLock { $0 })
+        #expect(acceptDescriptor != closedDescriptor)
+
+        acceptRelease.signal()
+        #expect(await waitForSemaphore(stopCompleted))
+        #expect(closedAcceptFileDescriptors.withLock { $0 } == [acceptDescriptor])
+        #expect(staleListenerOperations.withLock { $0 } == 0)
+
+        listenerDescriptorWasReused.withLock { $0 = false }
+        closedListenerFileDescriptor.withLock { $0 = nil }
+        let restartedPath = try server.start()
+        #expect(try AgentSocketClient.send(makeMessage(), to: restartedPath))
+        #expect(deliveryCount.withLock { $0 } == 1)
+        await server.stop()
+        #expect(closedAcceptFileDescriptors.withLock { $0.count } == 2)
     }
 
     @Test
@@ -492,6 +664,44 @@ struct AgentSocketServerTests {
         #expect(validatorCalls.withLock { $0 } == 1)
         #expect(deliveryCount.withLock { $0 } == 0)
         await server.stop()
+    }
+
+    @Test
+    func startRemovesCreatedDirectoryWhenInstanceDirectoryOpenFails() throws {
+        let baseDirectory = try makeTemporaryBaseDirectory()
+        defer { removeTemporaryBaseDirectory(baseDirectory) }
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: baseDirectory,
+            instanceDirectoryOpenFunction: { _, _ in
+                errno = EACCES
+                return -1
+            },
+            handler: { _ in true }
+        )
+
+        #expect(throws: AgentSocketServerError.systemCall("open", EACCES)) {
+            try server.start()
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: baseDirectory).isEmpty)
+    }
+
+    @Test
+    func startRemovesCreatedDirectoryWhenInstanceDirectoryFstatFails() throws {
+        let baseDirectory = try makeTemporaryBaseDirectory()
+        defer { removeTemporaryBaseDirectory(baseDirectory) }
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: baseDirectory,
+            instanceDirectoryFstatFunction: { _, _ in
+                errno = EIO
+                return -1
+            },
+            handler: { _ in true }
+        )
+
+        #expect(throws: AgentSocketServerError.systemCall("fstat", EIO)) {
+            try server.start()
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: baseDirectory).isEmpty)
     }
 
     @Test
@@ -571,15 +781,22 @@ struct AgentSocketServerTests {
         let handlerEntered = DispatchSemaphore(value: 0)
         let handlerRelease = AsyncGate()
         let deliveryCount = Mutex(0)
+        let handlerCancelled = Mutex(false)
         let stopCompleted = Mutex(false)
+        let stopFinished = DispatchSemaphore(value: 0)
+        defer { handlerRelease.open() }
         let server = AgentSocketServer(
             temporaryBaseDirectory: baseDirectory,
             credentialProvider: Self.provideCredential
         ) { _ in
-            deliveryCount.withLock { $0 += 1 }
-            handlerEntered.signal()
-            await handlerRelease.wait()
-            return true
+            await withTaskCancellationHandler {
+                deliveryCount.withLock { $0 += 1 }
+                handlerEntered.signal()
+                await handlerRelease.wait()
+                return true
+            } onCancel: {
+                handlerCancelled.withLock { $0 = true }
+            }
         }
 
         let socketPath = try server.start()
@@ -595,20 +812,29 @@ struct AgentSocketServerTests {
         let entered = await waitForSemaphore(handlerEntered)
         #expect(entered)
 
-        let stopTask = Task {
+        Task {
             await server.stop()
             stopCompleted.withLock { $0 = true }
+            stopFinished.signal()
         }
-        while server.socketPath != nil {
-            await Task.yield()
-        }
-        #expect(!stopCompleted.withLock { $0 })
-        #expect(try AgentSocketIO.readByte(from: fileDescriptor) == nil)
+        let endpointFrozen = await waitForCondition { server.socketPath == nil }
+        let stoppedBeforeRelease = stopCompleted.withLock { $0 }
+        let cancelledBeforeRelease = handlerCancelled.withLock { $0 }
+        let closedBeforeRelease =
+            endpointFrozen
+            ? (try? AgentSocketIO.readByte(from: fileDescriptor) == nil) ?? false
+            : false
 
-        await handlerRelease.open()
-        await stopTask.value
+        handlerRelease.open()
+        let cleanupCompleted = await waitForSemaphore(stopFinished)
+        #expect(endpointFrozen)
+        #expect(!stoppedBeforeRelease)
+        #expect(!cancelledBeforeRelease)
+        #expect(closedBeforeRelease)
+        #expect(cleanupCompleted)
         #expect(stopCompleted.withLock { $0 })
         #expect(deliveryCount.withLock { $0 } == 1)
+        #expect(!handlerCancelled.withLock { $0 })
         #expect(try AgentSocketIO.readByte(from: fileDescriptor) == nil)
     }
 
@@ -647,7 +873,7 @@ struct AgentSocketServerTests {
         #expect(access(instanceDirectory, F_OK) == 0)
         #expect(try AgentSocketIO.readByte(from: fileDescriptor) == nil)
 
-        await handlerRelease.open()
+        handlerRelease.open()
         await server.stop()
         #expect(access(instanceDirectory, F_OK) != 0)
     }
@@ -790,6 +1016,16 @@ struct AgentSocketServerTests {
         }
     }
 
+    private func waitForCondition(_ condition: @Sendable () -> Bool) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while !condition() {
+            guard clock.now < deadline else { return false }
+            await Task.yield()
+        }
+        return true
+    }
+
     private func permissions(at path: String) throws -> mode_t {
         var fileStatus = stat()
         guard lstat(path, &fileStatus) == 0 else {
@@ -927,23 +1163,34 @@ struct AgentSocketServerTests {
     }
 }
 
-private actor AsyncGate {
-    private var isOpen = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+private final class AsyncGate: Sendable {
+    private struct State {
+        var isOpen = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
 
     func wait() async {
-        guard !isOpen else {
-            return
-        }
         await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+            let shouldResume = state.withLock { state in
+                guard !state.isOpen else { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
         }
     }
 
     func open() {
-        isOpen = true
-        let pendingWaiters = waiters
-        waiters.removeAll(keepingCapacity: false)
+        let pendingWaiters = state.withLock { state in
+            state.isOpen = true
+            let pendingWaiters = state.waiters
+            state.waiters.removeAll(keepingCapacity: false)
+            return pendingWaiters
+        }
         for waiter in pendingWaiters {
             waiter.resume()
         }

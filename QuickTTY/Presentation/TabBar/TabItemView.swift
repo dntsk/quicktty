@@ -27,6 +27,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     private let broadcastIndicator = NSImageView()
     private let closeButton = NSButton()
     private struct RenameSession {
+        let allowsAutomaticCompletion: @MainActor () -> Bool
         let commit: (String) -> Void
         let finish: () -> Void
     }
@@ -179,11 +180,13 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     func beginRenaming(
         title: String,
+        allowsAutomaticCompletion: @escaping @MainActor () -> Bool = { true },
         commit: @escaping (String) -> Void,
         finish: @escaping () -> Void
     ) {
         guard renameSession == nil else { return }
-        renameSession = RenameSession(commit: commit, finish: finish)
+        renameSession = RenameSession(
+            allowsAutomaticCompletion: allowsAutomaticCompletion, commit: commit, finish: finish)
         renameEditor.stringValue = title
         titleLabel.alphaValue = 0
         renameEditor.isHidden = false
@@ -211,7 +214,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     func controlTextDidEndEditing(_ notification: Notification) {
         guard !isStartingRename else { return }
-        finishRenaming(commit: true)
+        automaticallyFinishRenaming(commit: true)
     }
 
     func control(
@@ -221,10 +224,10 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     ) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.insertNewline(_:)):
-            finishRenaming(commit: true)
+            automaticallyFinishRenaming(commit: true)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
-            finishRenaming(commit: false)
+            automaticallyFinishRenaming(commit: false)
             return true
         default:
             return false
@@ -319,6 +322,13 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     @objc private func closeTab() {
         closeHandler?()
+    }
+
+    private func automaticallyFinishRenaming(commit shouldCommit: Bool) {
+        // WHY: A retained active editor must consult its live owner before changing UI/focus.
+        // Explicit cancel/reuse still bypass this gate so late teardown can end editing.
+        guard let renameSession, renameSession.allowsAutomaticCompletion() else { return }
+        finishRenaming(commit: shouldCommit)
     }
 
     private func finishRenaming(commit shouldCommit: Bool) {

@@ -81,6 +81,7 @@ extension Notification.Name {
 struct GhosttySurfaceSearchOverlay: View {
     @ObservedObject var searchState: SearchState
     let interactionState: GhosttySearchInteractionState
+    var reservedTopInset: CGFloat = 0
     let onBindingAction: (String) -> Void
     let onSearchFieldFocusChanged: (Bool) -> Void
     let onClose: () -> Void
@@ -192,6 +193,8 @@ struct GhosttySurfaceSearchOverlay: View {
                 maxHeight: .infinity,
                 alignment: corner.alignment
             )
+            // WHY: Keep the AppKit host full-size and measure hits in the existing coordinate space.
+            .padding(.top, reservedTopInset)
             .gesture(
                 DragGesture()
                     .onChanged { value in
@@ -266,9 +269,9 @@ struct GhosttySurfaceSearchOverlay: View {
 
         switch corner {
         case .topLeft:
-            return CGPoint(x: halfWidth, y: halfHeight)
+            return CGPoint(x: halfWidth, y: reservedTopInset + halfHeight)
         case .topRight:
-            return CGPoint(x: containerSize.width - halfWidth, y: halfHeight)
+            return CGPoint(x: containerSize.width - halfWidth, y: reservedTopInset + halfHeight)
         case .bottomLeft:
             return CGPoint(x: halfWidth, y: containerSize.height - halfHeight)
         case .bottomRight:
@@ -284,7 +287,7 @@ struct GhosttySurfaceSearchOverlay: View {
         in containerSize: CGSize
     ) -> Corner {
         let midX = containerSize.width / 2
-        let midY = containerSize.height / 2
+        let midY = (containerSize.height + reservedTopInset) / 2
 
         if point.x < midX {
             return point.y < midY ? .topLeft : .bottomLeft

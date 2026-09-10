@@ -7,6 +7,84 @@ import Testing
 
 extension GhosttyBridgeTests {
     @Test
+    func managedFactoryUsesExactHelperPathAndIsolatesLegacyConfigOverrides() async throws {
+        let fixture = try SurfaceTestConfig(
+            contents: """
+                command = /bin/cat
+                initial-command = /bin/sh -c 'printf LEGACY-INITIAL'
+                shell-integration = bash
+                abnormal-command-exit-runtime = 0
+                """)
+        defer { fixture.remove() }
+        let helper = ApplicationEnvironment.bundledAgentHelperURL(in: Bundle.main)
+        try #require(FileManager.default.isExecutableFile(atPath: helper.path))
+        let copy = fixture.directoryURL.resolvingSymlinksInPath().appending(path: "helper's copy 猫")
+        try FileManager.default.copyItem(at: helper, to: copy)
+        let launch = try TerminalControlLaunch(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                """
+                /bin/stty -icanon -echo min 0 time 1
+                value=$(/bin/dd bs=1 count=1 2>/dev/null)
+                [ -z "$value" ] || exit 88
+                printf 'MANAGED-EXACT-ARGV'
+                exit 7
+                """,
+            ],
+            cwd: fixture.directoryURL.resolvingSymlinksInPath().path)
+        let configuration = try TerminalTaskLaunchConfiguration(
+            launch: launch, bundledHelperPath: copy.path)
+        // WHY: Both launch modes must avoid inherited shell hooks in this owned fixture.
+        let environment = configuration.environment.merging([
+            "ENV": "/dev/null", "BASH_ENV": "/dev/null", "INPUTRC": "/dev/null",
+            "HISTFILE": "/dev/null", "PROMPT_COMMAND": "",
+        ]) { _, value in value }
+        let bridge = try GhosttyBridge(configURL: fixture.url)
+        defer { bridge.shutdown() }
+        #expect(bridge.diagnostics.isEmpty)
+        var exits: [GhosttyProcessExited] = []
+        bridge.surfaceProcessExitedHandler = { _, event in exits.append(event) }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                command: "exec /usr/bin/false", managedHelperPath: configuration.helperPath,
+                environment: environment, initialInput: "unexpected\n",
+                waitAfterCommand: false))
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while exits.isEmpty || bridge.outputState(id: surface.paneID) == .pending {
+            try Task.checkCancellation()
+            guard clock.now < deadline else { throw SurfaceTestError.timeout }
+            try await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(10))))
+        }
+        #expect(exits.count == 1 && exits.first?.exitCode == 7)
+        #expect(surface.isReady)
+        #expect(bridge.outputState(id: surface.paneID) == .complete)
+        let rendered = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 1024)
+        #expect(rendered.text.contains("MANAGED-EXACT-ARGV"))
+        #expect(!rendered.text.contains("LEGACY-INITIAL"))
+        #expect(!rendered.text.contains("unexpected"))
+        bridge.shutdown()
+
+        // WHY: The same config and payload environment must retain legacy first-command behavior.
+        let legacy = try GhosttyBridge(configURL: fixture.url)
+        defer { legacy.shutdown() }
+        let normal = try legacy.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                environment: environment, waitAfterCommand: true))
+        let legacyDeadline = clock.now.advanced(by: .seconds(5))
+        while !normal.processExitedForTesting {
+            try Task.checkCancellation()
+            guard clock.now < legacyDeadline else { throw SurfaceTestError.timeout }
+            try await clock.sleep(
+                until: min(legacyDeadline, clock.now.advanced(by: .milliseconds(10))))
+        }
+        #expect(legacy.surfaceConfigurationForTesting(id: normal.paneID)?.managedHelperPath == nil)
+        #expect(legacy.outputState(id: normal.paneID) == .failed)
+        #expect(normal.isReady)
+    }
+
+    @Test
     func createsSurfaceWithExplicitCommandInHiddenWindow() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }
@@ -537,6 +615,161 @@ extension GhosttyBridgeTests {
 
         #expect(surface.scrollbarStateForTesting == nil)
         #expect(!surface.scheduleScrollbarCallbackForTesting(total: 100, offset: 30, len: 10))
+    }
+
+    @Test(arguments: [false, true])
+    func processExitCallbackCopiesPayloadWithoutClaimingLegacyUIHandling(hasHandler: Bool)
+        async throws
+    {
+        var actions: [GhosttyRuntimeAction] = []
+        let handler: GhosttyBridge.RuntimeActionHandler?
+        if hasHandler {
+            handler = { actions.append($0) }
+        } else {
+            handler = nil
+        }
+        let bridge = try GhosttyBridge(runtimeActionHandler: handler)
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        var panes: [PaneID] = []
+        var exits: [GhosttyProcessExited] = []
+        var commands: [GhosttyCommandFinished] = []
+        bridge.surfaceProcessExitedHandler = { pane, process in
+            #expect(Thread.isMainThread)
+            panes.append(pane)
+            exits.append(process)
+        }
+        bridge.surfaceCommandFinishedHandler = { _, command in commands.append(command) }
+        let cases: [(UInt32, UInt8?)] = [
+            (0, 0), (7, 7), (128 + 15, 143), (255, 255), (256, nil), (.max, nil),
+        ]
+        // WHY: Inject C actions to test Swift routing, not to claim a native process actually exited.
+        for (code, _) in cases {
+            #expect(
+                first.scheduleProcessExitedCallbackForTesting(
+                    exitCode: code, runtimeMilliseconds: .max) == hasHandler)
+        }
+        #expect(
+            second.scheduleCommandFinishedCallbackForTesting(
+                exitCode: 7, durationNanoseconds: 42))
+        #expect(exits.isEmpty && commands.isEmpty)
+        await Task.yield()
+        await Task.yield()
+        #expect(
+            exits
+                == cases.map {
+                    GhosttyProcessExited(exitCode: $0.1, runtimeMilliseconds: .max)
+                })
+        #expect(panes == Array(repeating: first.paneID, count: cases.count))
+        #expect(commands == [GhosttyCommandFinished(exitCode: 7, durationNanoseconds: 42)])
+        #expect(actions.filter { $0 == .showChildExited }.count == (hasHandler ? cases.count : 0))
+        #expect(first.isReady && second.isReady)
+
+        for target in [GhosttyActivityCallbackTargetForTesting.app, .unknown] {
+            #expect(
+                first.scheduleProcessExitedCallbackForTesting(
+                    exitCode: 0, runtimeMilliseconds: 1, target: target) == hasHandler)
+        }
+        await Task.yield()
+        await Task.yield()
+        #expect(exits.count == cases.count)
+        #expect(
+            actions.filter { $0 == .showChildExited }.count
+                == (hasHandler ? cases.count + 2 : 0))
+    }
+
+    @Test
+    func processExitContextDeliversOnMainActorAndDropsRemainingBatchAfterInvalidation() async throws
+    {
+        let paneID = PaneID()
+        let process = GhosttyProcessExited(exitCode: 7, runtimeMilliseconds: 123)
+        do {
+            let (deliveries, continuation) = AsyncStream.makeStream(of: GhosttyProcessExited.self)
+            defer { continuation.finish() }
+            let workerContext = SurfaceCallbackContext(paneID: paneID) { pane, event in
+                guard case .processExited(let process) = event else { return }
+                #expect(Thread.isMainThread)
+                #expect(pane == paneID)
+                continuation.yield(process)
+            }
+            defer { workerContext.deactivateAndDrain() }
+            // WHY: Await actual sink delivery, not just completion of worker scheduling.
+            DispatchQueue.global().async {
+                #expect(!Thread.isMainThread)
+                #expect(workerContext.scheduleProcessExited(process))
+            }
+            let delivered = try await firstValues(
+                from: deliveries, count: 1, timeout: .seconds(2))
+            #expect(delivered == [process])
+            workerContext.deactivateAndDrain()
+            #expect(!workerContext.scheduleProcessExited(process))
+        }
+
+        var events: [GhosttyProcessExited] = []
+        var context: SurfaceCallbackContext?
+        let (deliveries, continuation) = AsyncStream.makeStream(of: GhosttyProcessExited.self)
+        defer { continuation.finish() }
+        context = SurfaceCallbackContext(paneID: paneID) { pane, event in
+            guard case .processExited(let process) = event else { return }
+            #expect(Thread.isMainThread)
+            #expect(pane == paneID)
+            events.append(process)
+            context?.deactivateAndDrain()
+            continuation.yield(process)
+        }
+        let active = try #require(context)
+        defer {
+            active.deactivateAndDrain()
+            context = nil
+        }
+        // WHY: No suspension on the main actor until both events are in the fresh context's batch.
+        #expect(active.scheduleProcessExited(process))
+        #expect(active.scheduleProcessExited(process))
+        #expect(events.isEmpty)
+        let delivered = try await firstValues(
+            from: deliveries, count: 1, timeout: .seconds(2))
+        #expect(delivered == [process])
+        #expect(events == [process])
+        #expect(!active.scheduleProcessExited(process))
+        context = nil
+    }
+
+    @Test
+    func queuedProcessExitCannotReachReplacementOrSurviveBridgeShutdown() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let pane = PaneID()
+        let old = try bridge.makeSurface(
+            id: pane, configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        var events: [GhosttyProcessExited] = []
+        bridge.surfaceProcessExitedHandler = { _, process in events.append(process) }
+        #expect(!old.scheduleProcessExitedCallbackForTesting(exitCode: 0, runtimeMilliseconds: 1))
+        bridge.closeSurface(id: pane)
+        let replacement = try bridge.makeSurface(
+            id: pane, configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        await Task.yield()
+        await Task.yield()
+        #expect(events.isEmpty)
+        #expect(!old.scheduleProcessExitedCallbackForTesting(exitCode: 0, runtimeMilliseconds: 2))
+        #expect(
+            !replacement.scheduleProcessExitedCallbackForTesting(
+                exitCode: 7, runtimeMilliseconds: 3))
+        await Task.yield()
+        await Task.yield()
+        #expect(events == [GhosttyProcessExited(exitCode: 7, runtimeMilliseconds: 3)])
+        #expect(
+            !replacement.scheduleProcessExitedCallbackForTesting(
+                exitCode: 0, runtimeMilliseconds: 4))
+        bridge.shutdown()
+        await Task.yield()
+        await Task.yield()
+        #expect(events == [GhosttyProcessExited(exitCode: 7, runtimeMilliseconds: 3)])
+        #expect(
+            !replacement.scheduleProcessExitedCallbackForTesting(
+                exitCode: 0, runtimeMilliseconds: 5))
     }
 
     @Test
@@ -1422,6 +1655,140 @@ extension GhosttyBridgeTests {
         #expect(!surface.searchOverlayInstalledForTesting)
         #expect(!surface.isActive)
     }
+
+    @Test
+    func automationTextAndKeysBypassManualRoutingAndBroadcast() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let other = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        bridge.inputTargetProvider = { _ in [other.paneID, source.paneID, other.paneID] }
+        var manualPaneIDs: [PaneID] = []
+        bridge.manualInputHandler = { paneID in
+            manualPaneIDs.append(paneID)
+        }
+        let text = "A\0🙂"
+        let keyCases:
+            [(
+                key: GhosttyAutomationKey, keyCode: UInt32, scalar: UInt32,
+                modifiers: GhosttyInputModifiers
+            )] = [
+                (.enter, 36, 0x0D, []),
+                (.tab, 48, 0x09, []),
+                (.escape, 53, 0x1B, []),
+                (.arrowUp, 126, UInt32(NSUpArrowFunctionKey), []),
+                (.arrowDown, 125, UInt32(NSDownArrowFunctionKey), []),
+                (.arrowLeft, 123, UInt32(NSLeftArrowFunctionKey), []),
+                (.arrowRight, 124, UInt32(NSRightArrowFunctionKey), []),
+                (.backspace, 51, 0x08, []),
+                (.delete, 117, UInt32(NSDeleteFunctionKey), []),
+                (.controlC, 8, "c".unicodeScalars.first!.value, [.control]),
+                (.controlD, 2, "d".unicodeScalars.first!.value, [.control]),
+            ]
+
+        try bridge.sendAutomationText(id: source.paneID, text: text)
+        for keyCase in keyCases {
+            try bridge.sendAutomationKey(id: source.paneID, key: keyCase.key)
+        }
+
+        #expect(source.automationTextObservationsForTesting.map(\.bytes) == [Data(text.utf8)])
+        #expect(
+            source.automationKeyObservationsForTesting.map(\.key)
+                == keyCases.map { $0.key }
+        )
+        for (observation, keyCase) in zip(source.automationKeyObservationsForTesting, keyCases) {
+            #expect(observation.event.action == .press)
+            #expect(observation.event.modifiers == keyCase.modifiers)
+            #expect(observation.event.consumedModifiers.isEmpty)
+            #expect(observation.event.keyCode == keyCase.keyCode)
+            #expect(observation.event.unshiftedScalar == keyCase.scalar)
+            #expect(observation.event.text == nil)
+            #expect(!observation.event.composing)
+        }
+        #expect(source.terminalActionObservationsForTesting.isEmpty)
+        #expect(source.clipboardObservationsForTesting.isEmpty)
+        #expect(other.automationTextObservationsForTesting.isEmpty)
+        #expect(other.automationKeyObservationsForTesting.isEmpty)
+        #expect(other.terminalActionObservationsForTesting.isEmpty)
+        #expect(other.clipboardObservationsForTesting.isEmpty)
+        #expect(bridge.inputObservationsForTesting.isEmpty)
+        #expect(manualPaneIDs.isEmpty)
+    }
+
+    @Test
+    func automationTextValidationAndPasteCallbacksStayDistinct() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeHiddenWindow()
+        embed(source, in: window)
+        second.frame = source.frame
+        third.frame = source.frame
+        window.contentView?.addSubview(second)
+        window.contentView?.addSubview(third)
+        #expect(window.makeFirstResponder(source))
+        bridge.inputTargetProvider = { _ in
+            [third.paneID, source.paneID, second.paneID, third.paneID]
+        }
+        var callbackOrder: [PaneID] = []
+        var callbackActionCounts: [Int] = []
+        bridge.manualInputHandler = { paneID in
+            callbackOrder.append(paneID)
+            let count: Int
+            switch paneID {
+            case source.paneID:
+                count = source.terminalActionObservationsForTesting.count
+            case second.paneID:
+                count = second.terminalActionObservationsForTesting.count
+            case third.paneID:
+                count = third.terminalActionObservationsForTesting.count
+            default:
+                count = -1
+            }
+            callbackActionCounts.append(count)
+        }
+
+        do {
+            try bridge.sendAutomationText(id: source.paneID, text: "")
+            Issue.record("Empty automation text was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .invalidAutomationText)
+        } catch {
+            Issue.record("Unexpected automation text error: \(error)")
+        }
+
+        do {
+            try bridge.sendAutomationText(
+                id: source.paneID,
+                text: String(repeating: "a", count: TerminalControlProtocol.maximumTextSize + 1)
+            )
+            Issue.record("Oversized automation text was accepted")
+        } catch let error as GhosttyBridgeError {
+            #expect(error == .invalidAutomationText)
+        } catch {
+            Issue.record("Unexpected automation text error: \(error)")
+        }
+
+        source.paste(nil)
+
+        #expect(callbackOrder == [third.paneID, source.paneID, second.paneID])
+        #expect(callbackActionCounts == [0, 0, 0])
+        #expect(source.terminalActionObservationsForTesting.map(\.action) == [.paste])
+        #expect(second.terminalActionObservationsForTesting.map(\.action) == [.paste])
+        #expect(third.terminalActionObservationsForTesting.map(\.action) == [.paste])
+    }
 }
 
 private func syntheticSurfaceSize(
@@ -1541,7 +1908,7 @@ private struct SurfaceTestConfig {
     let directoryURL: URL
     let url: URL
 
-    init() throws {
+    init(contents: String = "abnormal-command-exit-runtime = 0\n") throws {
         directoryURL = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString,
             directoryHint: .isDirectory
@@ -1551,7 +1918,7 @@ private struct SurfaceTestConfig {
             withIntermediateDirectories: true
         )
         url = directoryURL.appending(path: "config")
-        try Data("abnormal-command-exit-runtime = 0\n".utf8).write(to: url)
+        try Data(contents.utf8).write(to: url)
     }
 
     func remove() {

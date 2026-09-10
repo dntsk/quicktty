@@ -1,0 +1,801 @@
+Subject: [PATCH 4/4] QuickTTY managed launch, reader EOF and bounded terminal tail
+Origin: QuickTTY local fix (not an upstream backport)
+Base-Commit: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28 (after patches 0001-0003)
+
+Add explicit managed-only helper launch and atomic reader completion state.
+Read the current bounded terminal tail under the renderer lock with bounded
+suffix storage. Preserve normal launch behavior and existing public C layouts.
+New quicktty-prefixed exports are private to this embedding integration.
+Ghostty MIT license applies. Runtime verification remains outstanding.
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1073,6 +1073,24 @@
+ 
+ ghostty_surface_t ghostty_surface_new(ghostty_app_t,
+                                       const ghostty_surface_config_s*);
++// Explicit managed launch; helper_path is copied before return. No shell fallback.
++ghostty_surface_t quicktty_surface_new_managed(ghostty_app_t app,
++                                               const ghostty_surface_config_s *options,
++                                               const char *helper_path);
++typedef enum quicktty_output_state_e {
++  QUICKTTY_OUTPUT_FAILED = 0,
++  QUICKTTY_OUTPUT_PENDING = 1,
++  QUICKTTY_OUTPUT_COMPLETE = 2,
++} quicktty_output_state_e;
++// COMPLETE proves reader EOF after parsing, independently of root process exit.
++// Normal surfaces return FAILED. No waiting or side effects.
++quicktty_output_state_e quicktty_surface_output_state(ghostty_surface_t surface);
++// Current screen tail, including history, under one lock. Bounds: 1...65536.
++// No EOF gate: final callers must first check output_state. Free with free_text.
++bool quicktty_surface_read_tail(ghostty_surface_t surface,
++                                size_t maximum_utf8_bytes,
++                                ghostty_text_s *text,
++                                bool *is_truncated);
+ void ghostty_surface_free(ghostty_surface_t);
+ void* ghostty_surface_userdata(ghostty_surface_t);
+ ghostty_app_t ghostty_surface_app(ghostty_surface_t);
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -463,6 +463,16 @@
+     };
+ 
+     pub fn init(self: *Surface, app: *App, opts: Options) !void {
++        return self.initWithManagedHelper(app, opts, null);
++    }
++
++    fn initWithManagedHelper(
++        self: *Surface,
++        app: *App,
++        opts: Options,
++        managed_helper_path: ?[:0]const u8,
++    ) !void {
++        if (opts.env_var_count > 0 and opts.env_vars == null) return error.InvalidEnvironment;
+         self.* = .{
+             .app = app,
+             .platform = try .init(opts.platform_tag, opts.platform),
+@@ -487,8 +497,10 @@
+         // If we have a working directory from the options then we set it.
+         if (opts.working_directory) |c_wd| {
+             const wd = std.mem.sliceTo(c_wd, 0);
++            if (managed_helper_path != null and wd.len == 0) return error.InvalidWorkingDirectory;
+             if (wd.len > 0) wd: {
+                 var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {
++                    if (managed_helper_path != null) return err;
+                     log.warn(
+                         "error opening requested working directory dir={s} err={}",
+                         .{ wd, err },
+@@ -498,6 +510,7 @@
+                 defer dir.close();
+ 
+                 const stat = dir.stat() catch |err| {
++                    if (managed_helper_path != null) return err;
+                     log.warn(
+                         "failed to stat requested working directory dir={s} err={}",
+                         .{ wd, err },
+@@ -506,6 +519,7 @@
+                 };
+ 
+                 if (stat.kind != .directory) {
++                    if (managed_helper_path != null) return error.InvalidWorkingDirectory;
+                     log.warn(
+                         "requested working directory is not a directory dir={s}",
+                         .{wd},
+@@ -517,6 +531,7 @@
+                 if (wd_val.finalize(config.arenaAlloc())) |_| {
+                     config.@"working-directory" = wd_val;
+                 } else |err| {
++                    if (managed_helper_path != null) return err;
+                     log.warn(
+                         "error finalizing working directory config dir={s} err={}",
+                         .{ wd_val.path, err },
+@@ -526,7 +541,7 @@
+         }
+ 
+         // If we have a command from the options then we set it.
+-        if (opts.command) |c_command| {
++        if (if (managed_helper_path == null) opts.command else null) |c_command| {
+             const cmd = std.mem.sliceTo(c_command, 0);
+             if (cmd.len > 0) {
+                 config.command = .{ .shell = cmd };
+@@ -549,7 +564,7 @@
+         }
+ 
+         // If we have an initial input then we set it.
+-        if (opts.initial_input) |c_input| {
++        if (if (managed_helper_path == null) opts.initial_input else null) |c_input| {
+             const alloc = config.arenaAlloc();
+ 
+             // We need to escape the string because the "raw" field
+@@ -575,12 +590,13 @@
+ 
+         // Initialize our surface right away. We're given a view that is
+         // ready to use.
+-        try self.core_surface.init(
++        try self.core_surface.initWithManagedHelper(
+             app.core_app.alloc,
+             &config,
+             app.core_app,
+             app,
+             self,
++            managed_helper_path,
+         );
+         errdefer self.core_surface.deinit();
+ 
+@@ -1565,6 +1581,35 @@
+         return try app.newSurface(opts.*);
+     }
+ 
++    /// Separate opt-in entry point; inherited/normal options never carry mode.
++    export fn quicktty_surface_new_managed(
++        app_: ?*App,
++        opts_: ?*const apprt.Surface.Options,
++        helper_path_: ?[*:0]const u8,
++    ) ?*Surface {
++        const app = app_ orelse return null;
++        const opts = opts_ orelse return null;
++        const helper_path = helper_path_ orelse return null;
++        return surface_new_managed_(app, opts, std.mem.sliceTo(helper_path, 0)) catch |err| {
++            log.err("error initializing managed surface err={}", .{err});
++            return null;
++        };
++    }
++
++    fn surface_new_managed_(app: *App, opts: *const apprt.Surface.Options, path: [:0]const u8) !*Surface {
++        const surface = try app.core_app.alloc.create(Surface);
++        errdefer app.core_app.alloc.destroy(surface);
++        // Exec copies path into its arena synchronously, before this returns.
++        try surface.initWithManagedHelper(app, opts.*, path);
++        return surface;
++    }
++
++    export fn quicktty_surface_output_state(surface_: ?*Surface) @import("../termio/Termio.zig").OutputState {
++        const surface = surface_ orelse return .failed;
++        const state = surface.core_surface.io.managed_output orelse return .failed;
++        return state.state.load(.acquire);
++    }
++
+     export fn ghostty_surface_free(ptr: *Surface) void {
+         ptr.app.closeSurface(ptr);
+     }
+@@ -1648,6 +1693,177 @@
+         ) orelse return false;
+ 
+         return readTextLocked(surface, core_sel, result);
++    }
++
++    /// Current tail only: final-capture policy belongs to the caller.
++    export fn quicktty_surface_read_tail(
++        surface_: ?*Surface,
++        maximum_utf8_bytes: usize,
++        result_: ?*Text,
++        is_truncated_: ?*bool,
++    ) bool {
++        const surface = surface_ orelse return false;
++        const result = result_ orelse return false;
++        const is_truncated = is_truncated_ orelse return false;
++        result.* = .{
++            .tl_px_x = -1, .tl_px_y = -1, .offset_start = 0,
++            .offset_len = 0, .text = null, .text_len = 0,
++        };
++        is_truncated.* = false;
++        if (maximum_utf8_bytes == 0 or maximum_utf8_bytes > 65536) return false;
++
++        const storage = global.alloc.alloc(u8, maximum_utf8_bytes) catch return false;
++        defer global.alloc.free(storage);
++        var suffix = TailWriter.init(storage);
++        const core_surface = &surface.core_surface;
++        core_surface.renderer_state.mutex.lock();
++        defer core_surface.renderer_state.mutex.unlock();
++
++        const screen = core_surface.io.terminal.screens.active;
++        const pages = &screen.pages;
++        const bottom = pages.getBottomRight(.screen) orelse return false;
++        // Walk backward from the actual bottom, never scan full history to
++        // resolve an absolute row. The budget bounds rows, not UTF-8 per cell.
++        // Include the actual active grid even for tiny byte limits: the
++        // bottom rows can be blank and are omitted by the page formatter.
++        const row_budget = @min(@max(maximum_utf8_bytes, @as(usize, pages.rows)), 4096);
++        const first = pages.getTopLeft(.screen);
++        var top = bottom.up(@intCast(row_budget - 1)) orelse first;
++        top.x = 0;
++        const omitted_rows = top.node != first.node or top.y != first.y;
++        // Pins are already ordered by the bounded upward walk. Avoid
++        // Selection ordering, which resolves points through full history.
++        var formatter: terminal.formatter.PageListFormatter = .init(pages, .{
++            .emit = .plain, .unwrap = true, .trim = false,
++        });
++        formatter.top_left = top;
++        formatter.bottom_right = bottom;
++        formatter.format(&suffix.writer) catch return false;
++        suffix.writer.flush() catch return false;
++
++        // Formatter emits whole UTF-8 scalars. A byte-bounded suffix can
++        // start mid-scalar: discard only its continuation bytes (at most 3).
++        // This does NOT promise a grapheme-cluster boundary.
++        var skip: usize = 0;
++        while (skip < suffix.len and suffix.at(skip) & 0xc0 == 0x80) : (skip += 1) {}
++        if (skip > 3) return false;
++        const text = global.alloc.allocSentinel(u8, suffix.len - skip, 0) catch return false;
++        for (text, 0..) |*byte, i| byte.* = suffix.at(skip + i);
++        if (!std.unicode.utf8ValidateSlice(text)) {
++            global.alloc.free(text);
++            return false;
++        }
++        result.text = text.ptr;
++        result.text_len = text.len;
++        is_truncated.* = omitted_rows or suffix.dropped or skip != 0;
++        return true;
++    }
++
++    /// Zig 0.15 Writer sink retaining only a suffix, never the full dump.
++    /// No pin map, allocating formatter, or intermediate history string.
++    const TailWriter = struct {
++        writer: std.Io.Writer,
++        storage: []u8,
++        start: usize = 0,
++        len: usize = 0,
++        dropped: bool = false,
++
++        fn init(storage: []u8) TailWriter {
++            std.debug.assert(storage.len > 0);
++            return .{
++                .writer = .{ .buffer = &.{}, .end = 0, .vtable = &.{ .drain = drain } },
++                .storage = storage,
++            };
++        }
++
++        fn at(self: *const TailWriter, index: usize) u8 {
++            return self.storage[(self.start + index) % self.storage.len];
++        }
++
++        fn append(self: *TailWriter, bytes: []const u8) void {
++            const cap = self.storage.len;
++            if (bytes.len >= cap) {
++                self.dropped = self.dropped or self.len != 0 or bytes.len > cap;
++                @memcpy(self.storage, bytes[bytes.len - cap ..]);
++                self.start = 0;
++                self.len = cap;
++                return;
++            }
++            const drop = (self.len + bytes.len) -| cap;
++            if (drop > 0) {
++                self.dropped = true;
++                self.start = (self.start + drop) % cap;
++                self.len -= drop;
++            }
++            const end = (self.start + self.len) % cap;
++            const first = @min(bytes.len, cap - end);
++            @memcpy(self.storage[end .. end + first], bytes[0..first]);
++            @memcpy(self.storage[0 .. bytes.len - first], bytes[first..]);
++            self.len += bytes.len;
++        }
++
++        fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
++            std.debug.assert(data.len > 0);
++            const self: *TailWriter = @fieldParentPtr("writer", w);
++            self.append(w.buffer[0..w.end]);
++            w.end = 0;
++            var count: usize = 0;
++            for (data[0 .. data.len - 1]) |bytes| {
++                self.append(bytes);
++                count = std.math.add(usize, count, bytes.len) catch return error.WriteFailed;
++            }
++            const pattern = data[data.len - 1];
++            const repeated = std.math.mul(usize, pattern.len, splat) catch return error.WriteFailed;
++            count = std.math.add(usize, count, repeated) catch return error.WriteFailed;
++            if (pattern.len == 0 or splat == 0) return count;
++            // Skip whole repetitions that cannot survive in the suffix.
++            // Even a huge splat takes O(capacity), not O(emitted bytes).
++            const keep = @min(splat, self.storage.len / pattern.len + 1);
++            if (keep < splat) self.dropped = true;
++            for (0..keep) |_| self.append(pattern);
++            return count;
++        }
++    };
++
++    test "QuickTTY tail writer retains suffix across chunks and huge writes" {
++        var storage: [4]u8 = undefined;
++        var sink = TailWriter.init(&storage);
++        try sink.writer.writeAll("ab");
++        try sink.writer.writeAll("cd");
++        try std.testing.expect(!sink.dropped);
++        try sink.writer.writeAll("ef");
++        for ("cdef", 0..) |byte, i| try std.testing.expectEqual(byte, sink.at(i));
++        try std.testing.expect(sink.dropped);
++        try sink.writer.writeAll("0123456789");
++        for ("6789", 0..) |byte, i| try std.testing.expectEqual(byte, sink.at(i));
++        try sink.writer.splatByteAll('x', 1000000);
++        try sink.writer.flush();
++        try std.testing.expectEqual(@as(usize, 4), sink.len);
++        for (0..4) |i| try std.testing.expectEqual(@as(u8, 'x'), sink.at(i));
++    }
++
++    test "QuickTTY tail writer formats selected Unicode pins without pin map" {
++        const alloc = std.testing.allocator;
++        var t = try terminal.Terminal.init(alloc, .{ .cols = 80, .rows = 24 });
++        defer t.deinit(alloc);
++        var stream = t.vtStream();
++        defer stream.deinit();
++        try stream.nextSlice("prefix\xe2\x9a\xa1z");
++        const screen = t.screens.active;
++        var formatter: terminal.formatter.ScreenFormatter = .init(screen, .{
++            .emit = .plain, .unwrap = true, .trim = false,
++        });
++        formatter.content = .{ .selection = terminal.Selection.init(
++            screen.pages.getTopLeft(.screen), screen.pages.getBottomRight(.screen).?, false,
++        ) };
++        var storage: [3]u8 = undefined;
++        var sink = TailWriter.init(&storage);
++        try formatter.format(&sink.writer);
++        try sink.writer.flush();
++        try std.testing.expect(sink.dropped);
++        try std.testing.expectEqual(@as(u8, 0x9a), sink.at(0));
++        try std.testing.expectEqual(@as(u8, 0xa1), sink.at(1));
++        try std.testing.expectEqual(@as(u8, 'z'), sink.at(2));
+     }
+ 
+     fn readTextLocked(
+diff --git a/src/Surface.zig b/src/Surface.zig
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -464,6 +464,19 @@
+     rt_app: *apprt.runtime.App,
+     rt_surface: *apprt.runtime.Surface,
+ ) !void {
++    return self.initWithManagedHelper(alloc, config_original, app, rt_app, rt_surface, null);
++}
++
++/// Private creation-time option, never inherited through configuration.
++pub fn initWithManagedHelper(
++    self: *Surface,
++    alloc: Allocator,
++    config_original: *const configpkg.Config,
++    app: *App,
++    rt_app: *apprt.runtime.App,
++    rt_surface: *apprt.runtime.Surface,
++    managed_helper_path: ?[:0]const u8,
++) !void {
+     // Apply our conditional state. If we fail to apply the conditional state
+     // then we log and attempt to move forward with the old config.
+     var config_: ?configpkg.Config = config_original.changeConditionalState(
+@@ -476,13 +489,24 @@
+ 
+     // We want a config pointer for everything so we get that either
+     // based on our conditional state or the original config.
+-    const config: *const configpkg.Config = if (config_) |*c| config: {
++    const conditional_config: *const configpkg.Config = if (config_) |*c| config: {
+         // We want to preserve our original working directory. We
+         // don't need to dupe memory here because termio will derive
+         // it. We preserve this so directory inheritance works.
+         c.@"working-directory" = config_original.@"working-directory";
+         break :config c;
+     } else config_original;
++
++    // Borrow only during init; managed invariants apply AFTER conditionals.
++    var managed_config = conditional_config.*;
++    const config: *const configpkg.Config = if (managed_helper_path != null) managed: {
++        managed_config.command = null;
++        managed_config.@"initial-command" = null;
++        managed_config.input = .{};
++        managed_config.@"wait-after-command" = true;
++        managed_config.env = config_original.env;
++        break :managed &managed_config;
++    } else conditional_config;
+ 
+     // Get our configuration
+     var derived_config = try DerivedConfig.init(alloc, config);
+@@ -516,6 +540,7 @@
+         &derived_config.font,
+         font_size,
+     );
++    errdefer app.font_grid_set.deref(font_grid_key);
+ 
+     // Build our size struct which has all the sizes we need.
+     const size: rendererpkg.Size = size: {
+@@ -621,6 +646,7 @@
+     // be scoped here to be valid.
+     {
+         var env = rt_surface.defaultTermioEnv() catch |err| env: {
++            if (managed_helper_path != null) return err;
+             // If an error occurs, we don't want to block surface startup.
+             log.warn("error getting env map for surface err={}", .{err});
+             break :env internal_os.getEnvMap(alloc) catch
+@@ -633,6 +659,7 @@
+ 
+         // Initialize our IO backend
+         var io_exec = try termio.Exec.init(alloc, .{
++            .managed_helper_path = managed_helper_path,
+             .command = command,
+             .env = env,
+             .env_override = config.env,
+@@ -704,6 +731,11 @@
+         .{&self.renderer_thread},
+     );
+     self.renderer_thr.setName("renderer") catch {};
++    errdefer {
++        self.renderer_thread.stop.notify() catch {};
++        self.renderer_thr.join();
++        self.renderer.threadEnter(rt_surface) catch {};
++    }
+ 
+     // Start our IO thread
+     self.io_thr = try std.Thread.spawn(
+@@ -712,6 +744,10 @@
+         .{ &self.io_thread, &self.io },
+     );
+     self.io_thr.setName("io") catch {};
++    errdefer {
++        self.io_thread.stop.notify() catch {};
++        self.io_thr.join();
++    }
+ 
+     // Determine our initial window size if configured. We need to do this
+     // quite late in the process because our height/width are in grid dimensions,
+@@ -1200,6 +1236,18 @@
+ }
+ 
+ fn childExited(self: *Surface, info: apprt.surface.Message.ChildExited) void {
++    if (self.io.managed_output != null) {
++        if (self.child_exited) return;
++        self.child_exited = true;
++        // Host owns the badge and final capture. Never append synthetic text,
++        // even if the lifecycle action returns false.
++        _ = self.rt_app.performAction(.{ .surface = self }, .show_child_exited, info) catch |err| {
++            log.err("error showing managed child exit err={}", .{err});
++            return;
++        };
++        return;
++    }
++
+     // Mark our flag that we exited immediately
+     self.child_exited = true;
+ 
+@@ -1717,6 +1765,7 @@
+     };
+     self.config.deinit();
+     self.config = derived;
++    if (self.io.managed_output != null) self.config.wait_after_command = true;
+ 
+     // If our mouse is hidden but we disabled mouse hiding, then show it again.
+     if (!self.config.mouse_hide_while_typing and self.mouse.hidden) {
+diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
+--- a/src/termio/Exec.zig
++++ b/src/termio/Exec.zig
+@@ -90,6 +90,8 @@
+     io: *termio.Termio,
+     td: *termio.Termio.ThreadData,
+ ) !void {
++    errdefer if (self.subprocess.managed_output) |state| state.finish(.failed);
++
+     // Start our subprocess
+     const pty_fds = self.subprocess.start(alloc) catch |err| {
+         // If we specifically got this error then we are in the forked
+@@ -215,6 +217,8 @@
+     assert(td.backend == .exec);
+     const exec = &td.backend.exec;
+ 
++    // Cancellation must win over EOF produced by our own teardown.
++    if (self.subprocess.managed_output) |state| state.finish(.failed);
+     if (comptime darwin_process_status) {
+         exec.darwin_exit = .{ .stopped = true };
+     }
+@@ -680,6 +684,8 @@
+ };
+ 
+ pub const Config = struct {
++    /// Explicit factory-only option; copied into the subprocess arena.
++    managed_helper_path: ?[:0]const u8 = null,
+     command: ?configpkg.Command = null,
+     env: EnvMap,
+     env_override: configpkg.RepeatableStringMap = .{},
+@@ -702,6 +708,7 @@
+     });
+ 
+     arena: std.heap.ArenaAllocator,
++    managed_output: ?*termio.Termio.ManagedOutput = null,
+     cwd: ?[:0]const u8,
+     env: ?EnvMap,
+     args: []const [:0]const u8,
+@@ -741,6 +748,17 @@
+         var arena = std.heap.ArenaAllocator.init(gpa);
+         errdefer arena.deinit();
+         const alloc = arena.allocator();
++
++        // Resolve the explicit managed program before doing any shell work.
++        const managed_args = if (cfg.managed_helper_path) |path|
++            try managedCommand(alloc, path)
++        else
++            null;
++        const managed_output: ?*termio.Termio.ManagedOutput = if (managed_args != null) state: {
++            const ptr = try alloc.create(termio.Termio.ManagedOutput);
++            ptr.* = .{};
++            break :state ptr;
++        } else null;
+ 
+         // Get our env. If a default env isn't provided by the caller
+         // then we get it ourselves.
+@@ -872,6 +890,9 @@
+ 
+         // Setup our shell integration, if we can.
+         const shell_command: configpkg.Command = shell: {
++            // No forced shell integration, passwd/HOME lookup, or command
++            // rewriting is permitted for the helper.
++            if (managed_args) |args| break :shell .{ .direct = args };
+             const default_shell_command: configpkg.Command =
+                 cfg.command orelse .{ .shell = switch (builtin.os.tag) {
+                     .windows => "cmd.exe",
+@@ -937,7 +958,7 @@
+         }
+ 
+         // Build our args list
+-        const args: []const [:0]const u8 = execCommand(
++        const args: []const [:0]const u8 = if (managed_args) |args| args else execCommand(
+             alloc,
+             shell_command,
+             internal_os.passwd,
+@@ -983,6 +1004,7 @@
+             .env = env,
+             .cwd = cwd,
+             .args = args,
++            .managed_output = managed_output,
+ 
+             .rt_pre_exec_info = cfg.rt_pre_exec_info,
+             .rt_post_fork_info = cfg.rt_post_fork_info,
+@@ -1055,7 +1077,7 @@
+         // If we can't access the cwd, then don't set any cwd and inherit.
+         // This is important because our cwd can be set by the shell (OSC 7)
+         // and we don't want to break new windows.
+-        const cwd: ?[:0]const u8 = if (self.cwd) |proposed| cwd: {
++        const cwd: ?[:0]const u8 = if (self.managed_output != null) self.cwd else if (self.cwd) |proposed| cwd: {
+             if ((comptime build_config.flatpak) and internal_os.isFlatpak()) {
+                 // Flatpak sandboxing prevents access to certain reserved paths
+                 // regardless of configured permissions. Perform a test spawn
+@@ -1140,10 +1162,10 @@
+                     const f = struct {
+                         fn callback(cmd: *Command) ?u8 {
+                             const sp = cmd.getData(Subprocess) orelse unreachable;
+-                            sp.childPreExec() catch |err| log.err(
+-                                "error initializing child: {}",
+-                                .{err},
+-                            );
++                            sp.childPreExec() catch |err| {
++                                if (sp.managed_output != null) return 126;
++                                log.err("error initializing child: {}", .{err});
++                            };
+                             return null;
+                         }
+                     };
+@@ -1197,6 +1219,11 @@
+     fn childPreExec(self: *Subprocess) !void {
+         // Setup our pty
+         try self.pty.?.childPreExec();
++        // Command's legacy chdir is best-effort. Managed launches must not
++        // silently inherit the app cwd if the requested path disappears.
++        if (self.managed_output != null) {
++            if (self.cwd) |cwd| try posix.chdir(cwd);
++        }
+     }
+ 
+     /// Called to notify that we exited externally so we can unset our
+@@ -1386,6 +1413,11 @@
+         };
+         defer crash.sentry.thread_state = null;
+ 
++        if (io.managed_output) |state| {
++            readManaged(fd, io, quit, state);
++            return;
++        }
++
+         // First thing, we want to set the fd to non-blocking. We do this
+         // so that we can try to read from the fd in a tight loop and only
+         // check the quit fd occasionally.
+@@ -1465,6 +1497,59 @@
+             // read thread.
+             if (pollfds[0].revents & posix.POLL.HUP != 0) {
+                 log.info("pty fd closed, read thread exiting", .{});
++                return;
++            }
++        }
++    }
++
++    /// Managed POSIX reader: EOF is independent of the process watcher.
++    /// Every return except proven EOF fails closed; no mailbox producer here.
++    fn readManaged(
++        fd: posix.fd_t,
++        io: *termio.Termio,
++        quit: posix.fd_t,
++        state: *termio.Termio.ManagedOutput,
++    ) void {
++        defer state.finish(.failed);
++        const flags = posix.fcntl(fd, posix.F.GETFL, 0) catch return;
++        _ = posix.fcntl(fd, posix.F.SETFL,
++            flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true }))) catch return;
++
++        var pollfds: [2]posix.pollfd = .{
++            .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 },
++            .{ .fd = quit, .events = posix.POLL.IN, .revents = 0 },
++        };
++        var quitfds: [1]posix.pollfd = .{
++            .{ .fd = quit, .events = posix.POLL.IN, .revents = 0 },
++        };
++        var hung_up = false;
++        var buf: [1024]u8 = undefined;
++        while (true) {
++            const n = posix.read(fd, &buf) catch |err| switch (err) {
++                // Linux PTY masters report EIO after the slave closes;
++                // Darwin normally reports zero. Both follow queued data.
++                error.InputOutput => @as(usize, 0),
++                error.WouldBlock => {
++                    // HUP itself is not EOF. We already attempted the final
++                    // drain; an unconfirmed hangup must not become COMPLETE.
++                    if (hung_up) return;
++                    _ = posix.poll(&pollfds, -1) catch return;
++                    if (pollfds[1].revents != 0) return;
++                    if (pollfds[0].revents & posix.POLL.NVAL != 0) return;
++                    hung_up = pollfds[0].revents & posix.POLL.HUP != 0;
++                    if (!hung_up and pollfds[0].revents & posix.POLL.ERR != 0) return;
++                    // IN|HUP must go back to read, never exit before draining.
++                    continue;
++                },
++                else => return,
++            };
++            if (n > 0) io.processOutput(buf[0..n]);
++            // Check even under continuous descendant output, after parsing
++            // the entire chunk and before publishing an EOF result.
++            _ = posix.poll(&quitfds, 0) catch return;
++            if (quitfds[0].revents != 0) return;
++            if (n == 0) {
++                state.finish(.complete);
+                 return;
+             }
+         }
+@@ -1703,6 +1788,47 @@
+     };
+ }
+ 
++/// Exact argv, with no quoting, shell parser, login wrapper, or fallback.
++fn managedCommand(alloc: Allocator, path: [:0]const u8) ![]const [:0]const u8 {
++    if (builtin.os.tag == .windows or build_config.flatpak) return error.UnsupportedManagedLaunch;
++    if (path.len == 0 or path.len >= std.fs.max_path_bytes or
++        !std.fs.path.isAbsolute(path) or !std.unicode.utf8ValidateSlice(path))
++        return error.InvalidManagedHelper;
++    const helper = try std.fs.openFileAbsolute(path, .{});
++    defer helper.close();
++    const stat = try helper.stat();
++    if (stat.kind != .file or stat.mode & 0o111 == 0) return error.InvalidManagedHelper;
++    return managedArgv(alloc, path);
++}
++
++fn managedArgv(alloc: Allocator, path: [:0]const u8) ![]const [:0]const u8 {
++    const args = try alloc.alloc([:0]const u8, 3);
++    errdefer alloc.free(args);
++    args[0] = try alloc.dupeZ(u8, path);
++    args[1] = "internal";
++    args[2] = "launch";
++    return args;
++}
++
++test "QuickTTY managed argv is copied and never shell quoted" {
++    const alloc = std.testing.allocator;
++    var path = "/Applications/Quick TTY's.app/helper".*;
++    const args = try managedArgv(alloc, &path);
++    defer alloc.free(args);
++    defer alloc.free(args[0]);
++    path[1] = 'X';
++    try std.testing.expectEqual(@as(usize, 3), args.len);
++    try std.testing.expectEqualStrings("/Applications/Quick TTY's.app/helper", args[0]);
++    try std.testing.expectEqualStrings("internal", args[1]);
++    try std.testing.expectEqualStrings("launch", args[2]);
++}
++
++test "QuickTTY managed helper rejects invalid paths without shell fallback" {
++    if (builtin.os.tag == .windows or build_config.flatpak) return error.SkipZigTest;
++    try std.testing.expectError(error.InvalidManagedHelper, managedCommand(std.testing.allocator, ""));
++    try std.testing.expectError(error.InvalidManagedHelper, managedCommand(std.testing.allocator, "relative/helper"));
++}
++
+ test "execCommand darwin: shell command" {
+     if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
+ 
+diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
+--- a/src/termio/Termio.zig
++++ b/src/termio/Termio.zig
+@@ -24,6 +24,22 @@
+ 
+ /// Mutex state argument for queueMessage.
+ pub const MutexState = enum { locked, unlocked };
++
++pub const OutputState = enum(c_int) { failed = 0, pending = 1, complete = 2 };
++
++pub const ManagedOutput = struct {
++    state: std.atomic.Value(OutputState) = .init(.pending),
++
++    pub fn finish(self: *ManagedOutput, outcome: OutputState) void {
++        assert(outcome != .pending);
++        // Terminal outcomes never change, including COMPLETE during teardown.
++        _ = self.state.cmpxchgStrong(.pending, outcome, .release, .monotonic);
++    }
++};
++
++/// Managed-only shared state. Exec's arena owns it until after reader join.
++/// The pointer is immutable after init; no ThreadData fields are shared.
++managed_output: ?*ManagedOutput = null,
+ 
+ /// Allocator
+ alloc: Allocator,
+@@ -298,7 +314,10 @@
+         .default_cursor_blink = opts.config.cursor_blink,
+     };
+ 
+-    const thread_enter_state = try ThreadEnterState.create(
++    const managed_output = switch (backend) {
++        .exec => |exec| exec.subprocess.managed_output,
++    };
++    const thread_enter_state = if (managed_output != null) null else try ThreadEnterState.create(
+         alloc,
+         opts.full_config,
+     );
+@@ -316,6 +335,7 @@
+         .mailbox = opts.mailbox,
+         .terminal_stream = .initAlloc(alloc, handler),
+         .thread_enter_state = thread_enter_state,
++        .managed_output = managed_output,
+     };
+ }
+ 
+@@ -686,7 +706,13 @@
+ /// Process output from readdata but the lock is already held.
+ fn processOutputLocked(self: *Termio, buf: []const u8) void {
+     // Schedule a render. We can call this first because we have the lock.
+-    self.terminal_stream.handler.queueRender() catch unreachable;
++    self.terminal_stream.handler.queueRender() catch {
++        if (self.managed_output) |state| {
++            state.finish(.failed);
++            return;
++        }
++        unreachable;
++    };
+ 
+     // Whenever a character is typed, we ensure the cursor is in the
+     // non-blink state so it is rendered if visible. If we're under
+@@ -721,12 +747,16 @@
+                 log.err("error recording pty read in inspector err={}", .{err});
+             };
+ 
+-            self.terminal_stream.next(byte) catch |err|
++            self.terminal_stream.next(byte) catch |err| {
++                if (self.managed_output) |state| state.finish(.failed);
+                 log.err("error processing terminal data: {}", .{err});
++            };
+         }
+     } else {
+-        self.terminal_stream.nextSlice(buf) catch |err|
++        self.terminal_stream.nextSlice(buf) catch |err| {
++            if (self.managed_output) |state| state.finish(.failed);
+             log.err("error processing terminal data: {}", .{err});
++        };
+     }
+ 
+     // If our stream handling caused messages to be sent to the mailbox
+@@ -735,6 +765,18 @@
+         self.terminal_stream.handler.termio_messaged = false;
+         self.mailbox.notify();
+     }
++}
++
++test "QuickTTY output proof is monotonic and parsing failure wins EOF" {
++    var state: ManagedOutput = .{};
++    try std.testing.expectEqual(OutputState.pending, state.state.load(.acquire));
++    state.finish(.failed);
++    state.finish(.complete);
++    try std.testing.expectEqual(OutputState.failed, state.state.load(.acquire));
++    var eof: ManagedOutput = .{};
++    eof.finish(.complete);
++    eof.finish(.failed);
++    try std.testing.expectEqual(OutputState.complete, eof.state.load(.acquire));
+ }
+ 
+ /// Sends a DSR response for the current color scheme to the pty.

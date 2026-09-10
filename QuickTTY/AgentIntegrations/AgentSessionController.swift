@@ -87,6 +87,13 @@ final class AgentLifecycleCredentialStore: Sendable {
         }
     }
 
+    func credential(instanceID: UUID, paneID: UUID) -> String? {
+        state.withLock { state in
+            guard !state.isFrozen, instanceID == self.instanceID else { return nil }
+            return state.paneTokens[PaneID(rawValue: paneID)]
+        }
+    }
+
     func freeze() {
         state.withLock { state in
             state.isFrozen = true
@@ -181,6 +188,7 @@ final class AgentLifecycleCredentialStore: Sendable {
 
 enum AgentSessionControllerValidationError: Error, Equatable, Sendable {
     case invalidSocketPath
+    case invalidControlSocketPath
     case invalidHelperPath
 }
 
@@ -198,6 +206,7 @@ final class AgentSessionController {
     }
 
     private let socketPath: String
+    private let controlSocketPath: String?
     private let helperPath: String
     private let tokenGenerator: TokenGenerator
     private let dateProvider: DateProvider
@@ -208,6 +217,7 @@ final class AgentSessionController {
     init(
         socketPath: String,
         helperPath: String,
+        controlSocketPath: String? = nil,
         instanceID: UUID = UUID(),
         tokenGenerator: @escaping TokenGenerator = AgentSessionController.randomTokenBytes,
         dateProvider: @escaping DateProvider = { Date() },
@@ -223,7 +233,19 @@ final class AgentSessionController {
             throw AgentSessionControllerValidationError.invalidHelperPath
         }
 
+        if let controlSocketPath {
+            guard Self.isValidAbsolutePath(controlSocketPath),
+                AgentWorkingDirectoryValidator.isCanonicalAbsolutePath(controlSocketPath),
+                (try? AgentUnixSocketAddress(path: controlSocketPath)) != nil,
+                Self.endpointComparisonURL(for: controlSocketPath)
+                    != Self.endpointComparisonURL(for: socketPath)
+            else {
+                throw AgentSessionControllerValidationError.invalidControlSocketPath
+            }
+        }
+
         self.socketPath = socketPath
+        self.controlSocketPath = controlSocketPath
         self.helperPath = helperPath
         self.instanceID = instanceID
         self.tokenGenerator = tokenGenerator
@@ -276,6 +298,12 @@ final class AgentSessionController {
 
     nonisolated func credential(for preflight: AgentIPCPreflight) -> String? {
         credentialStore.credential(for: preflight)
+    }
+
+    nonisolated func credential(for preflight: TerminalControlPreflight) -> String? {
+        guard preflight.version == TerminalControlProtocol.version else { return nil }
+        return credentialStore.credential(
+            instanceID: preflight.instanceID, paneID: preflight.paneID)
     }
 
     nonisolated func validate(
@@ -342,13 +370,15 @@ final class AgentSessionController {
     }
 
     private func environment(for paneID: PaneID, token: String) -> [String: String] {
-        [
+        var environment = [
             "QUICKTTY_PANE_ID": paneID.rawValue.uuidString,
             "QUICKTTY_AGENT_SOCKET": socketPath,
             "QUICKTTY_INSTANCE_ID": instanceID.uuidString,
             "QUICKTTY_PANE_TOKEN": token,
             "QUICKTTY_AGENT_HELPER": helperPath,
         ]
+        environment["QUICKTTY_CONTROL_SOCKET"] = controlSocketPath
+        return environment
     }
 
     private func makeBinding(
@@ -386,6 +416,35 @@ final class AgentSessionController {
         return (0..<32).map { _ in
             UInt8.random(in: UInt8.min...UInt8.max, using: &generator)
         }
+    }
+
+    private static func endpointComparisonURL(for path: String) -> URL {
+        let url = URL(fileURLWithPath: path)
+        // Keep legacy lifecycle spellings (including symlink/..) on the original
+        // resolution path; canonical spelling is required only for control paths.
+        guard AgentWorkingDirectoryValidator.isCanonicalAbsolutePath(path) else {
+            return url.resolvingSymlinksInPath()
+        }
+
+        var ancestor = url
+        var missingComponents: [String] = []
+        // Both inputs have already passed the Unix socket byte limit. Each step
+        // removes a component, with an explicit stop at root.
+        while !FileManager.default.fileExists(atPath: ancestor.path) {
+            let parent = ancestor.deletingLastPathComponent()
+            guard parent.path != ancestor.path else { break }
+            missingComponents.append(ancestor.lastPathComponent)
+            ancestor = parent
+        }
+
+        // Resolving a whole missing path can leave existing symlink ancestors
+        // unresolved (notably /tmp -> /private/tmp). Existing leaves still get
+        // full symlink resolution. This is path comparison, not inode/TOCTOU authorization.
+        var resolved = ancestor.resolvingSymlinksInPath()
+        for component in missingComponents.reversed() {
+            resolved.appendPathComponent(component, isDirectory: false)
+        }
+        return resolved
     }
 
     private static func isValidAbsolutePath(_ path: String) -> Bool {

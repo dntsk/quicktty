@@ -328,6 +328,8 @@ extension GhosttyBridgeTests {
             modifierFlags: [.command]
         )
 
+        // WHY: Real user mouse state must not make this synthetic event sequence nondeterministic.
+        surface.pressedMouseButtonsForTesting = 0
         surface.mouseEntered(with: entered)
         surface.mouseMoved(with: moved)
         surface.mouseDragged(with: leftDrag)
@@ -336,7 +338,7 @@ extension GhosttyBridgeTests {
         surface.mouseExited(with: exited)
 
         let observations = surface.mousePositionObservationsForTesting
-        #expect(observations.count == 6)
+        try #require(observations.count == 6)
         #expect(observations[0].eventIdentifier == ObjectIdentifier(entered))
         #expect(observations[0].x == 12)
         #expect(observations[0].y == 10)

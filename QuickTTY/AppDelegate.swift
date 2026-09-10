@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminalNotificationClient: SystemTerminalNotificationClient?
     private var terminalNotificationController: TerminalNotificationController?
     private var agentSocketServer: AgentSocketServer?
+    private var terminalControlSocketServer: TerminalControlSocketServer?
+    private var terminalControlMessageRouter: TerminalControlMessageRouter?
     private var agentSessionController: AgentSessionController?
     private var agentMessageRouter: AgentMessageRouter?
     private var agentLifecycleActionRouter: AgentLifecycleActionRouter?
@@ -66,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agentRestoreCompatibility: [AgentAdapterID: AgentRestoreCompatibility],
         executableSearchPath: String
     ) {
+        guard !isTerminating else { return }
         do {
             let ghosttyBridge = try GhosttyBridge()
             ghosttyBridge.setApplicationFocused(NSApp.isActive)
@@ -124,6 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
             agentLifecycleActionRouter?.install(windowCoordinator)
+            if let agentSessionController {
+                terminalControlMessageRouter?.install(
+                    agentSessionController, coordinator: windowCoordinator)
+            }
             let terminalNotificationClient = SystemTerminalNotificationClient()
             let terminalNotificationController = TerminalNotificationController(
                 client: terminalNotificationClient,
@@ -189,7 +196,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 offerUpdates: windowCoordinator.offerAgentIntegrationUpdatesIfAvailable
             )
         } catch {
+            freezeTerminalControlDelivery()
             freezeAgentLifecycleDelivery()
+            terminalControlSocketServer?.stopImmediately()
             stopAgentSocketImmediately()
             let alert = NSAlert()
             alert.alertStyle = .critical
@@ -212,6 +221,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startupTask?.cancel()
         startupTask = nil
         Self.performApplicationTermination(
+            freezeTerminalControlDelivery: {
+                self.freezeTerminalControlDelivery()
+            },
             freezeAgentLifecycleDelivery: {
                 self.freezeAgentLifecycleDelivery()
             },
@@ -238,9 +250,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stopAgentSocket: {
                 self.stopAgentSocketImmediately()
             },
+            stopControlSocket: {
+                self.terminalControlSocketServer?.stopImmediately()
+            },
             prepareForTermination: {
                 self.configController?.stop()
-                self.isTerminating = true
                 self.terminalNotificationController?.shutdown()
                 self.terminalNotificationClient?.setDelegate(nil)
                 self.windowCoordinator?.prepareForApplicationTermination()
@@ -265,23 +279,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [messageRouter] message in
             await messageRouter.route(message)
         }
+        let controlRouter = TerminalControlMessageRouter()
+        let controlServer = TerminalControlSocketServer(
+            credentialProvider: controlRouter.credential
+        ) { [controlRouter] request, context in
+            await controlRouter.route(request, context: context)
+        }
         let controller = try Self.startAgentSubsystem(
             server: server,
             messageRouter: messageRouter,
-            lifecycleActionRouter: lifecycleActionRouter
-        ) { socketPath in
-            try AgentSessionController(
-                socketPath: socketPath,
-                helperPath: helperURL.path,
-                onAction: { [lifecycleActionRouter] action in
-                    lifecycleActionRouter.route(action)
-                }
-            )
-        }
+            lifecycleActionRouter: lifecycleActionRouter,
+            controlServer: controlServer,
+            controlRouter: controlRouter,
+            onControlFailure: { [weak self] _ in
+                self?.logger.error("Terminal control disabled: socket startup failed")
+            },
+            makeController: { socketPath, controlSocketPath in
+                try AgentSessionController(
+                    socketPath: socketPath,
+                    helperPath: helperURL.path,
+                    controlSocketPath: controlSocketPath,
+                    onAction: { [lifecycleActionRouter] action in
+                        lifecycleActionRouter.route(action)
+                    }
+                )
+            }
+        )
         agentSocketServer = server
+        terminalControlSocketServer = controlServer
+        terminalControlMessageRouter = controlRouter
         agentSessionController = controller
         agentMessageRouter = messageRouter
         agentLifecycleActionRouter = lifecycleActionRouter
+    }
+
+    private func freezeTerminalControlDelivery() {
+        // WHY: Revocation callbacks must not schedule model cleanup before the final snapshot.
+        isTerminating = true
+        terminalControlMessageRouter?.disable()
+        windowCoordinator?.freezeTerminalControlForApplicationTermination()
     }
 
     private func freezeAgentLifecycleDelivery() {
@@ -535,14 +571,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    static func startAgentSubsystem(
+        server: AgentSocketServer,
+        messageRouter: AgentMessageRouter,
+        lifecycleActionRouter: AgentLifecycleActionRouter,
+        controlServer: TerminalControlSocketServer,
+        controlRouter: TerminalControlMessageRouter,
+        onControlFailure: (Error) -> Void,
+        makeController: (String, String?) throws -> AgentSessionController
+    ) throws -> AgentSessionController {
+        var controlDidStart = false
+        do {
+            return try startAgentSubsystem(
+                server: server,
+                messageRouter: messageRouter,
+                lifecycleActionRouter: lifecycleActionRouter
+            ) { socketPath in
+                let controlSocketPath: String?
+                do {
+                    controlSocketPath = try controlServer.start()
+                    controlDidStart = true
+                } catch {
+                    // WHY: Optional control failure must not disable lifecycle or session restore.
+                    controlSocketPath = nil
+                    controlRouter.disable()
+                    onControlFailure(error)
+                }
+                return try makeController(socketPath, controlSocketPath)
+            }
+        } catch {
+            controlRouter.disable()
+            if controlDidStart { controlServer.stopImmediately() }
+            throw error
+        }
+    }
+
     static func performApplicationTermination(
+        freezeTerminalControlDelivery: () -> Void = {},
         freezeAgentLifecycleDelivery: () -> Void,
         persistFinalState: () throws -> Void,
         logSaveError: (Error) -> Void,
         stopAgentSocket: () -> Void,
+        stopControlSocket: () -> Void = {},
         prepareForTermination: () -> Void,
         shutdownRuntime: () -> Void
     ) {
+        freezeTerminalControlDelivery()
         freezeAgentLifecycleDelivery()
         do {
             try persistFinalState()
@@ -550,6 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logSaveError(error)
         }
         stopAgentSocket()
+        stopControlSocket()
         prepareForTermination()
         shutdownRuntime()
     }

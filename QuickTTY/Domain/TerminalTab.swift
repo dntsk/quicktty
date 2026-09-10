@@ -167,7 +167,8 @@ struct TerminalTab: Codable, Equatable, Sendable {
         _ targetPaneID: PaneID,
         with newPane: TerminalPaneDescriptor,
         axis: SplitAxis,
-        ratio: Double
+        ratio: Double,
+        insertionSide: SplitInsertionSide = .second
     ) throws -> Bool {
         guard root.contains(targetPaneID) else { return false }
         guard paneDescriptor(for: newPane.id) == nil, !root.contains(newPane.id) else {
@@ -180,7 +181,8 @@ struct TerminalTab: Codable, Equatable, Sendable {
                 targetPaneID,
                 axis: axis,
                 newPane: newPane.id,
-                ratio: ratio
+                ratio: ratio,
+                insertionSide: insertionSide
             )
         else {
             return false
@@ -191,7 +193,10 @@ struct TerminalTab: Codable, Equatable, Sendable {
         else {
             throw TerminalTabError.missingPaneDescriptor(targetPaneID)
         }
-        updatedDescriptors.insert(newPane, at: targetIndex + 1)
+        updatedDescriptors.insert(
+            newPane,
+            at: insertionSide == .first ? targetIndex : targetIndex + 1
+        )
         _ = try Self.validatedLeaves(
             root: updatedRoot,
             paneDescriptors: updatedDescriptors

@@ -1203,6 +1203,420 @@ extension GhosttyBridgeTests {
         #expect(second.inputObservationsForTesting.count == secondInputCount)
         #expect(third.inputObservationsForTesting.count == thirdInputCount)
     }
+
+    @Test
+    func manualInputHandlerRunsBeforeKeyDeliveryForSourceAndBroadcastTargets() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let third = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        for target in [second, third] {
+            target.frame = source.frame
+            window.contentView?.addSubview(target)
+        }
+        window.makeFirstResponder(source)
+        bridge.inputTargetProvider = { _ in
+            [third.paneID, source.paneID, second.paneID, third.paneID]
+        }
+        var callbackOrder: [PaneID] = []
+        var callbackInputCounts: [Int] = []
+        bridge.manualInputHandler = { paneID in
+            callbackOrder.append(paneID)
+            let count: Int
+            switch paneID {
+            case source.paneID:
+                count = source.inputObservationsForTesting.count
+            case second.paneID:
+                count = second.inputObservationsForTesting.count
+            case third.paneID:
+                count = third.inputObservationsForTesting.count
+            default:
+                count = -1
+            }
+            callbackInputCounts.append(count)
+        }
+        let event = try makeKeyboardEvent(
+            type: .keyDown,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            keyCode: 0
+        )
+
+        source.keyDown(with: event)
+
+        #expect(callbackOrder == [source.paneID, third.paneID, second.paneID])
+        #expect(callbackInputCounts == [0, 0, 0])
+        #expect(source.inputObservationsForTesting.last?.text == "a")
+        #expect(second.inputObservationsForTesting.last?.text == "a")
+        #expect(third.inputObservationsForTesting.last?.text == "a")
+    }
+
+    @Test
+    func ignoredShortcutDoesNotTriggerManualInputHandler() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        surface.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        surface.setSearchFieldFocusForTesting(true)
+        var manualPaneIDs: [PaneID] = []
+        bridge.manualInputHandler = { paneID in
+            manualPaneIDs.append(paneID)
+        }
+        let paste = try makeKeyboardEvent(
+            type: .keyDown,
+            modifierFlags: [.command],
+            characters: "v",
+            charactersIgnoringModifiers: "v",
+            keyCode: 9,
+            windowNumber: window.windowNumber
+        )
+        let routeCount = bridge.inputObservationsForTesting.count
+        let terminalActionCount = surface.terminalActionObservationsForTesting.count
+
+        #expect(!surface.performKeyEquivalent(with: paste))
+        #expect(manualPaneIDs.isEmpty)
+        #expect(bridge.inputObservationsForTesting.count == routeCount)
+        #expect(surface.terminalActionObservationsForTesting.count == terminalActionCount)
+    }
+}
+
+@Suite(.serialized, .ghosttyRuntime)
+@MainActor
+struct GhosttyKeyboardInputTests {
+    @Test(arguments: [false, true])
+    func nativeRenderedTextReadsEmptyScreenDespiteStaleAlternateMetadata(alternate: Bool)
+        async throws
+    {
+        let output = (alternate ? "\u{1B}[?1049h" : "") + "\u{1B}]0;EMPTY-READY\u{7}"
+        let fixture = try KeyboardPTYFixture(expectedPayloadByteCount: 1, terminalOutput: output)
+        defer { fixture.remove() }
+        let bridge = try GhosttyBridge(configURL: fixture.configURL)
+        defer { bridge.shutdown() }
+        let spy = LiveTerminalAutomationReadSpy()
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: fixture.directoryURL.path, command: fixture.command))
+        let window = makeKeyboardTestWindow()
+        defer { window.orderOut(nil) }
+        embedKeyboardSurface(surface, in: window)
+        try await showKeyboardAutomationWindow(window, surface: surface)
+        let size = try #require(surface.sizeSnapshotForTesting)
+        try #require(size.rows > 0 && size.columns > 0)
+
+        // WHY: login may already have printed; early native read ownership must still hold.
+        let initial = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 65_536)
+        #expect(spy.lastBytes == Data(initial.text.utf8))
+        #expect(spy.readCount == 1 && spy.freeCount == 1)
+        #expect(!initial.isTruncated)
+        try fixture.startReadyReader()
+        try await fixture.awaitReady(timeout: .seconds(5))
+        try await waitForKeyboardAutomation(phase: "empty output", surface: surface) {
+            surface.currentTitle == "EMPTY-READY"
+                && surface.scrollbarStateForTesting?.total == UInt64(size.rows)
+        }
+        if alternate {
+            // WHY: An old primary-screen callback can outlive the switch to an empty alternate screen.
+            #expect(surface.scheduleScrollbarCallbackForTesting(total: 6_000, offset: 0, len: 24))
+        }
+        for _ in 0..<16 {
+            let rendered = try bridge.readRenderedText(
+                id: surface.paneID, maximumUTF8Bytes: 65_536)
+            #expect(rendered.text.isEmpty)
+            #expect(spy.lastBytes == Data(rendered.text.utf8))
+            #expect(!rendered.isTruncated)
+            #expect(spy.lastIsTruncated == false)
+            #expect(spy.lastRequest?.maximumUTF8Bytes == 65_536)
+            #expect(spy.lastBytes.count <= 65_536)
+        }
+        #expect(spy.readCount == 17)
+        #expect(spy.freeCount == spy.readCount)
+    }
+
+    @Test
+    func nativeRenderedTextIncludesActiveREADYWithoutScrollbackAndFreesEveryRead() async throws {
+        let fixture = try KeyboardPTYFixture(
+            expectedPayloadByteCount: 1,
+            terminalOutput: "READY\u{1B}]0;ACTIVE-READY\u{7}")
+        defer { fixture.remove() }
+        let bridge = try GhosttyBridge(configURL: fixture.configURL)
+        defer { bridge.shutdown() }
+        let spy = LiveTerminalAutomationReadSpy()
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: fixture.directoryURL.path, command: fixture.command))
+        let window = makeKeyboardTestWindow()
+        defer { window.orderOut(nil) }
+        embedKeyboardSurface(surface, in: window)
+        try await showKeyboardAutomationWindow(window, surface: surface)
+        let size = try #require(surface.sizeSnapshotForTesting)
+        try #require(size.rows > 0 && size.columns >= 5)
+        try fixture.startReadyReader()
+        try await fixture.awaitReady(timeout: .seconds(5))
+        try await waitForKeyboardAutomation(phase: "active output", surface: surface) {
+            surface.currentTitle == "ACTIVE-READY"
+                && surface.scrollbarStateForTesting?.total == UInt64(size.rows)
+        }
+        // WHY: The atomic native tail includes active cells even without scrollbar metadata.
+        #expect(surface.scheduleScrollbarCallbackForTesting(total: 0, offset: 0, len: 0))
+        for _ in 0..<16 {
+            let rendered = try bridge.readRenderedText(
+                id: surface.paneID, maximumUTF8Bytes: 65_536)
+            #expect(rendered.text == "READY")
+            #expect(!rendered.isTruncated)
+            #expect(spy.lastBytes == Data(rendered.text.utf8))
+            let request = try #require(spy.lastRequest)
+            #expect(request.maximumUTF8Bytes == 65_536)
+            #expect(spy.lastBytes.count <= request.maximumUTF8Bytes)
+            #expect(spy.lastIsTruncated == false)
+        }
+        #expect(spy.readCount == 16)
+        #expect(spy.freeCount == spy.readCount)
+    }
+
+    @Test(arguments: [3_000, 4_000])
+    func nativeRenderedTextBoundsHistoryBeforeMaterializationWithoutChangingUserState(
+        lineCount: Int
+    ) async throws {
+        // WHY: Real UTF-8 history must exceed the byte budget, not an obsolete row estimate.
+        let lines =
+            ["EARLIEST-PREFIX"]
+            + (1..<lineCount).map {
+                "ROW-\($0)-abcdefghijklmnopqrstuvwxyz-猫e\u{301}"
+            }
+        let completeBytes = Data((lines.joined(separator: "\n") + "\nLAST-MARKER").utf8)
+        let output =
+            lines.joined(separator: "\r\n")
+            + "\r\nLAST-MARKER\u{1B}]0;HISTORY-READY\u{7}"
+        let fixture = try KeyboardPTYFixture(expectedPayloadByteCount: 1, terminalOutput: output)
+        defer { fixture.remove() }
+        let (copies, continuation) = AsyncStream.makeStream(of: String.self)
+        defer { continuation.finish() }
+        let bridge = try GhosttyBridge(
+            configURL: fixture.configURL,
+            clipboardClient: GhosttyClipboardClient(
+                read: { _ in nil },
+                write: { location, contents in
+                    guard location == .standard else { return }
+                    for content in contents where content.mime == "text/plain" {
+                        continuation.yield(content.data)
+                    }
+                }))
+        defer { bridge.shutdown() }
+        let spy = LiveTerminalAutomationReadSpy()
+        bridge.setTerminalAutomationClientForTesting(spy.client)
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(
+                workingDirectory: fixture.directoryURL.path, command: fixture.command))
+        let window = makeKeyboardTestWindow()
+        defer { window.orderOut(nil) }
+        embedKeyboardSurface(surface, in: window)
+        try await showKeyboardAutomationWindow(window, surface: surface)
+        let size = try #require(surface.sizeSnapshotForTesting)
+        try #require(size.rows > 0 && size.columns >= 48)
+        try fixture.startReadyReader()
+        try await fixture.awaitReady(timeout: .seconds(5))
+        try await waitForKeyboardAutomation(
+            phase: "history output (\(lineCount) lines)", surface: surface
+        ) {
+            surface.currentTitle == "HISTORY-READY"
+                && surface.scrollbarStateForTesting?.total == UInt64(lineCount + 1)
+        }
+        #expect(surface.performTerminalShortcutAction(.scrollTop))
+        try await waitForKeyboardAutomation(phase: "history scroll top", surface: surface) {
+            surface.scrollbarStateForTesting?.offset == 0
+        }
+        #expect(surface.performTerminalShortcutAction(.selectAll))
+        #expect(surface.performTerminalShortcutAction(.copy))
+        let selectionBefore = try await firstValue(from: copies, timeout: .seconds(5))
+        #expect(selectionBefore.contains("EARLIEST-PREFIX"))
+        #expect(selectionBefore.contains("LAST-MARKER"))
+        let viewportBefore = try #require(surface.scrollbarStateForTesting)
+        #expect(!viewportBefore.isAtBottom)
+        let actionsBefore = surface.terminalActionObservationsForTesting
+        let bindingsBefore = surface.bindingActionObservationsForTesting
+        let limits = [8_192, 16_384, 32_768, 65_536]
+        try #require(completeBytes.count > 65_536)
+
+        for index in 0..<16 {
+            let limit = limits[index % limits.count]
+            let rendered = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: limit)
+            let request = try #require(spy.lastRequest)
+            // WHY: Inspect actual native bytes and truncation, before any Swift suffix fallback.
+            let native = try #require(String(data: spy.lastBytes, encoding: .utf8))
+            #expect(request.maximumUTF8Bytes == limit)
+            #expect(spy.lastBytes.count <= limit)
+            // WHY: A full budget may discard only the leading UTF-8 continuation bytes, not rows.
+            #expect(spy.lastBytes.count >= limit - 3)
+            #expect(spy.lastIsTruncated == true)
+            #expect(completeBytes.suffix(spy.lastBytes.count) == spy.lastBytes)
+            #expect(!native.contains("EARLIEST-PREFIX"))
+            #expect(native.hasSuffix("LAST-MARKER"))
+            #expect(native.contains("猫e\u{301}"))
+            // WHY: The current tail includes history beyond the active grid, not the top viewport.
+            #expect(native.contains("ROW-\(lineCount - Int(size.rows) - 1)-"))
+            #expect(native.split(separator: "\n").count > Int(size.rows))
+            #expect(rendered.text == native)
+            #expect(rendered.text.utf8.count <= limit)
+            #expect(rendered.isTruncated)
+            #expect(surface.scrollbarStateForTesting == viewportBefore)
+            #expect(spy.readCount == index + 1 && spy.freeCount == spy.readCount)
+        }
+        #expect(spy.readCount == 16)
+        #expect(spy.freeCount == spy.readCount)
+        #expect(surface.terminalActionObservationsForTesting == actionsBefore)
+        #expect(surface.bindingActionObservationsForTesting == bindingsBefore)
+        #expect(surface.performTerminalShortcutAction(.copy))
+        let selectionAfter = try await firstValue(from: copies, timeout: .seconds(5))
+        #expect(selectionAfter == selectionBefore)
+        #expect(surface.scrollbarStateForTesting == viewportBefore)
+    }
+
+    @Test
+    func takeoverPrecedesSourceAndBroadcastDeliveryButNotKeyUpOrAutomation() throws {
+        let bridge = try GhosttyBridge(
+            clipboardClient: GhosttyClipboardClient(read: { _ in nil }, write: { _, _ in }))
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let target = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        target.frame = source.frame
+        window.contentView?.addSubview(target)
+        bridge.inputTargetProvider = { _ in [target.paneID, source.paneID, target.paneID] }
+        var order: [PaneID] = []
+        var counts: [Int] = []
+        bridge.manualInputHandler = { paneID in
+            order.append(paneID)
+            counts.append(
+                (paneID == source.paneID ? source : target).inputObservationsForTesting.count)
+        }
+        source.keyDown(
+            with: try makeKeyboardEvent(
+                type: .keyDown, characters: "a", charactersIgnoringModifiers: "a", keyCode: 0))
+        #expect(order == [source.paneID, target.paneID])
+        #expect(counts == [0, 0])
+        #expect(source.inputObservationsForTesting.count == 1)
+        #expect(target.inputObservationsForTesting.count == 1)
+        order.removeAll()
+        source.keyUp(
+            with: try makeKeyboardEvent(
+                type: .keyUp, characters: "a", charactersIgnoringModifiers: "a", keyCode: 0))
+        source.flagsChanged(
+            with: try makeKeyboardEvent(
+                type: .flagsChanged, modifierFlags: [.shift], characters: "",
+                charactersIgnoringModifiers: "", keyCode: 56))
+        try bridge.sendAutomationText(id: source.paneID, text: "agent")
+        try bridge.sendAutomationKey(id: target.paneID, key: .enter)
+        #expect(order.isEmpty)
+        #expect(source.automationTextObservationsForTesting.map(\.bytes) == [Data("agent".utf8)])
+        #expect(target.automationKeyObservationsForTesting.map(\.key) == [.enter])
+    }
+
+    @Test
+    func ignoredSearchShortcutAndNonInputActionsDoNotTakeControl() throws {
+        let bridge = try GhosttyBridge(
+            clipboardClient: GhosttyClipboardClient(read: { _ in nil }, write: { _, _ in }))
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        var taken: [PaneID] = []
+        bridge.manualInputHandler = { taken.append($0) }
+        source.copy(nil)
+        source.selectAll(nil)
+        source.processCallbackEvent(.searchStarted(nil), confirmationHandler: nil)
+        source.setSearchFieldFocusForTesting(true)
+        let paste = try makeKeyboardEvent(
+            type: .keyDown, modifierFlags: [.command], characters: "v",
+            charactersIgnoringModifiers: "v", keyCode: 9,
+            windowNumber: window.windowNumber)
+        #expect(!source.performKeyEquivalent(with: paste))
+        #expect(taken.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func pasteTakeoverPrecedesEveryBroadcastAction(selection: Bool) throws {
+        let bridge = try GhosttyBridge(
+            clipboardClient: GhosttyClipboardClient(read: { _ in nil }, write: { _, _ in }))
+        defer { bridge.shutdown() }
+        let source = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let target = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "exec /bin/cat"))
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(source, in: window)
+        target.frame = source.frame
+        window.contentView?.addSubview(target)
+        bridge.inputTargetProvider = { _ in [source.paneID, target.paneID, target.paneID] }
+        var order: [PaneID] = []
+        bridge.manualInputHandler = { paneID in
+            order.append(paneID)
+            let surface = paneID == source.paneID ? source : target
+            #expect(surface.terminalActionObservationsForTesting.isEmpty)
+            #expect(surface.clipboardObservationsForTesting.isEmpty)
+        }
+        if selection { source.pasteSelection(nil) } else { source.paste(nil) }
+        #expect(order == [source.paneID, target.paneID])
+        for surface in [source, target] {
+            #expect(
+                surface.terminalActionObservationsForTesting.map(\.action) == [
+                    selection ? .pasteSelection : .paste
+                ])
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func pasteDeliversToEchoDisabledPTYAfterTakeover(selection: Bool) async throws {
+        let fixture = try KeyboardPTYFixture(expectedPayloadByteCount: 3)
+        defer { fixture.remove() }
+        let (exits, continuation) = AsyncStream.makeStream(of: Void.self)
+        defer { continuation.finish() }
+        let bridge = try GhosttyBridge(
+            configURL: fixture.configURL,
+            runtimeActionHandler: { action in if action == .showChildExited { continuation.yield() }
+            },
+            clipboardClient: GhosttyClipboardClient(
+                read: { location in
+                    #expect(location == (selection ? .selection : .standard))
+                    return "abc!"
+                }, write: { _, _ in Issue.record("Manual paste must not write clipboard") }))
+        defer { bridge.shutdown() }
+        try fixture.startReadyReader()
+        let surface = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: fixture.command))
+        let window = makeKeyboardTestWindow()
+        embedKeyboardSurface(surface, in: window)
+        try await fixture.awaitReady(timeout: .seconds(5))
+        var taken: [PaneID] = []
+        bridge.manualInputHandler = { paneID in
+            taken.append(paneID)
+            #expect(surface.terminalActionObservationsForTesting.isEmpty)
+        }
+        if selection { surface.pasteSelection(nil) } else { surface.paste(nil) }
+        #expect(taken == [surface.paneID])
+        _ = try await firstValue(from: exits, timeout: .seconds(5))
+        #expect(try Data(contentsOf: fixture.resultURL) == Data("abc".utf8))
+        let snapshot = try bridge.readRenderedText(id: surface.paneID, maximumUTF8Bytes: 65_536)
+        #expect(!snapshot.text.contains("abc"))
+    }
 }
 
 private struct KeyboardSurfaceCloseEvent: Equatable, Sendable {
@@ -1215,6 +1629,7 @@ private enum KeyboardInputTestError: Error {
     case processFailed(Int32)
     case streamEnded
     case timeout
+    case automationTimeout(phase: String, metadata: String)
 }
 
 @MainActor
@@ -1231,20 +1646,28 @@ private final class KeyboardPTYFixture {
     private let readyExits: AsyncStream<Int32>
     private let readyExitContinuation: AsyncStream<Int32>.Continuation
 
-    init(expectedPayloadByteCount: Int) throws {
-        directoryURL = FileManager.default.temporaryDirectory.appending(
+    init(expectedPayloadByteCount: Int, terminalOutput: String = "") throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString,
             directoryHint: .isDirectory
         )
         try FileManager.default.createDirectory(
-            at: directoryURL,
+            at: directory,
             withIntermediateDirectories: true
         )
+        // WHY: The PTY and test assertions must use the same canonical temporary paths.
+        directoryURL = directory.resolvingSymlinksInPath()
+        var initialized = false
+        defer {
+            if !initialized { try? FileManager.default.removeItem(at: directory) }
+        }
         configURL = directoryURL.appending(path: "config")
         resultURL = directoryURL.appending(path: "result")
         readyFIFOURL = directoryURL.appending(path: "ready.fifo")
         captureURL = directoryURL.appending(path: "capture")
         try Data("abnormal-command-exit-runtime = 0\n".utf8).write(to: configURL)
+        let outputURL = directoryURL.appending(path: "terminal-output")
+        try Data(terminalOutput.utf8).write(to: outputURL)
 
         let fifoResult = readyFIFOURL.path.withCString { path in
             Darwin.mkfifo(path, mode_t(S_IRUSR | S_IWUSR))
@@ -1254,8 +1677,11 @@ private final class KeyboardPTYFixture {
         }
 
         let transmittedByteCount = expectedPayloadByteCount + 1
+        // WHY: The FIFO gates output until the reader permits it; echo is disabled before release.
+        // WHY: login can print before this script, so clear both screen and history before our output.
         let script =
             "stty raw -echo; printf R > \(shellQuote(readyFIFOURL.path)); "
+            + "printf '\\033[2J\\033[3J\\033[H'; /bin/cat \(shellQuote(outputURL.path)); "
             + "dd bs=1 count=\(transmittedByteCount) of=\(shellQuote(captureURL.path)) 2>/dev/null; "
             + "if [ \"$(dd bs=1 skip=\(expectedPayloadByteCount) count=1 "
             + "if=\(shellQuote(captureURL.path)) 2>/dev/null)\" = '!' ]; then "
@@ -1274,6 +1700,7 @@ private final class KeyboardPTYFixture {
             continuation.yield(process.terminationStatus)
             continuation.finish()
         }
+        initialized = true
     }
 
     func startReadyReader() throws {
@@ -1297,6 +1724,78 @@ private final class KeyboardPTYFixture {
             readyReader.terminate()
         }
         try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
+
+@MainActor
+private final class LiveTerminalAutomationReadSpy {
+    private(set) var readCount = 0
+    private(set) var freeCount = 0
+    private(set) var lastRequest: GhosttyTerminalAutomationReadRequest?
+    private(set) var lastBytes = Data()
+    private(set) var lastIsTruncated: Bool?
+
+    var client: GhosttyTerminalAutomationClient {
+        GhosttyTerminalAutomationClient(
+            readText: { [self] request, liveRead in
+                readCount += 1
+                lastRequest = request
+                // WHY: Observing must not replace native output or bypass native buffer ownership.
+                let result = liveRead()
+                if case .success(let buffer) = result {
+                    lastBytes = buffer.bytes
+                    lastIsTruncated = buffer.isTruncated
+                }
+                return result
+            },
+            freeText: { [self] buffer in
+                buffer.release()
+                freeCount += 1
+            })
+    }
+}
+
+@MainActor
+private func showKeyboardAutomationWindow(
+    _ window: NSWindow, surface: GhosttySurfaceView
+) async throws {
+    // WHY: A user's floating Quake window must not occlude this fixture-owned renderer window.
+    window.level = .statusBar
+    window.makeKeyAndOrderFront(nil)
+    window.orderFrontRegardless()
+    window.contentView?.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    try await waitForKeyboardAutomation(phase: "visible initial grid", surface: surface) {
+        guard window.isVisible, window.occlusionState.contains(.visible),
+            let size = surface.sizeSnapshotForTesting,
+            size.rows > 0, size.columns > 0,
+            let scrollbar = surface.scrollbarStateForTesting
+        else { return false }
+        // WHY: Match a real drawn grid after embedding/backing changes before releasing the producer.
+        return scrollbar.total == UInt64(size.rows)
+    }
+}
+
+@MainActor
+private func waitForKeyboardAutomation(
+    phase: String, surface: GhosttySurfaceView, _ condition: () throws -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while try !condition() {
+        try Task.checkCancellation()
+        guard clock.now < deadline else {
+            // WHY: Metadata identifies the stalled phase without reading terminal contents or input.
+            let metadata =
+                "title=\(String(describing: surface.currentTitle)) "
+                + "grid=\(String(describing: surface.sizeSnapshotForTesting)) "
+                + "scrollbar=\(String(describing: surface.scrollbarStateForTesting)) "
+                + "visible=\(surface.window?.isVisible == true) "
+                + "occlusion=\(String(describing: surface.window?.occlusionState))"
+            throw KeyboardInputTestError.automationTimeout(phase: phase, metadata: metadata)
+        }
+        // WHY: FIFO completion precedes rendering; wait for observed terminal state, not a fixed delay.
+        try await clock.sleep(until: min(deadline, clock.now.advanced(by: .milliseconds(10))))
     }
 }
 

@@ -239,6 +239,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     private var deferredAnimationCancellation: (any PresentationCancellation)?
     private var focusLossCancellation: (any PresentationCancellation)?
     private var animationGeneration = 0
+    private var isRetiredForTermination = false
     private var pinnedScreenFrame: NSRect?
     private var lastVisibleFrame: NSRect?
     private var priorApplication: (any PresentationApplicationActivation)?
@@ -274,6 +275,9 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         self.onError = onError
         requestedVisibility = window.isPresentationVisible ? .shown : .hidden
         super.init()
+        (window as? QuakeWindow)?.canContinuePresentation = { [weak self] in
+            self?.isRetiredForTermination == false
+        }
         (window as? NSWindow)?.delegate = self
     }
 
@@ -308,6 +312,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     var appKitWindow: NSWindow? { quakeWindow as? NSWindow }
 
     isolated deinit {
+        isRetiredForTermination = true
         animationCancellation?.cancel()
         deferredAnimationCancellation?.cancel()
         focusLossCancellation?.cancel()
@@ -326,10 +331,12 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     func setPresentationFrame(_ frame: NSRect) {
+        guard !isRetiredForTermination else { return }
         quakeWindow.setPresentationFrame(frame)
     }
 
     func installContentViewController(_ contentViewController: NSViewController?) throws {
+        guard !isRetiredForTermination else { return }
         try quakeWindow.installContentViewController(contentViewController)
     }
 
@@ -342,13 +349,14 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     func updateConfiguration(_ configuration: QuakeWindowConfiguration) {
+        guard !isRetiredForTermination else { return }
         self.configuration = configuration
     }
 
     @discardableResult
     func beginTransientInteraction() -> TransientInteraction {
         let identifier = UUID()
-        transientInteractionIDs.insert(identifier)
+        if !isRetiredForTermination { transientInteractionIDs.insert(identifier) }
         return TransientInteraction(controller: self, identifier: identifier)
     }
 
@@ -357,7 +365,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     func requestVisibility(_ visibility: QuakeVisibility) throws {
-        guard visibility != requestedVisibility else { return }
+        guard !isRetiredForTermination, visibility != requestedVisibility else { return }
         switch visibility {
         case .shown:
             try requestShow()
@@ -366,31 +374,67 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         }
     }
 
-    func deactivateForModeTransition() {
-        beginAnimationRequest(.hidden)
+    // WHY: Freeze precedes persistence. Retire callbacks without changing frame, visibility,
+    // content ownership or requestedVisibility; explicit coordinator teardown hides later.
+    func invalidateForApplicationTermination() {
+        guard !isRetiredForTermination else { return }
+        isRetiredForTermination = true
+        animationGeneration += 1
+        animationCancellation?.cancel()
+        animationCancellation = nil
+        deferredAnimationCancellation?.cancel()
+        deferredAnimationCancellation = nil
         cancelFocusLossHide()
+        priorApplication = nil
+        isLiveResizing = false
+        liveResizeVisibleFrame = nil
+    }
+
+    func deactivateForModeTransition() {
+        guard !isRetiredForTermination else { return }
+        beginAnimationRequest(.hidden)
+        guard !isRetiredForTermination else { return }
+        cancelFocusLossHide()
+        guard !isRetiredForTermination else { return }
         quakeWindow.setPresentationLevel(.floating)
+        guard !isRetiredForTermination else { return }
         quakeWindow.orderOutForPresentation()
+        guard !isRetiredForTermination else { return }
         priorApplication = nil
     }
 
     func focusDidResignKey() {
-        guard configuration.hideOnFocusLoss, requestedVisibility == .shown else { return }
+        guard !isRetiredForTermination,
+            configuration.hideOnFocusLoss, requestedVisibility == .shown
+        else { return }
         cancelFocusLossHide()
-        focusLossCancellation = scheduler.schedule(after: configuration.focusLossDelay) {
+        guard !isRetiredForTermination else { return }
+        let generation = animationGeneration
+        let cancellation = scheduler.schedule(after: configuration.focusLossDelay) {
             [weak self] in
-            guard let self else { return }
+            guard let self, !self.isRetiredForTermination,
+                self.animationGeneration == generation
+            else { return }
             self.focusLossCancellation = nil
-            guard !self.isFocusLossSuppressed(), !self.hasTransientInteraction else { return }
+            guard !self.isFocusLossSuppressed(), !self.isRetiredForTermination,
+                !self.hasTransientInteraction
+            else { return }
             do {
                 try self.requestVisibility(.hidden)
             } catch {
+                guard !self.isRetiredForTermination else { return }
                 self.onError(error)
             }
         }
+        guard !isRetiredForTermination, animationGeneration == generation else {
+            cancellation.cancel()
+            return
+        }
+        focusLossCancellation = cancellation
     }
 
     func focusDidBecomeKey() {
+        guard !isRetiredForTermination else { return }
         cancelFocusLossHide()
     }
 
@@ -403,13 +447,18 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     func windowWillStartLiveResize(_ notification: Notification) {
-        guard notification.object as? NSWindow === appKitWindow else { return }
+        guard !isRetiredForTermination,
+            notification.object as? NSWindow === appKitWindow
+        else { return }
+        let visibleFrame = try? selectedVisibleFrame()
+        guard !isRetiredForTermination else { return }
         isLiveResizing = true
-        liveResizeVisibleFrame = try? selectedVisibleFrame()
+        liveResizeVisibleFrame = visibleFrame
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         guard
+            !isRetiredForTermination,
             sender === appKitWindow,
             isLiveResizing,
             !isNormalizingLiveResize,
@@ -427,6 +476,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         guard
             let window = notification.object as? NSWindow,
             window === appKitWindow,
+            !isRetiredForTermination,
             isLiveResizing,
             !isNormalizingLiveResize,
             let visibleFrame = liveResizeVisibleFrame,
@@ -450,6 +500,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         guard
             let window = notification.object as? NSWindow,
             window === appKitWindow,
+            !isRetiredForTermination,
             isLiveResizing,
             let visibleFrame = liveResizeVisibleFrame,
             let frame = configuration.geometry.normalizedManualFrame(
@@ -461,6 +512,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         if window.frame != frame {
             window.setFrame(frame, display: true)
         }
+        guard !isRetiredForTermination else { return }
         let heightFraction = frame.height / visibleFrame.height
         guard
             let geometry = QuakeWindowGeometry(
@@ -475,6 +527,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     private func requestShow() throws {
         let visibleFrame = try selectedVisibleFrame()
+        guard !isRetiredForTermination else { return }
         guard let targetFrame = configuration.geometry.targetFrame(in: visibleFrame) else {
             throw QuakePresentationError.invalidVisibleFrame
         }
@@ -484,30 +537,44 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         )
 
         cancelFocusLossHide()
+        guard !isRetiredForTermination else { return }
         beginAnimationRequest(.shown)
+        guard !isRetiredForTermination else { return }
         lastVisibleFrame = visibleFrame
         if priorApplication == nil {
-            priorApplication = priorApplicationProvider()
+            let application = priorApplicationProvider()
+            guard !isRetiredForTermination else { return }
+            priorApplication = application
         }
         if !quakeWindow.isPresentationVisible {
             quakeWindow.setPresentationFrame(hiddenFrame)
+            guard !isRetiredForTermination else { return }
         }
         quakeWindow.setPresentationLevel(.popUpMenu)
+        guard !isRetiredForTermination else { return }
         quakeWindow.orderFrontForPresentation()
+        guard !isRetiredForTermination else { return }
         let generation = animationGeneration
-        deferredAnimationCancellation = animationDeferrer.deferAction { [weak self] in
+        let cancellation = animationDeferrer.deferAction { [weak self] in
             guard
                 let self,
+                !self.isRetiredForTermination,
                 self.animationGeneration == generation,
                 self.requestedVisibility == .shown
             else { return }
             self.deferredAnimationCancellation = nil
             self.animate(to: targetFrame, visibility: .shown)
         }
+        guard isCurrentAnimationRequest(generation, visibility: .shown) else {
+            cancellation.cancel()
+            return
+        }
+        deferredAnimationCancellation = cancellation
     }
 
     private func requestHide() throws {
         let visibleFrame = try lastVisibleFrame ?? selectedVisibleFrame()
+        guard !isRetiredForTermination else { return }
         guard let targetFrame = configuration.geometry.targetFrame(in: visibleFrame) else {
             throw QuakePresentationError.invalidVisibleFrame
         }
@@ -517,23 +584,31 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         )
 
         cancelFocusLossHide()
+        guard !isRetiredForTermination else { return }
         beginAnimationRequest(.hidden)
+        guard !isRetiredForTermination else { return }
         quakeWindow.setPresentationLevel(.popUpMenu)
+        guard !isRetiredForTermination else { return }
         animate(to: hiddenFrame, visibility: .hidden)
     }
 
     private func selectedVisibleFrame() throws -> NSRect {
         if configuration.pinToScreen, let pinnedFrame = pinnedScreenFrame {
             let frames = visibleFrames()
+            guard !isRetiredForTermination else { throw CancellationError() }
             if frames.contains(where: { $0 == pinnedFrame }) {
                 return pinnedFrame
             }
             pinnedScreenFrame = nil
         }
+        let cursor = cursorLocation()
+        guard !isRetiredForTermination else { throw CancellationError() }
+        let frames = visibleFrames()
+        guard !isRetiredForTermination else { throw CancellationError() }
         guard
             let frame = QuakeWindowGeometry.visibleFrame(
-                under: cursorLocation(),
-                from: visibleFrames()
+                under: cursor,
+                from: frames
             )
         else { throw QuakePresentationError.noVisibleScreen }
         if configuration.pinToScreen {
@@ -543,49 +618,73 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     private func beginAnimationRequest(_ visibility: QuakeVisibility) {
+        guard !isRetiredForTermination else { return }
         animationGeneration += 1
-        let hasOutstandingAnimation =
-            animationCancellation != nil
-            || deferredAnimationCancellation != nil
-        animationCancellation?.cancel()
+        let animation = animationCancellation
+        let deferredAnimation = deferredAnimationCancellation
         animationCancellation = nil
-        deferredAnimationCancellation?.cancel()
         deferredAnimationCancellation = nil
-        if hasOutstandingAnimation {
+        animation?.cancel()
+        deferredAnimation?.cancel()
+        guard !isRetiredForTermination else { return }
+        if animation != nil || deferredAnimation != nil {
             quakeWindow.setPresentationLevel(.floating)
+            guard !isRetiredForTermination else { return }
         }
         requestedVisibility = visibility
     }
 
+    private func isCurrentAnimationRequest(_ generation: Int, visibility: QuakeVisibility) -> Bool {
+        !isRetiredForTermination && animationGeneration == generation
+            && requestedVisibility == visibility
+    }
+
     private func animate(to frame: NSRect, visibility: QuakeVisibility) {
+        guard !isRetiredForTermination else { return }
         let generation = animationGeneration
         let request = QuakeAnimationRequest(
             visibility: visibility,
             curve: visibility == .shown ? .easeOut : .easeIn
         )
-        animationCancellation = animator.animate(
+        let cancellation = animator.animate(
             window: quakeWindow,
             to: frame,
             request: request,
             duration: configuration.animationDuration
         ) { [weak self] in
-            guard let self, self.animationGeneration == generation,
-                self.requestedVisibility == visibility
+            guard let self, self.isCurrentAnimationRequest(generation, visibility: visibility)
             else { return }
             self.animationCancellation = nil
             self.quakeWindow.setPresentationFrame(frame)
+            guard self.isCurrentAnimationRequest(generation, visibility: visibility) else { return }
             switch visibility {
             case .shown:
                 self.quakeWindow.setPresentationLevel(.floating)
+                guard self.isCurrentAnimationRequest(generation, visibility: visibility) else {
+                    return
+                }
                 self.quakeWindow.focusForPresentation()
             case .hidden:
                 self.quakeWindow.orderOutForPresentation()
+                guard self.isCurrentAnimationRequest(generation, visibility: visibility) else {
+                    return
+                }
                 self.quakeWindow.setPresentationLevel(.floating)
+                guard self.isCurrentAnimationRequest(generation, visibility: visibility) else {
+                    return
+                }
                 let priorApplication = self.priorApplication
                 self.priorApplication = nil
                 priorApplication?.activate()
             }
         }
+        // WHY: Zero-duration animators can complete (and freeze) before returning a token.
+        // Never resurrect outstanding work after invalidation; cancel that returned token.
+        guard isCurrentAnimationRequest(generation, visibility: visibility) else {
+            cancellation.cancel()
+            return
+        }
+        animationCancellation = cancellation
     }
 
     private var hasTransientInteraction: Bool {
@@ -597,8 +696,9 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     }
 
     private func cancelFocusLossHide() {
-        focusLossCancellation?.cancel()
+        let cancellation = focusLossCancellation
         focusLossCancellation = nil
+        cancellation?.cancel()
     }
 
     #if DEBUG

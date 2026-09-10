@@ -16,20 +16,42 @@ final class GhosttyConfirmationQueue {
             @escaping Completion
         ) -> Dismiss?
 
+    struct CloseToken: Hashable, Sendable {
+        fileprivate let id = UUID()
+    }
+
     private struct Item {
         let id: UUID
         let presentation: GhosttyConfirmationPresentation
         var completions: [Completion]
+        var closeTokens: [CloseToken] = []
     }
 
-    private struct ActiveItem {
+    @MainActor
+    private final class ActiveItem {
         var item: Item
-        var dismiss: Dismiss?
+        private var dismiss: Dismiss?
+        private var isCancelled = false
+
+        init(item: Item) { self.item = item }
+
+        func installDismiss(_ dismiss: Dismiss?) {
+            // WHY: A presenter can synchronously cancel a previously queued participant.
+            if isCancelled { dismiss?() } else { self.dismiss = dismiss }
+        }
+
+        func cancel() {
+            isCancelled = true
+            let dismiss = dismiss
+            self.dismiss = nil
+            dismiss?()
+        }
     }
 
     private let presenter: Presenter
     private var pending: [Item] = []
     private var active: ActiveItem?
+    private var closeCompletions: [CloseToken: Completion] = [:]
 
     init(presenter: @escaping Presenter) {
         self.presenter = presenter
@@ -62,18 +84,26 @@ final class GhosttyConfirmationQueue {
         presentNextIfNeeded()
     }
 
+    @discardableResult
     func enqueueClose(
         paneID: PaneID,
         completion: @escaping Completion
-    ) {
-        if appendCloseCompletion(for: paneID, completion: completion) {
-            return
+    ) -> CloseToken {
+        let token = CloseToken()
+        closeCompletions[token] = completion
+        let participant: Completion = { [weak self] response in
+            // WHY: A preceding coalesced callback can cancel a participant during resolution.
+            let completion = self?.closeCompletions.removeValue(forKey: token)
+            completion?(response)
+        }
+        if appendCloseCompletion(for: paneID, token: token, completion: participant) {
+            return token
         }
 
         cancelClipboardRequests(for: paneID)
         if let active, case .clipboard = active.item.presentation {
             self.active = nil
-            active.dismiss?()
+            active.cancel()
             if case .clipboard(let request) = active.item.presentation,
                 request.paneID != paneID
             {
@@ -88,8 +118,8 @@ final class GhosttyConfirmationQueue {
             }
         }
 
-        if appendCloseCompletion(for: paneID, completion: completion) {
-            return
+        if appendCloseCompletion(for: paneID, token: token, completion: participant) {
+            return token
         }
 
         let insertionIndex =
@@ -101,10 +131,32 @@ final class GhosttyConfirmationQueue {
             Item(
                 id: UUID(),
                 presentation: .close(paneID),
-                completions: [completion]
+                completions: [participant],
+                closeTokens: [token]
             ),
             at: insertionIndex
         )
+        presentNextIfNeeded()
+        return token
+    }
+
+    func cancelClose(_ token: CloseToken) {
+        // WHY: Remove authority before dismissal or any reentrant presenter callback.
+        guard closeCompletions.removeValue(forKey: token) != nil else { return }
+        if let active, let index = active.item.closeTokens.firstIndex(of: token) {
+            active.item.closeTokens.remove(at: index)
+            active.item.completions.remove(at: index)
+            if active.item.completions.isEmpty {
+                self.active = nil
+                active.cancel()
+            }
+        } else if let itemIndex = pending.firstIndex(where: { $0.closeTokens.contains(token) }),
+            let index = pending[itemIndex].closeTokens.firstIndex(of: token)
+        {
+            pending[itemIndex].closeTokens.remove(at: index)
+            pending[itemIndex].completions.remove(at: index)
+            if pending[itemIndex].completions.isEmpty { pending.remove(at: itemIndex) }
+        }
         presentNextIfNeeded()
     }
 
@@ -120,11 +172,13 @@ final class GhosttyConfirmationQueue {
             activePaneID == paneID
         {
             self.active = nil
-            active.dismiss?()
+            for token in active.item.closeTokens { closeCompletions.removeValue(forKey: token) }
+            active.cancel()
         }
-        pending.removeAll { item in
-            guard case .close(let queuedPaneID) = item.presentation else { return false }
-            return queuedPaneID == paneID
+        let removed = pending.filter { $0.presentation == .close(paneID) }
+        pending.removeAll { $0.presentation == .close(paneID) }
+        for item in removed {
+            for token in item.closeTokens { closeCompletions.removeValue(forKey: token) }
         }
         presentNextIfNeeded()
     }
@@ -135,7 +189,7 @@ final class GhosttyConfirmationQueue {
         self.active = nil
         self.pending.removeAll()
 
-        active?.dismiss?()
+        active?.cancel()
         if let active {
             for completion in active.item.completions {
                 completion(.deny)
@@ -150,13 +204,14 @@ final class GhosttyConfirmationQueue {
 
     private func appendCloseCompletion(
         for paneID: PaneID,
+        token: CloseToken,
         completion: @escaping Completion
     ) -> Bool {
-        if var active, case .close(let activePaneID) = active.item.presentation,
+        if let active, case .close(let activePaneID) = active.item.presentation,
             activePaneID == paneID
         {
             active.item.completions.append(completion)
-            self.active = active
+            active.item.closeTokens.append(token)
             return true
         }
         guard
@@ -168,6 +223,7 @@ final class GhosttyConfirmationQueue {
             return false
         }
         pending[index].completions.append(completion)
+        pending[index].closeTokens.append(token)
         return true
     }
 
@@ -188,38 +244,36 @@ final class GhosttyConfirmationQueue {
             request.paneID == paneID
         {
             self.active = nil
-            active.dismiss?()
+            active.cancel()
             for completion in active.item.completions {
                 completion(.deny)
             }
         }
 
-        var kept: [Item] = []
-        for item in pending {
-            guard case .clipboard(let request) = item.presentation,
-                request.paneID == paneID
-            else {
-                kept.append(item)
-                continue
-            }
+        let removed = pending.filter { item in
+            guard case .clipboard(let request) = item.presentation else { return false }
+            return request.paneID == paneID
+        }
+        let removedIDs = Set(removed.map(\.id))
+        // WHY: A denied clipboard callback can cancel a queued close; never restore a stale array.
+        pending.removeAll { removedIDs.contains($0.id) }
+        for item in removed {
             for completion in item.completions {
                 completion(.deny)
             }
         }
-        pending = kept
     }
 
     private func presentNextIfNeeded() {
         guard active == nil, !pending.isEmpty else { return }
         let item = pending.removeFirst()
-        active = ActiveItem(item: item, dismiss: nil)
+        let presented = ActiveItem(item: item)
+        active = presented
 
         let dismiss = presenter(item.presentation) { [weak self] response in
             self?.resolve(id: item.id, response: response)
         }
-        if active?.item.id == item.id {
-            active?.dismiss = dismiss
-        }
+        presented.installDismiss(dismiss)
     }
 
     private func resolve(id: UUID, response: GhosttyClipboardConfirmationResponse) {

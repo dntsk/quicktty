@@ -1,0 +1,35 @@
+Subject: [PATCH 2/2] apprt/embedded: clamp exact y to its coordinate region
+Origin: QuickTTY local fix (not an upstream backport)
+Base-Commit: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28 (v1.3.1)
+
+SCREEN and HISTORY exact coordinates must reach beyond the active height.
+Use the existing region bottom-right pin and point conversion, retaining
+null for empty history. ACTIVE/VIEWPORT, x clamping, and corners are unchanged.
+No public API or header changes. Ghostty's MIT license applies.
+
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1338,11 +1338,21 @@
+             // Clamp our point to the screen bounds.
+             const clamped_x = @min(self.x, screen.pages.cols -| 1);
+-            const clamped_y = @min(self.y, screen.pages.rows -| 1);
+ 
+             return switch (self.coord_tag) {
+                 // Exact coordinates require a specific pin.
+                 .exact => exact: {
++                    // History-inclusive regions can exceed the active height.
++                    const max_y: u32 = switch (tag) {
++                        .active, .viewport => screen.pages.rows -| 1,
++                        .screen, .history => bounds: {
++                            const last = screen.pages.getBottomRight(tag) orelse return null;
++                            const last_point = screen.pages.pointFromPin(tag, last) orelse return null;
++                            break :bounds last_point.coord().y;
++                        },
++                    };
++                    const clamped_y = @min(self.y, max_y);
++
+                     const pt_x = std.math.cast(
+                         terminal.size.CellCountInt,
+                         clamped_x,
+                     ) orelse std.math.maxInt(terminal.size.CellCountInt);

@@ -27,6 +27,7 @@ final class PresentationController {
     private let quakeWindowController: any QuakePresentationWindowContainer
     private let persistSuccessfulMode: ModePersistence
     private let onError: ErrorHandler
+    private var isRetiredForTermination = false
     private(set) var mode: PresentationMode
     private(set) var savedNormalFrame: NSRect?
 
@@ -59,21 +60,28 @@ final class PresentationController {
         }
     }
 
+    // WHY: A native container call can synchronously freeze its caller. Retirement only
+    // denies the next operation; it neither cancels that call nor repairs partial ownership.
+    func retireForApplicationTermination() {
+        isRetiredForTermination = true
+    }
+
     var toggleQuakeVisibility: @MainActor () -> Void {
         { [weak self] in
-            guard let self, self.mode == .quake else { return }
+            guard let self, !self.isRetiredForTermination, self.mode == .quake else { return }
             let visibility: QuakeVisibility =
                 self.quakeWindowController.requestedVisibility == .shown ? .hidden : .shown
             do {
                 try self.quakeWindowController.requestVisibility(visibility)
             } catch {
+                guard !self.isRetiredForTermination else { return }
                 self.onError(error)
             }
         }
     }
 
     func transition(to targetMode: PresentationMode, persist: Bool = true) throws {
-        guard targetMode != mode else { return }
+        guard !isRetiredForTermination, targetMode != mode else { return }
         switch (mode, targetMode) {
         case (.normal, .quake):
             try transitionFromNormalToQuake()
@@ -82,18 +90,21 @@ final class PresentationController {
         default:
             return
         }
+        guard !isRetiredForTermination else { return }
         mode = targetMode
+        // WHY: Mode is committed before persistence; a freeze inside persistence must not undo it.
         if persist {
             persistSuccessfulMode(targetMode)
         }
     }
 
     func requestQuakeVisibility(_ visibility: QuakeVisibility) throws {
-        guard mode == .quake else { return }
+        guard !isRetiredForTermination, mode == .quake else { return }
         try quakeWindowController.requestVisibility(visibility)
     }
 
     func showCurrentPresentation() throws {
+        guard !isRetiredForTermination else { return }
         switch mode {
         case .normal:
             try normalWindowController.showPresentationWindow()
@@ -130,22 +141,32 @@ final class PresentationController {
     }
 
     private func transitionFromNormalToQuake() throws {
+        guard !isRetiredForTermination else { return }
         let normalFrame = normalWindowController.presentationFrame
         let previousSavedFrame = savedNormalFrame
         let normalWasVisible = normalWindowController.isPresentationVisible
 
         do {
             try reparentContent(from: normalWindowController, to: quakeWindowController)
+            guard !isRetiredForTermination else { return }
             try quakeWindowController.showPresentationWindow()
+            guard !isRetiredForTermination else { return }
             normalWindowController.hidePresentationWindow()
+            guard !isRetiredForTermination else { return }
             savedNormalFrame = normalFrame
         } catch {
+            guard !isRetiredForTermination else { return }
             quakeWindowController.deactivateForModeTransition()
+            guard !isRetiredForTermination else { return }
             try? quakeWindowController.installContentViewController(nil)
+            guard !isRetiredForTermination else { return }
             try? normalWindowController.installContentViewController(contentViewController)
+            guard !isRetiredForTermination else { return }
             normalWindowController.setPresentationFrame(normalFrame)
+            guard !isRetiredForTermination else { return }
             if normalWasVisible {
                 try? normalWindowController.showPresentationWindow()
+                guard !isRetiredForTermination else { return }
             }
             savedNormalFrame = previousSavedFrame
             throw error
@@ -153,23 +174,33 @@ final class PresentationController {
     }
 
     private func transitionFromQuakeToNormal() throws {
+        guard !isRetiredForTermination else { return }
         let quakeVisibility = quakeWindowController.requestedVisibility
         let normalFrame = normalWindowController.presentationFrame
         if let savedNormalFrame {
             normalWindowController.setPresentationFrame(savedNormalFrame)
+            guard !isRetiredForTermination else { return }
         }
 
         do {
             try reparentContent(from: quakeWindowController, to: normalWindowController)
+            guard !isRetiredForTermination else { return }
             try normalWindowController.showPresentationWindow()
+            guard !isRetiredForTermination else { return }
             quakeWindowController.deactivateForModeTransition()
         } catch {
+            guard !isRetiredForTermination else { return }
             normalWindowController.hidePresentationWindow()
+            guard !isRetiredForTermination else { return }
             normalWindowController.setPresentationFrame(normalFrame)
+            guard !isRetiredForTermination else { return }
             try? normalWindowController.installContentViewController(nil)
+            guard !isRetiredForTermination else { return }
             try? quakeWindowController.installContentViewController(contentViewController)
+            guard !isRetiredForTermination else { return }
             if quakeVisibility == .shown {
                 try? quakeWindowController.showPresentationWindow()
+                guard !isRetiredForTermination else { return }
             }
             throw error
         }
@@ -179,15 +210,19 @@ final class PresentationController {
         from source: any PresentationWindowContainer,
         to destination: any PresentationWindowContainer
     ) throws {
+        guard !isRetiredForTermination else { return }
         guard source.installedContentViewController === contentViewController,
             destination.installedContentViewController == nil
         else { throw PresentationContainerError.unexpectedContentOwner }
 
         try source.installContentViewController(nil)
+        guard !isRetiredForTermination else { return }
         do {
             try destination.installContentViewController(contentViewController)
         } catch {
+            guard !isRetiredForTermination else { return }
             try? source.installContentViewController(contentViewController)
+            guard !isRetiredForTermination else { return }
             throw error
         }
     }

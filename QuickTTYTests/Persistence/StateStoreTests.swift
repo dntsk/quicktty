@@ -266,6 +266,130 @@ struct StateStoreTests {
     }
 
     @Test
+    func stateStoreDoesNotSanitizeLaunchLikeCommandsOrBindingsOnBehalfOfManagedCreation() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let command = "task13-runtime-executable task13-runtime-argv"
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude-code"),
+            sessionID: "task13-runtime-session",
+            workingDirectory: fixture.homeURL.path,
+            registeredAt: Date(timeIntervalSinceReferenceDate: 130),
+            launchMetadata: ["source": "task13-runtime-metadata"],
+            restoreState: .active
+        )
+        let pane = TerminalPaneDescriptor(
+            id: Self.paneID(130), cwd: fixture.homeURL.path,
+            startupCommand: .custom(command), agentResumeBinding: binding
+        )
+        let tab = TerminalTab(id: Self.tabID(130), title: "Codec boundary", pane: pane)
+        let workspace = Workspace(
+            id: Self.workspaceID(130), name: "Codec boundary", tabs: [tab], activeTabID: tab.id
+        )
+        let state = ApplicationState(
+            workspaceStore: try WorkspaceStore(
+                workspaces: [workspace], activeWorkspaceID: workspace.id
+            )
+        )
+        let store = try fixture.makeStore()
+
+        // WHY: StateStore encodes descriptors verbatim. Managed creation must supply a shell
+        // descriptor in WindowCoordinator; encoding an already-sanitized fixture cannot prove
+        // that live-domain boundary. This positive control makes the codec's limit explicit.
+        try store.saveNow(state)
+        let bytes = try Data(contentsOf: fixture.stateURL)
+        let serialized = String(decoding: bytes, as: UTF8.self)
+        for sentinel in [command, binding.sessionID, "task13-runtime-metadata"] {
+            #expect(serialized.contains(sentinel))
+        }
+        #expect(try StateMigration.decode(bytes) == state)
+        #expect(try fixture.makeStore().load() == state)
+    }
+
+    @Test
+    func currentStateDecoderDiscardsInjectedTaskCapabilitiesWithoutChangingShellLayout() throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        let first = TerminalPaneDescriptor(id: Self.paneID(131), cwd: fixture.homeURL.path)
+        let second = TerminalPaneDescriptor(id: Self.paneID(132), cwd: fixture.homeURL.path)
+        let tab = try TerminalTab(
+            id: Self.tabID(131), title: "Shell layout", titleOverride: "Restored layout",
+            root: .split(
+                id: Self.uuid(133), axis: .vertical, ratio: 0.37,
+                first: .pane(first.id), second: .pane(second.id)
+            ),
+            paneDescriptors: [first, second], activePaneID: second.id
+        )
+        let workspace = Workspace(
+            id: Self.workspaceID(131), name: "Shell layout", tabs: [tab], activeTabID: tab.id
+        )
+        let state = ApplicationState(
+            workspaceStore: try WorkspaceStore(
+                workspaces: [workspace], activeWorkspaceID: workspace.id
+            )
+        )
+        let runtimeOnly: [String: Any] = [
+            "taskID": Self.uuid(139).uuidString,
+            "owner": "agent",
+            "policy": "close-on-success",
+            "executable": "/fixture/task13-never-restore-executable",
+            "arguments": ["task13-never-restore-argv"],
+            "output": "task13-never-restore-output",
+            "sessionID": "task13-never-restore-owner-session",
+            "grant": "task13-never-restore-grant",
+        ]
+        var object = try jsonObject(makeEncoder().encode(state))
+        object["terminalAutomation"] = runtimeOnly
+        var workspaces = try #require(object["workspaces"] as? [[String: Any]])
+        var tabs = try #require(workspaces[0]["tabs"] as? [[String: Any]])
+        tabs[0]["managedTasks"] = [runtimeOnly]
+        var panes = try #require(tabs[0]["paneDescriptors"] as? [[String: Any]])
+        for index in panes.indices {
+            panes[index].merge(runtimeOnly) { _, injected in injected }
+        }
+        tabs[0]["paneDescriptors"] = panes
+        workspaces[0]["tabs"] = tabs
+        object["workspaces"] = workspaces
+        let injectedBytes = try JSONSerialization.data(withJSONObject: object)
+
+        // WHY: This is hostile decode-input coverage, not live managed-task serialization
+        // or proof of a fresh process launch. Runtime fields have no place in this schema.
+        let decoded = try StateMigration.decode(injectedBytes)
+        #expect(decoded == state)
+        let restoredTab = try #require(decoded.workspaceStore.tab(id: tab.id))
+        #expect(restoredTab.root == tab.root)
+        #expect(restoredTab.activePaneID == second.id)
+        #expect(restoredTab.titleOverride == "Restored layout")
+        #expect(restoredTab.paneDescriptors == [first, second])
+        #expect(
+            restoredTab.paneDescriptors.allSatisfy {
+                $0.startupCommand == .shell && $0.agentResumeBinding == nil
+            })
+
+        try fixture.makeStore().saveNow(decoded)
+        let savedBytes = try Data(contentsOf: fixture.stateURL)
+        let serialized = String(decoding: savedBytes, as: UTF8.self)
+        for sentinel in [
+            Self.uuid(139).uuidString, "close-on-success", "task13-never-restore-executable",
+            "task13-never-restore-argv", "task13-never-restore-output",
+            "task13-never-restore-owner-session", "task13-never-restore-grant",
+        ] {
+            #expect(!serialized.contains(sentinel))
+        }
+        #expect(savedBytes == (try makeEncoder().encode(state)))
+        #expect(try fixture.makeStore().load() == state)
+        let savedObject = try jsonObject(savedBytes)
+        let savedWorkspaces = try #require(savedObject["workspaces"] as? [[String: Any]])
+        let savedTabs = try #require(savedWorkspaces[0]["tabs"] as? [[String: Any]])
+        let savedPanes = try #require(savedTabs[0]["paneDescriptors"] as? [[String: Any]])
+        for pane in savedPanes {
+            #expect(Set(pane.keys) == ["id", "cwd", "startupCommand"])
+            let startup = try #require(pane["startupCommand"] as? [String: String])
+            #expect(startup == ["kind": "shell"])
+        }
+    }
+
+    @Test
     func decodingIgnoresUnknownFieldsThroughoutMigratedVersionOneSnapshot() throws {
         var object = try jsonObject(Data(Self.versionOneFixture.utf8))
         object["futureTopLevel"] = true

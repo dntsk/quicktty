@@ -255,17 +255,18 @@ final class AgentResumeRuntime {
         fail(state, key: key, code: .surfaceCreation)
     }
 
+    @discardableResult
     func register(
         _ reference: AgentResumeAttemptReference,
         adapterID: AgentAdapterID,
         sessionID: String
-    ) {
+    ) -> Bool {
         guard let key = matchingKey(reference), var state = attempts[key],
             state.attempt.claimKey
                 == AgentResumeClaimKey(adapterID: adapterID, sessionID: sessionID),
             state.phase == .restoring || state.phase == .unverified
         else {
-            return
+            return false
         }
 
         state.phase = .registeredPendingStability
@@ -279,6 +280,7 @@ final class AgentResumeRuntime {
         }
         attempts[key] = state
         releaseExpiredClaimIfNeeded(for: key)
+        return true
     }
 
     func unregister(

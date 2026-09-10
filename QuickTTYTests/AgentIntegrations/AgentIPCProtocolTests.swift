@@ -372,11 +372,23 @@ struct AgentInvocationPayloadTests {
 
     @Test
     func validatesInvocationBoundaries() throws {
+        #expect(AgentInvocationPayloadCodec.maximumPayloadSize == 65_536)
+
+        let boundedArgument = String(repeating: "a", count: 128)
         _ = try AgentInvocationPayload(
             executable: "/" + String(repeating: "x", count: 4_095),
-            arguments: Array(repeating: String(repeating: "a", count: 512), count: 64),
+            arguments: Array(repeating: boundedArgument, count: 255),
             workingDirectory: "/" + String(repeating: "w", count: 4_095)
         )
+        _ = try AgentInvocationPayload(
+            executable: "/bin/tool",
+            arguments: Array(repeating: boundedArgument, count: 256)
+        )
+        _ = try AgentInvocationPayload(
+            executable: "/bin/tool",
+            arguments: Array(repeating: String(repeating: "x", count: 4_096), count: 8)
+        )
+
         #expect(throws: AgentInvocationPayloadError.invalidExecutable) {
             try AgentInvocationPayload(executable: "relative", arguments: [])
         }
@@ -394,7 +406,9 @@ struct AgentInvocationPayloadTests {
         }
         #expect(throws: AgentInvocationPayloadError.invalidArguments) {
             try AgentInvocationPayload(
-                executable: "/bin/tool", arguments: Array(repeating: "", count: 65))
+                executable: "/bin/tool",
+                arguments: Array(repeating: "", count: 257)
+            )
         }
         #expect(throws: AgentInvocationPayloadError.invalidArguments) {
             try AgentInvocationPayload(
@@ -408,7 +422,7 @@ struct AgentInvocationPayloadTests {
         #expect(throws: AgentInvocationPayloadError.invalidArguments) {
             try AgentInvocationPayload(
                 executable: "/bin/tool",
-                arguments: Array(repeating: String(repeating: "x", count: 513), count: 64)
+                arguments: Array(repeating: String(repeating: "x", count: 4_096), count: 8) + ["x"]
             )
         }
         #expect(throws: AgentInvocationPayloadError.invalidWorkingDirectory) {

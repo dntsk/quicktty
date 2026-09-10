@@ -7,12 +7,38 @@ enum SplitFocusDirection: String, Codable, Equatable, Sendable {
     case down
 }
 
+enum SplitInsertionSide: Equatable, Sendable {
+    case first
+    case second
+}
+
+struct SplitPlacement: Equatable, Sendable {
+    let axis: SplitAxis
+    let insertionSide: SplitInsertionSide
+}
+
+extension TerminalSplitDirection {
+    var splitPlacement: SplitPlacement {
+        switch self {
+        case .left:
+            SplitPlacement(axis: .horizontal, insertionSide: .first)
+        case .right:
+            SplitPlacement(axis: .horizontal, insertionSide: .second)
+        case .up:
+            SplitPlacement(axis: .vertical, insertionSide: .first)
+        case .down:
+            SplitPlacement(axis: .vertical, insertionSide: .second)
+        }
+    }
+}
+
 enum SplitCommand: Equatable, Sendable {
     case split(
         workspaceID: WorkspaceID,
         tabID: TabID,
         paneID: PaneID,
         axis: SplitAxis,
+        insertionSide: SplitInsertionSide = .second,
         newPane: TerminalPaneDescriptor,
         ratio: Double
     )
@@ -43,6 +69,7 @@ enum SplitDelta: Equatable, Sendable {
         sourcePaneID: PaneID,
         newPane: TerminalPaneDescriptor,
         axis: SplitAxis,
+        insertionSide: SplitInsertionSide = .second,
         ratio: Double,
         root: SplitNode,
         activePaneID: PaneID

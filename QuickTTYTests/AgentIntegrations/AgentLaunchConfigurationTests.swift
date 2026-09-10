@@ -220,6 +220,240 @@ struct AgentLaunchConfigurationTests {
     }
 
     @Test
+    func executableInvocationAccepts256ArgumentsWithinExistingByteBounds() throws {
+        let boundedArgument = String(repeating: "a", count: 128)
+        _ = try ExecutableInvocation(
+            executablePath: "/bin/agent",
+            arguments: Array(repeating: boundedArgument, count: 255),
+            workingDirectory: "/tmp"
+        )
+        _ = try ExecutableInvocation(
+            executablePath: "/bin/agent",
+            arguments: Array(repeating: boundedArgument, count: 256),
+            workingDirectory: "/tmp"
+        )
+        _ = try ExecutableInvocation(
+            executablePath: "/bin/agent",
+            arguments: Array(repeating: String(repeating: "x", count: 4_096), count: 8),
+            workingDirectory: "/tmp"
+        )
+
+        #expect(throws: ExecutableInvocationValidationError.invalidInvocation) {
+            try ExecutableInvocation(
+                executablePath: "/bin/agent",
+                arguments: Array(repeating: "", count: 257),
+                workingDirectory: "/tmp"
+            )
+        }
+        #expect(throws: ExecutableInvocationValidationError.invalidInvocation) {
+            try ExecutableInvocation(
+                executablePath: "/bin/agent",
+                arguments: [String(repeating: "x", count: 4_097)],
+                workingDirectory: "/tmp"
+            )
+        }
+        #expect(throws: ExecutableInvocationValidationError.invalidInvocation) {
+            try ExecutableInvocation(
+                executablePath: "/bin/agent",
+                arguments: Array(repeating: String(repeating: "x", count: 4_096), count: 8)
+                    + ["x"],
+                workingDirectory: "/tmp"
+            )
+        }
+    }
+
+    @Test
+    func terminalTaskLaunchUsesOnlyFixedHelperCommandAndAppOwnedEnvironment() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY Task's Launch Test-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let helperURL = temporaryDirectory.appending(path: "quicktty")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: helperURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: helperURL.path
+        )
+
+        let targetDirectory = temporaryDirectory.appending(
+            path: "User's Agent Tools", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: targetDirectory, withIntermediateDirectories: true)
+        let executableURL = targetDirectory.appending(path: "$(agent);echo")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: executableURL.path)
+
+        let launch = try TerminalControlLaunch(
+            executable: executableURL.path,
+            arguments: ["$(touch /tmp/injected)", "; echo injected", "line\nbreak", "猫"],
+            cwd: "/tmp/User's Project $(pwd);echo"
+        )
+        let helperPath = helperURL.path
+        let expectedCommand =
+            "'" + helperPath.replacingOccurrences(of: "'", with: "'\"'\"'")
+            + "' internal launch"
+
+        let configuration = try TerminalTaskLaunchConfiguration(
+            launch: launch,
+            bundledHelperPath: helperPath,
+            executableSearchPath: "/app/bin:/usr/bin"
+        )
+
+        #expect(configuration.command == expectedCommand)
+        #expect(configuration.helperPath == helperPath)
+        #expect(GhosttySurfaceConfiguration().managedHelperPath == nil)
+        let managed = GhosttySurfaceConfiguration(managedHelperPath: configuration.helperPath)
+        #expect(managed.managedHelperPath == helperPath)
+        #expect(managed.environment.isEmpty)
+        for value in [launch.executable, launch.cwd] + launch.arguments {
+            #expect(!configuration.command.contains(value))
+        }
+        #expect(
+            Set(configuration.environment.keys)
+                == [
+                    "PATH",
+                    AgentInvocationPayloadEnvironment.payloadKey,
+                    AgentInvocationPayloadEnvironment.helperKey,
+                ]
+        )
+        #expect(configuration.environment["PATH"] == "/app/bin:/usr/bin")
+        #expect(
+            configuration.environment[AgentInvocationPayloadEnvironment.helperKey] == helperPath)
+        for key in [
+            "QUICKTTY_INSTANCE_ID",
+            "QUICKTTY_PANE_ID",
+            "QUICKTTY_PANE_TOKEN",
+            "QUICKTTY_AGENT_SOCKET",
+            "QUICKTTY_CONTROL_SOCKET",
+        ] {
+            #expect(configuration.environment[key] == nil)
+        }
+
+        let encodedPayload = try #require(
+            configuration.environment[AgentInvocationPayloadEnvironment.payloadKey]
+        )
+        #expect(
+            try AgentInvocationPayloadCodec.decodeBase64(encodedPayload)
+                == AgentInvocationPayload(
+                    executable: launch.executable,
+                    arguments: launch.arguments,
+                    workingDirectory: launch.cwd
+                )
+        )
+    }
+
+    @Test
+    func terminalTaskLaunchRejectsInvalidBundledHelperPaths() throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory.appending(
+            path: "QuickTTY-Invalid-Helper-\(UUID().uuidString)",
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let nonExecutableURL = temporaryDirectory.appending(path: "non-executable")
+        try Data("not executable".utf8).write(to: nonExecutableURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: nonExecutableURL.path
+        )
+
+        // WHY: An invalid helper must retain precedence even when the target is also missing.
+        let launch = try TerminalControlLaunch(
+            executable: temporaryDirectory.appending(path: "missing-target").path,
+            arguments: [],
+            cwd: "/tmp"
+        )
+        let nonexistentPath = temporaryDirectory.appending(path: "missing").path
+        let invalidPaths = [
+            "quicktty",
+            temporaryDirectory.path + "/./quicktty",
+            temporaryDirectory.path + "//quicktty",
+            temporaryDirectory.path + "/quicktty/",
+            "/bad\nquicktty",
+            nonexistentPath,
+            nonExecutableURL.path,
+        ]
+
+        for helperPath in invalidPaths {
+            #expect(throws: AgentLaunchConfigurationError.invalidHelperPath) {
+                try TerminalTaskLaunchConfiguration(
+                    launch: launch,
+                    bundledHelperPath: helperPath
+                )
+            }
+        }
+    }
+
+    @Test
+    func terminalTaskLaunchPreflightsActualExecutableFilesAndSymlinks() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory.appending(
+            path: "QuickTTY-Target-Preflight-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let executable = directory.appending(path: "executable")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let nonExecutable = directory.appending(path: "non-executable")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: nonExecutable)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: nonExecutable.path)
+        let searchableDirectory = directory.appending(
+            path: "searchable", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: searchableDirectory, withIntermediateDirectories: true)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: searchableDirectory.path)
+        let missing = directory.appending(path: "missing")
+        let executableLink = directory.appending(path: "executable-link")
+        try fileManager.createSymbolicLink(at: executableLink, withDestinationURL: executable)
+        let directoryLink = directory.appending(path: "directory-link")
+        try fileManager.createSymbolicLink(
+            at: directoryLink, withDestinationURL: searchableDirectory)
+        let danglingLink = directory.appending(path: "dangling-link")
+        try fileManager.createSymbolicLink(at: danglingLink, withDestinationURL: missing)
+        let nonExecutableLink = directory.appending(path: "non-executable-link")
+        try fileManager.createSymbolicLink(at: nonExecutableLink, withDestinationURL: nonExecutable)
+
+        try #require(fileManager.isExecutableFile(atPath: executable.path))
+        try #require(fileManager.isExecutableFile(atPath: searchableDirectory.path))
+        try #require(!fileManager.isExecutableFile(atPath: nonExecutable.path))
+        try #require(!fileManager.fileExists(atPath: missing.path))
+        for target in [
+            missing, nonExecutable, searchableDirectory, directoryLink, danglingLink,
+            nonExecutableLink,
+        ] {
+            let launch = try TerminalControlLaunch(
+                executable: target.path, arguments: [], cwd: directory.path)
+            #expect(throws: AgentLaunchConfigurationError.invalidPayload) {
+                try TerminalTaskLaunchConfiguration(
+                    launch: launch, bundledHelperPath: executable.path)
+            }
+        }
+        for target in [executable, executableLink] {
+            let launch = try TerminalControlLaunch(
+                executable: target.path, arguments: ["literal argument"], cwd: directory.path)
+            let configuration = try TerminalTaskLaunchConfiguration(
+                launch: launch, bundledHelperPath: executable.path)
+            let payload = try AgentInvocationPayloadCodec.decodeBase64(
+                #require(configuration.environment[AgentInvocationPayloadEnvironment.payloadKey]))
+            #expect(payload.executable == target.path)
+            #expect(payload.arguments == launch.arguments)
+            #expect(payload.workingDirectory == directory.path)
+        }
+    }
+
+    @Test
     func launchPayloadRemainsOutsidePersistedApplicationState() throws {
         let state = ApplicationState()
         let encoder = JSONEncoder()

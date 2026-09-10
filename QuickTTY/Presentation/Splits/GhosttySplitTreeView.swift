@@ -94,6 +94,7 @@ struct GhosttySplitTreeCallbacks {
     let onCloseUnavailablePane: (PaneID) -> Void
     let onRetryAgentResume: (PaneID) -> Void
     let onForgetAgentResume: (PaneID) -> Void
+    let onReturnControlToAgent: (UUID) -> Void
 
     init(
         onResize: @escaping (UUID, Double) -> Void,
@@ -101,7 +102,8 @@ struct GhosttySplitTreeCallbacks {
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
         onCloseUnavailablePane: @escaping (PaneID) -> Void,
         onRetryAgentResume: @escaping (PaneID) -> Void = { _ in },
-        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in }
+        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in },
+        onReturnControlToAgent: @escaping (UUID) -> Void = { _ in }
     ) {
         self.onResize = onResize
         self.onEqualize = onEqualize
@@ -109,6 +111,7 @@ struct GhosttySplitTreeCallbacks {
         self.onCloseUnavailablePane = onCloseUnavailablePane
         self.onRetryAgentResume = onRetryAgentResume
         self.onForgetAgentResume = onForgetAgentResume
+        self.onReturnControlToAgent = onReturnControlToAgent
     }
 
     func resize(_ splitID: UUID, ratio: Double) {
@@ -142,6 +145,7 @@ struct GhosttySplitTreeView: View {
     private let surfaces: [PaneID: GhosttySurfaceView]
     private let failures: [PaneID: SurfaceFailurePresentation]
     private let agentResumePresentations: [PaneID: AgentResumePresentation]
+    private(set) var terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation]
     private let activePaneID: PaneID?
     @ObservedObject private var presentationState: WorkspacePresentationState
     private let callbacks: GhosttySplitTreeCallbacks
@@ -151,6 +155,7 @@ struct GhosttySplitTreeView: View {
         surfaces: [PaneID: GhosttySurfaceView],
         failures: [PaneID: SurfaceFailurePresentation],
         agentResumePresentations: [PaneID: AgentResumePresentation] = [:],
+        terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] = [:],
         activePaneID: PaneID? = nil,
         presentationState: WorkspacePresentationState = WorkspacePresentationState(),
         onResize: @escaping (UUID, Double) -> Void,
@@ -158,12 +163,14 @@ struct GhosttySplitTreeView: View {
         onRetryUnavailablePane: @escaping (PaneID) -> Void,
         onCloseUnavailablePane: @escaping (PaneID) -> Void,
         onRetryAgentResume: @escaping (PaneID) -> Void = { _ in },
-        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in }
+        onForgetAgentResume: @escaping (PaneID) -> Void = { _ in },
+        onReturnControlToAgent: @escaping (UUID) -> Void = { _ in }
     ) {
         self.root = GhosttySplitTreeDescriptor(root: root)
         self.surfaces = surfaces
         self.failures = failures
         self.agentResumePresentations = agentResumePresentations
+        self.terminalAutomationPresentations = terminalAutomationPresentations
         self.activePaneID = activePaneID
         self.presentationState = presentationState
         callbacks = GhosttySplitTreeCallbacks(
@@ -172,8 +179,15 @@ struct GhosttySplitTreeView: View {
             onRetryUnavailablePane: onRetryUnavailablePane,
             onCloseUnavailablePane: onCloseUnavailablePane,
             onRetryAgentResume: onRetryAgentResume,
-            onForgetAgentResume: onForgetAgentResume
+            onForgetAgentResume: onForgetAgentResume,
+            onReturnControlToAgent: onReturnControlToAgent
         )
+    }
+
+    mutating func updateTerminalAutomationPresentations(
+        _ presentations: [PaneID: TerminalAutomationPresentation]
+    ) {
+        terminalAutomationPresentations = presentations
     }
 
     var body: some View {
@@ -185,6 +199,7 @@ struct GhosttySplitTreeView: View {
             surfaces: surfaces,
             failures: failures,
             agentResumePresentations: agentResumePresentations,
+            terminalAutomationPresentations: terminalAutomationPresentations,
             palette: palette,
             activePaneID: activePaneID,
             splitAppearance: presentationState.splitAppearance,
@@ -204,6 +219,7 @@ private struct GhosttySplitNodeView: View {
     let surfaces: [PaneID: GhosttySurfaceView]
     let failures: [PaneID: SurfaceFailurePresentation]
     let agentResumePresentations: [PaneID: AgentResumePresentation]
+    let terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation]
     let palette: GhosttyChromePalette
     let activePaneID: PaneID?
     let splitAppearance: GhosttySplitAppearance
@@ -220,8 +236,12 @@ private struct GhosttySplitNodeView: View {
                 appearance: splitAppearance
             ) {
                 if let surface = surfaces[paneID] {
-                    GhosttySurfaceRepresentable(surface: surface)
-                        .id(paneID)
+                    GhosttySurfaceRepresentable(
+                        surface: surface,
+                        searchReservedTopInset: terminalAutomationPresentations[paneID] == nil
+                            ? 0 : TerminalAutomationBadgeView.searchReservedTopInset
+                    )
+                    .id(paneID)
                 } else if let failure = failures[paneID] {
                     SurfaceErrorPlaceholder(
                         presentation: failure,
@@ -248,6 +268,15 @@ private struct GhosttySplitNodeView: View {
                     .id(paneID)
                 }
             }
+            .overlay {
+                if let presentation = terminalAutomationPresentations[paneID] {
+                    TerminalAutomationBadge(
+                        presentation: presentation,
+                        palette: palette,
+                        onReturnControl: { callbacks.onReturnControlToAgent($0) }
+                    )
+                }
+            }
         case .split(let id, let direction, let ratio, let first, let second):
             SplitView(
                 direction.upstreamDirection,
@@ -262,6 +291,7 @@ private struct GhosttySplitNodeView: View {
                         surfaces: surfaces,
                         failures: failures,
                         agentResumePresentations: agentResumePresentations,
+                        terminalAutomationPresentations: terminalAutomationPresentations,
                         palette: palette,
                         activePaneID: activePaneID,
                         splitAppearance: splitAppearance,
@@ -275,6 +305,7 @@ private struct GhosttySplitNodeView: View {
                         surfaces: surfaces,
                         failures: failures,
                         agentResumePresentations: agentResumePresentations,
+                        terminalAutomationPresentations: terminalAutomationPresentations,
                         palette: palette,
                         activePaneID: activePaneID,
                         splitAppearance: splitAppearance,
@@ -328,10 +359,18 @@ private struct GhosttySplitLeafView<Content: View>: View {
 @MainActor
 private struct GhosttySurfaceRepresentable: NSViewRepresentable {
     let surface: GhosttySurfaceView
+    let searchReservedTopInset: CGFloat
 
     func makeNSView(context _: Context) -> GhosttySurfaceView {
-        surface
+        surface.setSearchReservedTopInset(searchReservedTopInset)
+        return surface
     }
 
-    func updateNSView(_: GhosttySurfaceView, context _: Context) {}
+    func updateNSView(_ view: GhosttySurfaceView, context _: Context) {
+        view.setSearchReservedTopInset(searchReservedTopInset)
+    }
+
+    static func dismantleNSView(_ view: GhosttySurfaceView, coordinator _: ()) {
+        view.setSearchReservedTopInset(0)
+    }
 }

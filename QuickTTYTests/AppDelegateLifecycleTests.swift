@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import QuickTTY
@@ -138,6 +139,7 @@ private final class PaneNavigationMenuActionTarget: NSObject {
     }
 }
 
+@Suite(.serialized, .ghosttyRuntime)
 @MainActor
 struct AppDelegateLifecycleTests {
     @Test
@@ -397,6 +399,277 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func controlListenerFailurePreservesLiveLifecycleAndOmitsControlEnvironment() async throws {
+        let base = "/tmp/qtt-control-start-\(UUID().uuidString)"
+        guard mkdir(base, 0o700) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = rmdir(base) }
+        let router = AgentMessageRouter()
+        let actions = AgentLifecycleActionRouter()
+        let controlRouter = TerminalControlMessageRouter()
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: base, credentialProvider: router.credential
+        ) { await router.route($0) }
+        let control = TerminalControlSocketServer(
+            temporaryBaseDirectory: "relative", credentialProvider: controlRouter.credential
+        ) { await controlRouter.route($0, context: $1) }
+        defer {
+            server.stopImmediately()
+            control.stopImmediately()
+        }
+        var failureCount = 0
+        let controller = try AppDelegate.startAgentSubsystem(
+            server: server, messageRouter: router, lifecycleActionRouter: actions,
+            controlServer: control, controlRouter: controlRouter,
+            onControlFailure: { _ in failureCount += 1 },
+            makeController: { lifecyclePath, controlPath in
+                #expect(controlPath == nil)
+                return try AgentSessionController(
+                    socketPath: lifecyclePath, helperPath: "/bin/cat",
+                    controlSocketPath: controlPath,
+                    onAction: { _ in true })
+            }
+        )
+        let pane = PaneID()
+        let environment = try #require(controller.register(paneID: pane))
+        let lifecyclePath = try #require(server.socketPath)
+        #expect(failureCount == 1)
+        #expect(control.socketPath == nil)
+        #expect(environment["QUICKTTY_CONTROL_SOCKET"] == nil)
+        let message = AgentIPCMessage(
+            event: .register(
+                try AgentIPCRegisterPayload(
+                    identity: AgentIPCIdentity(
+                        instanceID: controller.instanceID, paneID: pane.rawValue,
+                        paneToken: #require(environment["QUICKTTY_PANE_TOKEN"]), adapterID: "claude"
+                    ),
+                    sessionID: "live-session", cwd: "/tmp", metadata: [:])))
+        #expect(
+            try await Task.detached {
+                try AgentSocketClient.send(message, to: lifecyclePath)
+            }.value)
+        await server.stop()
+        await control.stop()
+    }
+
+    @Test
+    func controllerFailureAfterBothListenersStartedUnlinksOnlyOwnedSockets() async throws {
+        enum ExpectedFailure: Error { case controller }
+        let base = "/tmp/qtt-control-rollback-\(UUID().uuidString)"
+        guard mkdir(base, 0o700) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = rmdir(base) }
+        let sentinel = URL(fileURLWithPath: base).appending(path: "unowned")
+        try Data("preserve".utf8).write(to: sentinel)
+        defer { try? FileManager.default.removeItem(at: sentinel) }
+        let router = AgentMessageRouter()
+        let actions = AgentLifecycleActionRouter()
+        let controlRouter = TerminalControlMessageRouter()
+        let server = AgentSocketServer(temporaryBaseDirectory: base) { _ in true }
+        let control = TerminalControlSocketServer(
+            temporaryBaseDirectory: base, credentialProvider: controlRouter.credential
+        ) { await controlRouter.route($0, context: $1) }
+        defer {
+            server.stopImmediately()
+            control.stopImmediately()
+        }
+        var paths: [String] = []
+        #expect(throws: ExpectedFailure.controller) {
+            try AppDelegate.startAgentSubsystem(
+                server: server, messageRouter: router, lifecycleActionRouter: actions,
+                controlServer: control, controlRouter: controlRouter,
+                onControlFailure: { _ in Issue.record("Unexpected control startup failure") },
+                makeController: { lifecyclePath, controlPath -> AgentSessionController in
+                    paths = [lifecyclePath, try #require(controlPath)]
+                    throw ExpectedFailure.controller
+                }
+            )
+        }
+        #expect(paths.count == 2)
+        #expect(paths.allSatisfy { access($0, F_OK) != 0 })
+        await server.stop()
+        await control.stop()
+        #expect(
+            paths.allSatisfy {
+                access(URL(fileURLWithPath: $0).deletingLastPathComponent().path, F_OK) != 0
+            })
+        #expect(try Data(contentsOf: sentinel) == Data("preserve".utf8))
+    }
+
+    @Test(arguments: ["ready", "rotate", "revoke", "freeze", "disable", "waiting", "permission"])
+    func authenticatedControlFrameCannotCrossCredentialOrRouterRetirement(
+        transition: String
+    ) async throws {
+        let base = "/tmp/qtt-control-race-\(UUID().uuidString)"
+        guard mkdir(base, 0o700) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = rmdir(base) }
+        let lifecycleRouter = AgentMessageRouter()
+        let actionRouter = AgentLifecycleActionRouter()
+        let controlRouter = TerminalControlMessageRouter()
+        let dispatchRouter =
+            transition == "waiting" ? TerminalControlMessageRouter() : controlRouter
+        let reached = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let retainedContext = Mutex<TerminalControlRequestContext?>(nil)
+        let server = AgentSocketServer(
+            temporaryBaseDirectory: base, credentialProvider: lifecycleRouter.credential
+        ) { await lifecycleRouter.route($0) }
+        let control = TerminalControlSocketServer(
+            temporaryBaseDirectory: base, credentialProvider: controlRouter.credential
+        ) { request, context in
+            // WHY: This gate is after real frame authentication, before the main-actor hop.
+            retainedContext.withLock { $0 = dispatchRouter.requestContext(context) }
+            if transition != "permission" {
+                reached.signal()
+                _ = await Self.waitForControlGate(release)
+            }
+            return await dispatchRouter.route(request, context: context)
+        }
+        defer {
+            release.signal()
+            control.stopImmediately()
+            server.stopImmediately()
+        }
+        let controller = try AppDelegate.startAgentSubsystem(
+            server: server, messageRouter: lifecycleRouter, lifecycleActionRouter: actionRouter,
+            controlServer: control, controlRouter: controlRouter,
+            onControlFailure: { _ in Issue.record("Unexpected control startup failure") },
+            makeController: { path, controlPath in
+                try AgentSessionController(
+                    socketPath: path, helperPath: "/bin/cat", controlSocketPath: controlPath,
+                    onAction: actionRouter.route)
+            }
+        )
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        var promptCount = 0
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat"),
+            agentSessionController: controller,
+            terminalAutomationPermissionPresenter: { _ in
+                promptCount += 1
+                if transition == "permission" {
+                    reached.signal()
+                    _ = await Self.waitForControlGate(release)
+                }
+                return .allowed
+            }
+        )
+        defer { coordinator.prepareForApplicationTermination() }
+        actionRouter.install(coordinator)
+        let unknown = try TerminalControlPreflight(
+            instanceID: controller.instanceID, paneID: UUID(),
+            nonce: Data(repeating: 1, count: TerminalControlProtocol.nonceSize))
+        #expect(controlRouter.credential(for: unknown) == nil)
+        controlRouter.install(controller, coordinator: coordinator)
+        try coordinator.start()
+        let pane = try #require(coordinator.activeSurfaceForTesting?.paneID)
+        let binding = try AgentResumeBinding(
+            adapterID: AgentAdapterID(rawValue: "claude"), sessionID: "old-session",
+            workingDirectory: "/tmp", registeredAt: Date(), launchMetadata: [:],
+            restoreState: .active)
+        #expect(
+            coordinator.handleAgentSessionLifecycleAction(.register(paneID: pane, binding: binding))
+        )
+        let environment = try #require(controller.environment(for: pane))
+        let preflight = try TerminalControlPreflight(
+            instanceID: controller.instanceID, paneID: pane.rawValue,
+            nonce: Data(repeating: 3, count: TerminalControlProtocol.nonceSize))
+        #expect(controlRouter.credential(for: preflight) != nil)
+        if transition == "waiting" {
+            #expect(dispatchRouter.credential(for: preflight) == nil)
+        }
+        let client = try TerminalControlSocketClient(
+            socketPath: #require(environment["QUICKTTY_CONTROL_SOCKET"]),
+            instanceID: controller.instanceID, paneID: pane.rawValue,
+            paneToken: #require(environment["QUICKTTY_PANE_TOKEN"]),
+            nonceGenerator: { Data(repeating: 2, count: TerminalControlProtocol.nonceSize) },
+            timeoutMilliseconds: 5_000)
+        let request = try TerminalControlRequest(operation: .list)
+        let sending = Task.detached { try client.send(request) }
+        defer { sending.cancel() }
+        try #require(await Self.waitForControlGate(reached))
+        switch transition {
+        case "rotate":
+            _ = controller.rotate(paneID: pane)
+            let replacement = try AgentResumeBinding(
+                adapterID: binding.adapterID, sessionID: "new-session",
+                workingDirectory: "/tmp", registeredAt: Date(), launchMetadata: [:],
+                restoreState: .active)
+            #expect(
+                coordinator.handleAgentSessionLifecycleAction(
+                    .replace(
+                        paneID: pane, previousSessionID: binding.sessionID, binding: replacement)))
+        case "revoke": controller.revoke(paneID: pane)
+        case "freeze": controller.freeze()
+        case "permission":
+            controlRouter.disable()
+            coordinator.freezeTerminalControlForApplicationTermination()
+        case "disable":
+            controlRouter.disable()
+            controlRouter.install(controller, coordinator: coordinator)
+        default: break
+        }
+        #expect(retainedContext.withLock { $0?.isActive } == (transition == "ready"))
+        if ["revoke", "freeze", "disable", "permission"].contains(transition) {
+            #expect(controlRouter.credential(for: preflight) == nil)
+        }
+        let store = coordinator.workspaceStoreForPersistence
+        release.signal()
+        let response = try await sending.value
+        if transition == "ready" {
+            guard case .list(_, let tasks) = response.result else {
+                Issue.record("Ready router did not deliver the request")
+                return
+            }
+            #expect(tasks.isEmpty)
+        } else {
+            guard case .failure(let failure) = response.result else {
+                Issue.record("Retired request unexpectedly succeeded")
+                return
+            }
+            #expect(failure.code == .cancelled)
+        }
+        #expect(promptCount == (["ready", "permission"].contains(transition) ? 1 : 0))
+        #expect(coordinator.managedTaskCountForTesting == 0)
+        #expect(coordinator.workspaceStoreForPersistence == store)
+        #expect(bridge.activeSurfaceCount == 1)
+        if transition != "ready" {
+            #expect(retainedContext.withLock { $0?.isActive } == false)
+        }
+        if transition == "rotate" {
+            let staleFailure = await Task.detached { () -> TerminalControlSocketClientError? in
+                do {
+                    _ = try client.send(request)
+                    return nil
+                } catch let error as TerminalControlSocketClientError { return error } catch {
+                    return .transportFailure
+                }
+            }.value
+            #expect(staleFailure == .serverAuthenticationFailed)
+        }
+        controlRouter.disable()
+        #expect(retainedContext.withLock { $0?.isActive } == false)
+        coordinator.freezeTerminalControlForApplicationTermination()
+        controller.freeze()
+        await control.stop()
+        await server.stop()
+    }
+
+    nonisolated private static func waitForControlGate(_ gate: DispatchSemaphore) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: gate.wait(timeout: .now() + 3) == .success)
+            }
+        }
+    }
+
+    @Test
     func terminationPolicyKeepsQuakeAliveAndPreservesNormalBehavior() {
         #expect(
             AppDelegate.shouldTerminateAfterLastWindowClosed(
@@ -636,6 +909,9 @@ struct AppDelegateLifecycleTests {
         var scheduledState: ApplicationState?
 
         AppDelegate.performApplicationTermination(
+            freezeTerminalControlDelivery: {
+                events.append("disable control and revoke grants")
+            },
             freezeAgentLifecycleDelivery: {
                 events.append("freeze router and controller")
             },
@@ -656,6 +932,9 @@ struct AppDelegateLifecycleTests {
             stopAgentSocket: {
                 events.append("stop socket immediately")
             },
+            stopControlSocket: {
+                events.append("stop control socket immediately")
+            },
             prepareForTermination: {
                 events.append("stop configuration")
                 events.append("detach surfaces")
@@ -668,11 +947,13 @@ struct AppDelegateLifecycleTests {
         #expect(
             events
                 == [
+                    "disable control and revoke grants",
                     "freeze router and controller",
                     "snapshot",
                     "schedule and flush",
                     "save failed",
                     "stop socket immediately",
+                    "stop control socket immediately",
                     "stop configuration",
                     "detach surfaces",
                     "shutdown",
