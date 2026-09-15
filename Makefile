@@ -91,7 +91,7 @@ agent-session-installer-contract:
 	./scripts/tests/agent-session-installer-test.sh
 
 site-check:
-	/usr/bin/python3 scripts/check-site.py
+	/usr/bin/env -u DEVELOPER_DIR /usr/bin/python3 scripts/check-site.py
 
 lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check
 	swift format lint --recursive $(SWIFT_SOURCES)

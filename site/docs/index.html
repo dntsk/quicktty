@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Install, configure, and use QuickTTY workspaces, splits, Quake mode, broadcast input, search, shortcuts, and coding-agent integrations.">
+    <meta name="description" content="QuickTTY guides for installation, configuration, workspaces, shortcuts, coding-agent integrations, and permission-scoped terminal control.">
     <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/docs/">
     <link rel="icon" href="/assets/app-icon.png">
@@ -13,7 +13,6 @@
   </head>
   <body class="content-page">
     <a class="skip-link" href="#main-content">Skip to content</a>
-
     <header class="site-header">
       <a class="brand" href="/" aria-label="QuickTTY home">
         <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
@@ -30,494 +29,80 @@
         <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
       </nav>
     </header>
-
     <main id="main-content">
-      <header class="page-hero shell reveal">
+      <header class="page-hero docs-hub-hero shell reveal">
         <p class="page-meta">Manual / current</p>
         <div>
           <p class="eyebrow">QuickTTY documentation</p>
-          <h1>Run the workspace your way.</h1>
-          <p class="lede">A concise guide to installation, terminal configuration, structural shortcuts, Quake access, and progress signals.</p>
+          <h1>Find the guide for the task.</h1>
+          <p class="lede">Start with the workspace, look up a command, or connect a coding agent. Each guide is focused enough to scan and complete in one pass.</p>
         </div>
       </header>
 
-      <div class="docs-layout shell">
-        <nav class="docs-sidebar" aria-label="Documentation contents">
-          <h2>Contents</h2>
-          <ol>
-            <li><a href="#getting-started">Getting Started</a></li>
-            <li><a href="#installation-updates">Installation &amp; Updates</a></li>
-            <li><a href="#configuration">Configuration</a></li>
-            <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
-            <li><a href="#tabs-splits-workspaces">Tabs, Splits &amp; Workspaces</a></li>
-            <li><a href="#quake-mode">Quake Mode</a></li>
-            <li><a href="#broadcast-input">Broadcast Input</a></li>
-            <li><a href="#search">Search</a></li>
-            <li><a href="#coding-agent-integrations">Coding Agent Integrations</a></li>
-            <li><a href="#troubleshooting">Troubleshooting</a></li>
-          </ol>
+      <section class="docs-hub shell" aria-labelledby="start-heading">
+        <div class="docs-hub-intro reveal">
+          <p class="section-index">Start here</p>
+          <h2 id="start-heading">From install to active workspace.</h2>
+          <p>Download the signed app, create your first split, then choose the focused reference you need.</p>
+          <a class="button docs-hub-primary" href="/docs/getting-started/">Get started <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="docs-route-grid">
+          <a class="docs-route docs-route-featured reveal" href="/docs/agents/">
+            <span class="docs-route-type">Guide · agents</span>
+            <strong>Coding agent integrations</strong>
+            <p>Progress, native session continuity, safe installation, and Pi setup.</p>
+            <span class="docs-route-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a class="docs-route reveal" href="/docs/agent-terminal-control/">
+            <span class="docs-route-type">Reference · Pi</span>
+            <strong>Agent terminal control</strong>
+            <p>Create panes, run tasks, read snapshots, and hand control to the user.</p>
+            <span class="docs-route-arrow" aria-hidden="true">→</span>
+          </a>
+          <a class="docs-route reveal" href="/docs/workspaces/">
+            <span class="docs-route-type">Guide · workspace</span>
+            <strong>Workspaces and terminal use</strong>
+            <p>Tabs, splits, Quake mode, broadcast input, and search.</p>
+            <span class="docs-route-arrow" aria-hidden="true">→</span>
+          </a>
+          <a class="docs-route reveal" href="/docs/shortcuts/">
+            <span class="docs-route-type">Reference · keyboard</span>
+            <strong>Keyboard shortcuts</strong>
+            <p>The complete default registry and customization rules.</p>
+            <span class="docs-route-arrow" aria-hidden="true">→</span>
+          </a>
+          <a class="docs-route reveal" href="/docs/getting-started/#configuration">
+            <span class="docs-route-type">Guide · configuration</span>
+            <strong>Configuration</strong>
+            <p>Config paths, hot reload, restore settings, and update channels.</p>
+            <span class="docs-route-arrow" aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="docs-legacy shell" aria-labelledby="legacy-heading">
+        <div>
+          <p class="section-index">Previous links</p>
+          <h2 id="legacy-heading">Looking for an old section?</h2>
+          <p>Existing bookmarks still land here. Continue to the focused page.</p>
+        </div>
+        <nav class="legacy-route-list" aria-label="Previous documentation section links">
+          <a id="getting-started" href="/docs/getting-started/#getting-started"><span>Getting Started</span><small>Install and first launch</small></a>
+          <a id="installation-updates" href="/docs/getting-started/#installation-updates"><span>Installation &amp; Updates</span><small>Channels and updates</small></a>
+          <a id="configuration" href="/docs/getting-started/#configuration"><span>Configuration</span><small>Paths and reload</small></a>
+          <a id="keyboard-shortcuts" href="/docs/shortcuts/#keyboard-shortcuts"><span>Keyboard Shortcuts</span><small>Complete reference</small></a>
+          <a id="tabs-splits-workspaces" href="/docs/workspaces/#tabs-splits-workspaces"><span>Tabs, Splits &amp; Workspaces</span><small>Workspace structure</small></a>
+          <a id="quake-mode" href="/docs/workspaces/#quake-mode"><span>Quake Mode</span><small>Presentation and access</small></a>
+          <a id="broadcast-input" href="/docs/workspaces/#broadcast-input"><span>Broadcast Input</span><small>Multi-pane input</small></a>
+          <a id="search" href="/docs/workspaces/#search"><span>Search</span><small>Find terminal text</small></a>
+          <a id="coding-agent-integrations" href="/docs/agents/#coding-agent-integrations"><span>Coding Agent Integrations</span><small>Progress, restore, and install</small></a>
+          <a id="troubleshooting" href="/docs/getting-started/#troubleshooting"><span>Troubleshooting</span><small>Common recovery steps</small></a>
         </nav>
-
-        <article class="docs-content">
-          <section id="getting-started">
-            <h2>Getting Started</h2>
-            <p>QuickTTY is a native macOS terminal workspace for Apple Silicon. It keeps tabs, binary splits, and named workspaces inside one physical window. Switching a workspace or changing between normal and Quake presentation does not restart its live shell processes.</p>
-            <h3>Requirements</h3>
-            <ul>
-              <li>macOS 15 or newer.</li>
-              <li>An Apple Silicon Mac.</li>
-              <li>A downloaded, signed, and notarized QuickTTY DMG.</li>
-            </ul>
-            <p>On first launch QuickTTY creates a <strong>Default</strong> workspace. Use the menus or default shortcuts to add tabs and split the active tab. Inactive workspaces continue running until the application exits.</p>
-          </section>
-
-          <section id="installation-updates">
-            <h2>Installation &amp; Updates</h2>
-            <ol>
-              <li><a href="https://github.com/dntsk/quicktty/releases/latest">Download the latest stable release</a>.</li>
-              <li>Open the DMG and move QuickTTY to Applications.</li>
-              <li>Launch QuickTTY. macOS can verify its Developer ID signature and notarization ticket.</li>
-            </ol>
-            <h3>Update channels</h3>
-            <p>The default <strong>stable</strong> channel reads the current GitHub latest feed and receives stable releases only. It never receives a prerelease.</p>
-            <p>The opt-in <strong>beta</strong> channel reads the versioned feed tracked in the QuickTTY repository. It is a superset of stable and offers the newest public build, whether that build is stable or beta. A newer stable can therefore follow a beta while the app remains subscribed to the beta channel.</p>
-            <pre><code>quicktty-update-channel = beta</code></pre>
-            <p>Use <strong>QuickTTY → Check for Updates…</strong> to request a check. See the <a href="/releases/">release channels page</a> for the current build.</p>
-          </section>
-
-          <section id="configuration">
-            <h2>Configuration</h2>
-            <p>The exact user configuration path is:</p>
-            <pre><code>~/.config/quicktty/config</code></pre>
-            <p>Keys prefixed with <code>quicktty-</code> configure the workspace shell. Other supported terminal keys pass to Ghostty, except top-level <code>keybind</code> assignments: QuickTTY owns keyboard command routing and clears Ghostty bindings in its generated effective configuration.</p>
-            <p>Choose <strong>QuickTTY → Open Configuration…</strong> to edit the file in a terminal tab. Valid changes hot reload without recreating terminal surfaces or shell processes. If parsing fails, the last valid configuration remains active and an inline diagnostic identifies the file and line.</p>
-            <pre><code>theme = catppuccin-mocha
-font-size = 14
-copy-on-select = clipboard
-
-quicktty-presentation-mode = normal
-quicktty-global-toggle = f12
-quicktty-quake-height = 75%
-quicktty-restore-workspaces = true
-quicktty-restore-agent-sessions = true</code></pre>
-            <p>Agent restoration requires both restore keys. It relaunches an eligible native agent by an opaque session ID into its original pane; it is not a PTY or process checkpoint. QuickTTY persists no arbitrary command or environment for restoration, and an unverified or invalid binding uses a fresh shell fallback.</p>
-            <p>The generated sibling file <code>~/.config/quicktty/.ghostty-effective-config</code> belongs to QuickTTY and should not be edited.</p>
-          </section>
-
-          <section id="keyboard-shortcuts">
-            <h2>Keyboard Shortcuts</h2>
-            <div class="primary-shortcut">
-              <div>
-                <p class="primary-shortcut-label">Primary shortcut</p>
-                <h3>Toggle Normal ↔ Quake presentation</h3>
-                <p>Switches the same live workspace between presentations without restarting shells. This is different from global <kbd>F12</kbd>, which shows or hides Quake.</p>
-              </div>
-              <div class="primary-shortcut-command">
-                <kbd>Cmd+Opt+P</kbd>
-                <code>toggle-presentation</code>
-              </div>
-            </div>
-
-            <h3>Application/global</h3>
-            <div class="shortcut-table-wrap" role="region" aria-label="Application and global default shortcuts" tabindex="0">
-              <table class="shortcut-table">
-                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
-                <tbody>
-                  <tr><td>Toggle Normal ↔ Quake</td><td><kbd>Cmd+Opt+P</kbd></td><td><code>toggle-presentation</code></td></tr>
-                  <tr><td>Show/hide Quake globally</td><td><kbd>F12</kbd></td><td><code>quicktty-global-toggle</code><span class="action-id-note">Config key, outside local action registry</span></td></tr>
-                  <tr><td>Open configuration</td><td><kbd>Cmd+Comma</kbd></td><td><code>open-config</code></td></tr>
-                  <tr><td>Quit QuickTTY</td><td><kbd>Cmd+Q</kbd></td><td><code>quit</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3>Tabs/panes</h3>
-            <div class="shortcut-table-wrap" role="region" aria-label="Tab and pane default shortcuts" tabindex="0">
-              <table class="shortcut-table">
-                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
-                <tbody>
-                  <tr><td>New tab</td><td><kbd>Cmd+T</kbd></td><td><code>new-tab</code></td></tr>
-                  <tr><td>Close pane</td><td><kbd>Cmd+W</kbd></td><td><code>close-pane</code></td></tr>
-                  <tr><td>Close tab</td><td><kbd>Cmd+Opt+W</kbd></td><td><code>close-tab</code></td></tr>
-                  <tr><td>Split right</td><td><kbd>Cmd+D</kbd></td><td><code>split-right</code></td></tr>
-                  <tr><td>Split down</td><td><kbd>Cmd+Shift+D</kbd></td><td><code>split-down</code></td></tr>
-                  <tr><td>Previous pane</td><td><kbd>Cmd+Left-Bracket</kbd></td><td><code>previous-pane</code></td></tr>
-                  <tr><td>Next pane</td><td><kbd>Cmd+Right-Bracket</kbd></td><td><code>next-pane</code></td></tr>
-                  <tr><td>Focus left</td><td><kbd>Cmd+Shift+Left</kbd></td><td><code>focus-left</code></td></tr>
-                  <tr><td>Focus right</td><td><kbd>Cmd+Shift+Right</kbd></td><td><code>focus-right</code></td></tr>
-                  <tr><td>Focus up</td><td><kbd>Cmd+Shift+Up</kbd></td><td><code>focus-up</code></td></tr>
-                  <tr><td>Focus down</td><td><kbd>Cmd+Shift+Down</kbd></td><td><code>focus-down</code></td></tr>
-                  <tr><td>Select tab 1</td><td><kbd>Cmd+1</kbd></td><td><code>select-tab-1</code></td></tr>
-                  <tr><td>Select tab 2</td><td><kbd>Cmd+2</kbd></td><td><code>select-tab-2</code></td></tr>
-                  <tr><td>Select tab 3</td><td><kbd>Cmd+3</kbd></td><td><code>select-tab-3</code></td></tr>
-                  <tr><td>Select tab 4</td><td><kbd>Cmd+4</kbd></td><td><code>select-tab-4</code></td></tr>
-                  <tr><td>Select tab 5</td><td><kbd>Cmd+5</kbd></td><td><code>select-tab-5</code></td></tr>
-                  <tr><td>Select tab 6</td><td><kbd>Cmd+6</kbd></td><td><code>select-tab-6</code></td></tr>
-                  <tr><td>Select tab 7</td><td><kbd>Cmd+7</kbd></td><td><code>select-tab-7</code></td></tr>
-                  <tr><td>Select tab 8</td><td><kbd>Cmd+8</kbd></td><td><code>select-tab-8</code></td></tr>
-                  <tr><td>Select tab 9</td><td><kbd>Cmd+9</kbd></td><td><code>select-tab-9</code></td></tr>
-                  <tr><td>Toggle broadcast</td><td><kbd>Cmd+B</kbd></td><td><code>toggle-broadcast</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3>Workspaces</h3>
-            <div class="shortcut-table-wrap" role="region" aria-label="Workspace default shortcuts" tabindex="0">
-              <table class="shortcut-table">
-                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
-                <tbody>
-                  <tr><td>Select workspace 1</td><td><kbd>Cmd+Opt+1</kbd></td><td><code>select-workspace-1</code></td></tr>
-                  <tr><td>Select workspace 2</td><td><kbd>Cmd+Opt+2</kbd></td><td><code>select-workspace-2</code></td></tr>
-                  <tr><td>Select workspace 3</td><td><kbd>Cmd+Opt+3</kbd></td><td><code>select-workspace-3</code></td></tr>
-                  <tr><td>Select workspace 4</td><td><kbd>Cmd+Opt+4</kbd></td><td><code>select-workspace-4</code></td></tr>
-                  <tr><td>Select workspace 5</td><td><kbd>Cmd+Opt+5</kbd></td><td><code>select-workspace-5</code></td></tr>
-                  <tr><td>Select workspace 6</td><td><kbd>Cmd+Opt+6</kbd></td><td><code>select-workspace-6</code></td></tr>
-                  <tr><td>Select workspace 7</td><td><kbd>Cmd+Opt+7</kbd></td><td><code>select-workspace-7</code></td></tr>
-                  <tr><td>Select workspace 8</td><td><kbd>Cmd+Opt+8</kbd></td><td><code>select-workspace-8</code></td></tr>
-                  <tr><td>Select workspace 9</td><td><kbd>Cmd+Opt+9</kbd></td><td><code>select-workspace-9</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3>Search/terminal</h3>
-            <div class="shortcut-table-wrap" role="region" aria-label="Search and terminal default shortcuts" tabindex="0">
-              <table class="shortcut-table">
-                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
-                <tbody>
-                  <tr><td>Find</td><td><kbd>Cmd+F</kbd></td><td><code>find</code></td></tr>
-                  <tr><td>Find next</td><td><kbd>Cmd+G</kbd></td><td><code>find-next</code></td></tr>
-                  <tr><td>Find previous</td><td><kbd>Cmd+Shift+G</kbd></td><td><code>find-previous</code></td></tr>
-                  <tr><td>Copy</td><td><kbd>Cmd+C</kbd></td><td><code>copy</code></td></tr>
-                  <tr><td>Paste</td><td><kbd>Cmd+V</kbd></td><td><code>paste</code></td></tr>
-                  <tr><td>Paste selection</td><td><kbd>Cmd+Shift+V</kbd></td><td><code>paste-selection</code></td></tr>
-                  <tr><td>Select all</td><td><kbd>Cmd+A</kbd></td><td><code>select-all</code></td></tr>
-                  <tr><td>Clear screen</td><td><kbd>Cmd+K</kbd></td><td><code>clear-screen</code></td></tr>
-                  <tr><td>Increase font size</td><td><kbd>Cmd+Equal</kbd></td><td><code>font-increase</code></td></tr>
-                  <tr><td>Decrease font size</td><td><kbd>Cmd+Minus</kbd></td><td><code>font-decrease</code></td></tr>
-                  <tr><td>Reset font size</td><td><kbd>Cmd+0</kbd></td><td><code>font-reset</code></td></tr>
-                  <tr><td>Scroll to top</td><td><kbd>Cmd+Home</kbd></td><td><code>scroll-top</code></td></tr>
-                  <tr><td>Scroll to bottom</td><td><kbd>Cmd+End</kbd></td><td><code>scroll-bottom</code></td></tr>
-                  <tr><td>Scroll page up</td><td><kbd>Cmd+Page-Up</kbd></td><td><code>scroll-page-up</code></td></tr>
-                  <tr><td>Scroll page down</td><td><kbd>Cmd+Page-Down</kbd></td><td><code>scroll-page-down</code></td></tr>
-                  <tr><td>Scroll to selection</td><td><kbd>Cmd+J</kbd></td><td><code>scroll-to-selection</code></td></tr>
-                  <tr><td>Extend selection left</td><td><kbd>Shift+Left</kbd></td><td><code>selection-left</code></td></tr>
-                  <tr><td>Extend selection right</td><td><kbd>Shift+Right</kbd></td><td><code>selection-right</code></td></tr>
-                  <tr><td>Extend selection up</td><td><kbd>Shift+Up</kbd></td><td><code>selection-up</code></td></tr>
-                  <tr><td>Extend selection down</td><td><kbd>Shift+Down</kbd></td><td><code>selection-down</code></td></tr>
-                  <tr><td>Extend selection page up</td><td><kbd>Shift+Page-Up</kbd></td><td><code>selection-page-up</code></td></tr>
-                  <tr><td>Extend selection page down</td><td><kbd>Shift+Page-Down</kbd></td><td><code>selection-page-down</code></td></tr>
-                  <tr><td>Extend selection to home</td><td><kbd>Shift+Home</kbd></td><td><code>selection-home</code></td></tr>
-                  <tr><td>Extend selection to end</td><td><kbd>Shift+End</kbd></td><td><code>selection-end</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3>No default shortcut</h3>
-            <p>These typed actions are available for customization but are unassigned by default.</p>
-            <div class="shortcut-table-wrap" role="region" aria-label="Actions with no default shortcut" tabindex="0">
-              <table class="shortcut-table shortcut-table-compact">
-                <thead><tr><th scope="col">Action</th><th scope="col">Action ID</th></tr></thead>
-                <tbody>
-                  <tr><td>New workspace</td><td><code>new-workspace</code></td></tr>
-                  <tr><td>Rename workspace</td><td><code>rename-workspace</code></td></tr>
-                  <tr><td>Delete workspace</td><td><code>delete-workspace</code></td></tr>
-                  <tr><td>Copy URL</td><td><code>copy-url</code></td></tr>
-                  <tr><td>Reset terminal</td><td><code>reset-terminal</code></td></tr>
-                  <tr><td>Previous prompt</td><td><code>previous-prompt</code></td></tr>
-                  <tr><td>Next prompt</td><td><code>next-prompt</code></td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <h3>Customize shortcuts</h3>
-            <p>Local commands use repeatable assignments. An action receives a chord or the literal value <code>disabled</code>:</p>
-            <pre><code>quicktty-shortcut = action-id=cmd+key
-quicktty-shortcut = action-id=disabled</code></pre>
-            <p>A chord has optional modifiers and exactly one key separated by <code>+</code>. Modifiers are <code>cmd</code>, <code>opt</code>, <code>ctrl</code>, and <code>shift</code>; canonical order is <code>cmd+opt+ctrl+shift+key</code>. Supported keys include letters, digits, F1–F20, arrows, navigation and named punctuation such as <code>left-bracket</code>, <code>minus</code>, and <code>slash</code>. A single key such as <code>f12</code> is valid.</p>
-            <h4>Assignment and conflict behavior</h4>
-            <p>Parsing starts from the built-in defaults and processes repeated <code>quicktty-shortcut</code> lines from top to bottom. For each action, the last valid assignment wins; <code>disabled</code> is a valid assignment.</p>
-            <p>An unknown action or malformed assignment reports a diagnostic without blocking other valid lines. During hot reload, an invalid assignment for a known action preserves that action’s last active value. Deleting every assignment for an action restores its built-in default.</p>
-            <p>If two local actions use the same chord, the last valid owner wins and the previous owner becomes disabled. The separately registered global Quake chord takes priority over any conflicting local action.</p>
-          </section>
-
-          <section id="tabs-splits-workspaces">
-            <h2>Tabs, Splits &amp; Workspaces</h2>
-            <h3>Tabs</h3>
-            <p>Create a tab with <kbd>Cmd+T</kbd>, select tabs 1–9 with <kbd>Cmd+1</kbd> through <kbd>Cmd+9</kbd>, and close the active pane with <kbd>Cmd+W</kbd>. Closing the last pane also closes its tab.</p>
-            <h3>Splits</h3>
-            <p>Split right with <kbd>Cmd+D</kbd> or down with <kbd>Cmd+Shift+D</kbd>. Move between panes using previous/next or directional focus commands. Splits form a resizable binary tree inside each tab.</p>
-            <h3>Workspaces</h3>
-            <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <kbd>Cmd+Opt+1</kbd> through <kbd>Cmd+Opt+9</kbd>.</p>
-            <p>QuickTTY can restore workspace descriptions, tabs, split layout, current working directories, and focus after restart. It starts new processes; it does not preserve live processes across application termination.</p>
-          </section>
-
-          <section id="quake-mode">
-            <h2>Quake Mode</h2>
-            <p>Press <kbd>Cmd+Opt+P</kbd> to switch the existing window between Normal and Quake presentations. QuickTTY reuses the same panes and live processes; no shell is restarted.</p>
-            <p>While Quake presentation is active, <kbd>F12</kbd> globally shows or hides it on the display under the pointer.</p>
-            <p>Configure startup mode, global chord, height, animation duration, padding, focus-loss behavior, and screen pinning with <code>quicktty-presentation-mode</code>, <code>quicktty-global-toggle</code>, and the related <code>quicktty-quake-*</code> keys.</p>
-            <div class="note"><strong>Focus behavior</strong>Quake mode hides after focus loss by default, except while a menu, sheet, or system dialog is active.</div>
-          </section>
-
-          <section id="broadcast-input">
-            <h2>Broadcast Input</h2>
-            <p>Toggle broadcast for the active tab with <kbd>Cmd+B</kbd>. The tab and workspace chrome show when it is active.</p>
-            <p>QuickTTY routes the original logical keyboard event to every pane in that tab, allowing each terminal to encode it for its own keyboard mode. Paste asks for confirmation once and then targets those panes. Mouse events, scrolling, resizing, and interface commands are never broadcast.</p>
-            <p>Broadcast automatically turns off when you change tab or workspace, restore the app, or encounter a target surface error.</p>
-          </section>
-
-          <section id="search">
-            <h2>Search</h2>
-            <p>Start native terminal search with <kbd>Cmd+F</kbd>. Use <kbd>Cmd+G</kbd> for the next result and <kbd>Cmd+Shift+G</kbd> for the previous result. The overlay reports the current selection and total match count from Ghostty runtime callbacks.</p>
-            <p>Search is scoped to its terminal surface. Escape always closes search, regardless of whether the query is empty. Closing the pane clears its search state.</p>
-          </section>
-
-          <section id="coding-agent-integrations">
-            <h2>Coding Agent Integrations</h2>
-            <p>QuickTTY shows standard OSC <code>9;4</code> progress as tab and workspace status. It does not infer agent identity from output, titles, prompts, or process trees.</p>
-            <h3>Native session restoration</h3>
-            <p>When <code>quicktty-restore-workspaces</code> and <code>quicktty-restore-agent-sessions</code> are both true, QuickTTY may relaunch a version-verified agent with its opaque native session ID in the original pane. This is not PTY/process checkpointing. There is no arbitrary command or environment persistence; QuickTTY performs no output/title/process/store inference, and uses a fixed bundled <code>quicktty</code> trampoline with structured argv and a bounded canonical payload. Any ineligible binding takes the fresh shell fallback.</p>
-            <p>The authenticated local socket is scoped by five app-owned pane variables: <code>QUICKTTY_PANE_ID</code>, <code>QUICKTTY_AGENT_SOCKET</code>, <code>QUICKTTY_INSTANCE_ID</code>, <code>QUICKTTY_PANE_TOKEN</code>, and <code>QUICKTTY_AGENT_HELPER</code>. On shutdown, registration freezes, credentials are cleared, and later lifecycle messages are rejected.</p>
-
-            <h4>Exact 20-entry registry</h4>
-            <div class="shortcut-table-wrap" role="region" aria-label="Agent integration registry" tabindex="0">
-              <table class="shortcut-table agent-registry-table">
-                <thead><tr><th scope="col">ID</th><th scope="col">Capability</th><th scope="col">Current policy</th></tr></thead>
-                <tbody>
-                  <tr data-agent-id="claude"><td><code>claude</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="codex"><td><code>codex</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="grok"><td><code>grok</code></td><td>blocked</td><td>Ambiguous official identity</td></tr>
-                  <tr data-agent-id="pi"><td><code>pi</code></td><td>native</td><td>Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; locally/runtime verified on current 0.84.4</td></tr>
-                  <tr data-agent-id="omp"><td><code>omp</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="campfire"><td><code>campfire</code></td><td>blocked</td><td>Not a sessionful agent</td></tr>
-                  <tr data-agent-id="amp"><td><code>amp</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="cursor"><td><code>cursor</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="gemini"><td><code>gemini</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="kiro"><td><code>kiro</code></td><td>blocked</td><td>Incompatible lifecycle generations</td></tr>
-                  <tr data-agent-id="antigravity"><td><code>antigravity</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="opencode"><td><code>opencode</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="rovo-dev"><td><code>rovo-dev</code></td><td>blocked</td><td>Missing session identity</td></tr>
-                  <tr data-agent-id="hermes"><td><code>hermes</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="copilot"><td><code>copilot</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="codebuddy"><td><code>codebuddy</code></td><td>blocked</td><td>Beta lifecycle only</td></tr>
-                  <tr data-agent-id="droid"><td><code>droid</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="qoder"><td><code>qoder</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="kimi"><td><code>kimi</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
-                  <tr data-agent-id="ollama"><td><code>ollama</code></td><td>blocked</td><td>Missing persistent session API</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <p>Totals: 11 native, 3 wrapper, and 6 blocked. Only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the integration is locally verified on current Pi <code>0.84.4</code>. Every other launch-capable version policy is unverified/documented and therefore starts a fresh shell until a verified policy and tests are added.</p>
-
-            <h4>Explicit installer</h4>
-            <pre><code>quicktty integrations status [ids...]
-quicktty integrations install [ids...] [--yes]
-quicktty integrations uninstall [ids...] [--yes]</code></pre>
-            <p>Install and uninstall always show a mutation preview and require explicit confirmation: type the literal <code>yes</code> in a TTY, or place <code>--yes</code> last for non-interactive use. Existing files receive uniquely named backups. QuickTTY tracks ownership and uninstalls only matching owned content; conflicts and changed files are not overwritten. The Agent Integrations sheet uses the same core, supports the <code>~/.local/bin/quicktty</code> launcher, and makes no silent configuration writes.</p>
-            <p>The sheet reports bounded states and redacted diagnostics without raw session IDs. Pane bindings show Active, Restoring, Unverified, or Failed. Retry rotates credentials and rechecks compatibility; Forget removes the binding and starts a fresh shell. Duplicate adapter/session claims all fail rather than selecting a winner.</p>
-
-            <h3>OSC progress</h3>
-            <p>Progress setup is independent from session restoration. Manual progress-only examples remain bundled at:</p>
-            <pre><code>/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/</code></pre>
-            <div class="note"><strong>Custom installation path</strong>If QuickTTY is installed elsewhere, replace <code>/Applications/QuickTTY.app</code> in the commands below. Always merge these examples into your existing configuration; never replace the whole configuration file.</div>
-
-            <h3>Pi</h3>
-            <p>Open <code>/settings</code> and enable <strong>Terminal progress</strong> (<code>terminal.showTerminalProgress</code>). It is off by default. No helper, hooks, or extensions are required.</p>
-            <p>Pi emits OSC <code>9;4</code> directly: <strong>working</strong> at <code>agent_start</code>, keepalive updates while working, and <strong>completed</strong> at <code>agent_end</code>.</p>
-
-            <h3>Claude Code 2.1.141+</h3>
-            <p>Claude Code command hooks have no controlling TTY. In <code>claude</code> mode, the helper emits one JSON object containing the universal <code>terminalSequence</code> field and writes nothing else to stdout.</p>
-            <h4>Configuration</h4>
-            <p>Merge the top-level <code>hooks</code> object from the bundled <code>claude-settings.example.json</code> into your existing Claude Code settings:</p>
-            <pre><code>{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "permission_prompt|idle_prompt|agent_needs_input",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
-          }
-        ]
-      }
-    ],
-    "StopFailure": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude failed"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
-          }
-        ]
-      }
-    ]
-  }
-}</code></pre>
-            <h4>Event mapping</h4>
-            <ul>
-              <li><code>UserPromptSubmit</code> → working.</li>
-              <li><code>PermissionRequest</code> → waiting.</li>
-              <li><code>Notification</code> matching <code>permission_prompt|idle_prompt|agent_needs_input</code> → waiting.</li>
-              <li><code>PostToolUse</code> and <code>PostToolUseFailure</code> → working.</li>
-              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
-              <li><code>StopFailure</code> → failed.</li>
-            </ul>
-            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
-
-            <h3>Codex</h3>
-            <p>Codex keeps its controlling TTY. In <code>codex</code> mode, the helper writes OSC directly to <code>/dev/tty</code> and writes exactly <code>{}</code> to stdout. If <code>/dev/tty</code> is unavailable, it still writes <code>{}</code> and exits successfully.</p>
-            <h4>Configuration</h4>
-            <p>Merge the top-level <code>hooks</code> object from the bundled <code>codex-hooks.example.json</code> into your existing <code>hooks.json</code>:</p>
-            <pre><code>{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex waiting"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
-          }
-        ]
-      }
-    ]
-  }
-}</code></pre>
-            <h4>Event mapping</h4>
-            <ul>
-              <li><code>UserPromptSubmit</code> → working.</li>
-              <li><code>PermissionRequest</code> → waiting.</li>
-              <li><code>PostToolUse</code> → working.</li>
-              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
-            </ul>
-            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
-
-            <h3>Helper contract</h3>
-            <p>The bundled helper supports exactly these invocation forms:</p>
-            <pre><code>quicktty-progress claude working|waiting|failed|completed
-quicktty-progress codex working|waiting|failed|completed</code></pre>
-            <p>States map to OSC <code>9;4</code> values as follows: <code>working</code> → <code>3</code>, <code>waiting</code> → <code>4</code>, <code>failed</code> → <code>2</code>, and <code>completed</code> → <code>0</code>.</p>
-            <p>An unknown mode, unknown state, or extra argument returns nonzero. The helper adds no new dependencies.</p>
-          </section>
-
-          <section id="troubleshooting">
-            <h2>Troubleshooting</h2>
-            <h3>A configuration change is ignored</h3>
-            <p>Read the inline diagnostic, correct the reported line in <code>~/.config/quicktty/config</code>, and save again. QuickTTY keeps the last valid configuration while errors remain.</p>
-            <h3>A shortcut reaches the shell</h3>
-            <p>Confirm its action ID and chord in the full registry. An unassigned or non-performable event intentionally follows the normal terminal input path.</p>
-            <h3>A pane failed to start</h3>
-            <p>Use <strong>Retry</strong> to create a fresh shell in the saved working directory, or <strong>Close Pane</strong> to remove the failed leaf without disturbing neighboring sessions.</p>
-            <h3>An update is not offered</h3>
-            <p>Confirm the selected channel. Stable excludes prereleases; beta follows the newest build in its repository feed. QuickTTY 0.1.1 may require a manual download of 0.1.2 because its stable feed was incomplete.</p>
-          </section>
-        </article>
-      </div>
+      </section>
     </main>
-
     <footer class="site-footer shell">
       <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
-      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
       <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
     </footer>
   </body>

@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Connect coding agents to QuickTTY for progress, version-verified native session continuity, and permission-scoped Pi terminal tasks.">
+    <meta name="theme-color" content="#f2f3f1">
+    <link rel="canonical" href="https://quicktty.app/docs/agents/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Coding agent integrations — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      <header class="page-hero docs-page-hero shell reveal">
+        <p class="page-meta"><a href="/docs/">All documentation</a> / Agent guide</p>
+        <div>
+          <p class="eyebrow">Agent guide</p>
+          <h1>Coding agent integrations</h1>
+          <p class="lede">Choose progress, session continuity, or terminal control independently—and see exactly what QuickTTY installs.</p>
+        </div>
+      </header>
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#coding-agent-integrations">Capabilities</a></li>
+            <li><a href="#install-integrations">Install integrations</a></li>
+            <li><a href="#pi">Pi one-click setup</a></li>
+            <li><a href="#osc-progress">OSC progress</a></li>
+          </ol>
+        </nav>
+        <article class="docs-content">
+          <section id="coding-agent-integrations">
+            <h2>Coding Agent Integrations</h2>
+            <p>QuickTTY treats coding-agent integration as three separate capabilities. Use only the layer you need; installing one does not silently enable the others.</p>
+            <div class="capability-grid" aria-label="Agent integration capabilities">
+              <article><span>01</span><h3>Progress</h3><p>Show standard OSC <code>9;4</code> state in tabs and workspaces without parsing terminal output.</p></article>
+              <article><span>02</span><h3>Session continuity</h3><p>Relaunch an eligible native session by opaque ID in its original pane.</p></article>
+              <article><span>03</span><h3>Terminal tasks</h3><p>Let an authorized Pi session create and operate only its own managed panes.</p></article>
+            </div>
+            <div class="note"><strong>Separate controls</strong>Progress, session restoration, integration installation, and terminal permission are independent. Installing files never grants terminal access.</div>
+            <h3 id="install-integrations">Install integrations explicitly</h3>
+            <p>Open <strong>QuickTTY → Agent Integrations…</strong>, choose Install or Uninstall, select eligible agents, inspect every planned file change, and confirm before Apply. The sheet and bundled CLI use the same installer core.</p>
+            <h3>Native session restoration</h3>
+            <p>When <code>quicktty-restore-workspaces</code> and <code>quicktty-restore-agent-sessions</code> are both true, QuickTTY may relaunch a version-verified agent with its opaque native session ID in the original pane. This is not PTY/process checkpointing. There is no arbitrary command or environment persistence; QuickTTY performs no output/title/process/store inference, and uses a fixed bundled <code>quicktty</code> trampoline with structured argv and a bounded canonical payload. Any ineligible binding takes the fresh shell fallback.</p>
+            <p>The authenticated local socket is scoped by five app-owned pane variables: <code>QUICKTTY_PANE_ID</code>, <code>QUICKTTY_AGENT_SOCKET</code>, <code>QUICKTTY_INSTANCE_ID</code>, <code>QUICKTTY_PANE_TOKEN</code>, and <code>QUICKTTY_AGENT_HELPER</code>. On shutdown, registration freezes, credentials are cleared, and later lifecycle messages are rejected.</p>
+
+            <h4>Exact 20-entry registry</h4>
+            <div class="shortcut-table-wrap" role="region" aria-label="Agent integration registry" tabindex="0">
+              <table class="shortcut-table agent-registry-table">
+                <thead><tr><th scope="col">ID</th><th scope="col">Capability</th><th scope="col">Current policy</th></tr></thead>
+                <tbody>
+                  <tr data-agent-id="claude"><td><code>claude</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="codex"><td><code>codex</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="grok"><td><code>grok</code></td><td>blocked</td><td>Ambiguous official identity</td></tr>
+                  <tr data-agent-id="pi"><td><code>pi</code></td><td>native</td><td>Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; locally/runtime verified on current 0.84.4</td></tr>
+                  <tr data-agent-id="omp"><td><code>omp</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="campfire"><td><code>campfire</code></td><td>blocked</td><td>Not a sessionful agent</td></tr>
+                  <tr data-agent-id="amp"><td><code>amp</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="cursor"><td><code>cursor</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="gemini"><td><code>gemini</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="kiro"><td><code>kiro</code></td><td>blocked</td><td>Incompatible lifecycle generations</td></tr>
+                  <tr data-agent-id="antigravity"><td><code>antigravity</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="opencode"><td><code>opencode</code></td><td>wrapper</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="rovo-dev"><td><code>rovo-dev</code></td><td>blocked</td><td>Missing session identity</td></tr>
+                  <tr data-agent-id="hermes"><td><code>hermes</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="copilot"><td><code>copilot</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="codebuddy"><td><code>codebuddy</code></td><td>blocked</td><td>Beta lifecycle only</td></tr>
+                  <tr data-agent-id="droid"><td><code>droid</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="qoder"><td><code>qoder</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="kimi"><td><code>kimi</code></td><td>native</td><td>Unverified; fresh shell</td></tr>
+                  <tr data-agent-id="ollama"><td><code>ollama</code></td><td>blocked</td><td>Missing persistent session API</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Totals: 11 native, 3 wrapper, and 6 blocked. Only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the integration is locally verified on current Pi <code>0.84.4</code>. Every other launch-capable version policy is unverified/documented and therefore starts a fresh shell until a verified policy and tests are added.</p>
+
+            <h4>Explicit installer</h4>
+            <pre><code>quicktty integrations status [ids...]
+quicktty integrations install [ids...] [--yes]
+quicktty integrations uninstall [ids...] [--yes]</code></pre>
+            <p>Install and uninstall always show a mutation preview and require explicit confirmation: type the literal <code>yes</code> in a TTY, or place <code>--yes</code> last for non-interactive use. Existing files receive uniquely named backups. QuickTTY tracks ownership and uninstalls only matching owned content; conflicts and changed files are not overwritten. The Agent Integrations sheet uses the same core and makes no silent configuration writes. For Pi, one preview includes its lifecycle extension, the terminal SKILL at <code>~/.pi/agent/skills/quicktty-terminal/SKILL.md</code>, and the shared launcher <code>~/.local/bin/quicktty</code> when it is missing.</p>
+            <p>The sheet reports bounded states and redacted diagnostics without raw session IDs. Pane bindings show Active, Restoring, Unverified, or Failed. Retry rotates credentials and rechecks compatibility; Forget removes the binding and starts a fresh shell. Duplicate adapter/session claims all fail rather than selecting a winner.</p>
+
+            <aside class="agent-next-step">
+              <p><span>Pi capability</span><strong>Run terminal tasks in real QuickTTY panes.</strong></p>
+              <a href="/docs/agent-terminal-control/">Read the terminal control guide <span aria-hidden="true">→</span></a>
+            </aside>
+
+            <h3 id="osc-progress">OSC progress</h3>
+            <p>Progress setup is independent from session restoration. Manual progress-only examples remain bundled at:</p>
+            <pre><code>/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/</code></pre>
+            <div class="note"><strong>Custom installation path</strong>If QuickTTY is installed elsewhere, replace <code>/Applications/QuickTTY.app</code> in the commands below. Always merge these examples into your existing configuration; never replace the whole configuration file.</div>
+
+            <div class="guide-block" id="pi">
+            <h3>Pi</h3>
+            <h4>One-click integration</h4>
+            <p>In <strong>QuickTTY → Agent Integrations…</strong>, select Pi and Install. After preview, one confirmed operation installs the lifecycle extension, terminal SKILL, and the shared launcher if it is missing. A foreign launcher or modified managed file is reported as a conflict and is never overwritten.</p>
+            <p>Restart Pi after installation. Terminal control additionally requires an active registered Pi session in its original QuickTTY pane and a separate native permission prompt. Installing the files alone does not grant access.</p>
+            <h4>Progress setting</h4>
+            <p>Open <code>/settings</code> and enable <strong>Terminal progress</strong> (<code>terminal.showTerminalProgress</code>). It is off by default. No helper, hooks, or extensions are required.</p>
+            <p>Pi emits OSC <code>9;4</code> directly: <strong>working</strong> at <code>agent_start</code>, keepalive updates while working, and <strong>completed</strong> at <code>agent_end</code>.</p>
+
+            </div>
+
+            <h3>Claude Code 2.1.141+</h3>
+            <p>Claude Code command hooks have no controlling TTY. In <code>claude</code> mode, the helper emits one JSON object containing the universal <code>terminalSequence</code> field and writes nothing else to stdout.</p>
+            <details class="code-disclosure">
+              <summary><span>Claude Code hook configuration</span><small>Show exact bundled JSON</small></summary>
+            <h4>Configuration</h4>
+            <p>Merge the top-level <code>hooks</code> object from the bundled <code>claude-settings.example.json</code> into your existing Claude Code settings:</p>
+            <pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude failed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" claude completed"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+            </details>
+            <h4>Event mapping</h4>
+            <ul>
+              <li><code>UserPromptSubmit</code> → working.</li>
+              <li><code>PermissionRequest</code> → waiting.</li>
+              <li><code>Notification</code> matching <code>permission_prompt|idle_prompt|agent_needs_input</code> → waiting.</li>
+              <li><code>PostToolUse</code> and <code>PostToolUseFailure</code> → working.</li>
+              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
+              <li><code>StopFailure</code> → failed.</li>
+            </ul>
+            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
+
+            <h3>Codex</h3>
+            <p>Codex keeps its controlling TTY. In <code>codex</code> mode, the helper writes OSC directly to <code>/dev/tty</code> and writes exactly <code>{}</code> to stdout. If <code>/dev/tty</code> is unavailable, it still writes <code>{}</code> and exits successfully.</p>
+            <details class="code-disclosure">
+              <summary><span>Codex hook configuration</span><small>Show exact bundled JSON</small></summary>
+            <h4>Configuration</h4>
+            <p>Merge the top-level <code>hooks</code> object from the bundled <code>codex-hooks.example.json</code> into your existing <code>hooks.json</code>:</p>
+            <pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex working"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Applications/QuickTTY.app/Contents/Resources/AgentIntegrations/quicktty-progress\" codex completed"
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+            </details>
+            <h4>Event mapping</h4>
+            <ul>
+              <li><code>UserPromptSubmit</code> → working.</li>
+              <li><code>PermissionRequest</code> → waiting.</li>
+              <li><code>PostToolUse</code> → working.</li>
+              <li><code>Stop</code> and <code>SessionEnd</code> → completed.</li>
+            </ul>
+            <p>The hook reads no stdin, prompt, transcript, or environment secrets.</p>
+
+            <h3>Helper contract</h3>
+            <p>The bundled helper supports exactly these invocation forms:</p>
+            <pre><code>quicktty-progress claude working|waiting|failed|completed
+quicktty-progress codex working|waiting|failed|completed</code></pre>
+            <p>States map to OSC <code>9;4</code> values as follows: <code>working</code> → <code>3</code>, <code>waiting</code> → <code>4</code>, <code>failed</code> → <code>2</code>, and <code>completed</code> → <code>0</code>.</p>
+            <p>An unknown mode, unknown state, or extra argument returns nonzero. The helper adds no new dependencies.</p>
+          </section>
+          <nav class="docs-sequence" aria-label="Documentation pages">
+            <a rel="prev" href="/docs/shortcuts/"><span>Previous</span>Keyboard shortcuts</a>
+            <a class="docs-sequence-next" rel="next" href="/docs/agent-terminal-control/"><span>Next</span>Agent terminal control</a>
+          </nav>
+        </article>
+      </div>
+    </main>
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

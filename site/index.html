@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="QuickTTY is a native terminal workspace for macOS with tabs, splits, named workspaces, Quake mode, broadcast input, search, and coding-agent progress.">
+    <meta name="description" content="QuickTTY is a native macOS terminal workspace with tabs, splits, Quake mode, coding-agent progress, session continuity, and permission-scoped Pi terminal control.">
     <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/">
     <link rel="icon" href="/assets/app-icon.png">
@@ -120,6 +120,34 @@
               <span>Standard OSC 9;4 signals, shown without parsing terminal output.</span>
             </figcaption>
           </figure>
+        </div>
+      </section>
+
+      <section class="feature-section agent-section" aria-labelledby="agents-heading">
+        <div class="product-shell agent-layout">
+          <div class="agent-section-copy reveal">
+            <p class="product-label">Built for coding agents</p>
+            <h2 id="agents-heading">Give agent work a place, a signal, and a boundary.</h2>
+            <p>QuickTTY separates visibility, continuity, and terminal access. Turn on only the layer your workflow needs.</p>
+            <a class="agent-docs-link" href="/docs/agents/">Explore agent integrations <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="agent-feature-list reveal">
+            <article>
+              <span class="agent-feature-index">01 / Observe</span>
+              <h3>Progress without output parsing</h3>
+              <p>Standard OSC 9;4 state stays visible across tabs and workspaces. QuickTTY does not inspect prompts, titles, or terminal text to guess identity.</p>
+            </article>
+            <article>
+              <span class="agent-feature-index">02 / Continue</span>
+              <h3>Session continuity</h3>
+              <p>An eligible native agent can relaunch by opaque session ID in its original pane. Unverified integrations fail closed to a fresh shell.</p>
+            </article>
+            <article>
+              <span class="agent-feature-index">03 / Operate</span>
+              <h3>Terminal control for Pi</h3>
+              <p>One confirmed install adds the QuickTTY SKILL and launcher. Native permission then limits Pi to terminal tasks it creates in its own workspace.</p>
+            </article>
+          </div>
         </div>
       </section>
 

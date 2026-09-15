@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Complete QuickTTY keyboard shortcut reference, action IDs, assignment grammar, and conflict behavior.">
+    <meta name="theme-color" content="#f2f3f1">
+    <link rel="canonical" href="https://quicktty.app/docs/shortcuts/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Keyboard shortcuts — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      <header class="page-hero docs-page-hero shell reveal">
+        <p class="page-meta"><a href="/docs/">All documentation</a> / Keyboard reference</p>
+        <div>
+          <p class="eyebrow">Keyboard reference</p>
+          <h1>Keyboard shortcuts</h1>
+          <p class="lede">Look up every default command or assign your own chords with predictable conflict handling.</p>
+        </div>
+      </header>
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#keyboard-shortcuts">Defaults</a></li>
+            <li><a href="#customize-shortcuts">Customize shortcuts</a></li>
+          </ol>
+        </nav>
+        <article class="docs-content">
+          <section id="keyboard-shortcuts">
+            <h2>Keyboard Shortcuts</h2>
+            <div class="primary-shortcut">
+              <div>
+                <p class="primary-shortcut-label">Primary shortcut</p>
+                <h3>Toggle Normal ↔ Quake presentation</h3>
+                <p>Switches the same live workspace between presentations without restarting shells. This is different from global <kbd>F12</kbd>, which shows or hides Quake.</p>
+              </div>
+              <div class="primary-shortcut-command">
+                <kbd>Cmd+Opt+P</kbd>
+                <code>toggle-presentation</code>
+              </div>
+            </div>
+
+            <h3>Application/global</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Application and global default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Toggle Normal ↔ Quake</td><td><kbd>Cmd+Opt+P</kbd></td><td><code>toggle-presentation</code></td></tr>
+                  <tr><td>Show/hide Quake globally</td><td><kbd>F12</kbd></td><td><code>quicktty-global-toggle</code><span class="action-id-note">Config key, outside local action registry</span></td></tr>
+                  <tr><td>Open configuration</td><td><kbd>Cmd+Comma</kbd></td><td><code>open-config</code></td></tr>
+                  <tr><td>Quit QuickTTY</td><td><kbd>Cmd+Q</kbd></td><td><code>quit</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Tabs/panes</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Tab and pane default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>New tab</td><td><kbd>Cmd+T</kbd></td><td><code>new-tab</code></td></tr>
+                  <tr><td>Close pane</td><td><kbd>Cmd+W</kbd></td><td><code>close-pane</code></td></tr>
+                  <tr><td>Close tab</td><td><kbd>Cmd+Opt+W</kbd></td><td><code>close-tab</code></td></tr>
+                  <tr><td>Split right</td><td><kbd>Cmd+D</kbd></td><td><code>split-right</code></td></tr>
+                  <tr><td>Split down</td><td><kbd>Cmd+Shift+D</kbd></td><td><code>split-down</code></td></tr>
+                  <tr><td>Previous pane</td><td><kbd>Cmd+Left-Bracket</kbd></td><td><code>previous-pane</code></td></tr>
+                  <tr><td>Next pane</td><td><kbd>Cmd+Right-Bracket</kbd></td><td><code>next-pane</code></td></tr>
+                  <tr><td>Focus left</td><td><kbd>Cmd+Shift+Left</kbd></td><td><code>focus-left</code></td></tr>
+                  <tr><td>Focus right</td><td><kbd>Cmd+Shift+Right</kbd></td><td><code>focus-right</code></td></tr>
+                  <tr><td>Focus up</td><td><kbd>Cmd+Shift+Up</kbd></td><td><code>focus-up</code></td></tr>
+                  <tr><td>Focus down</td><td><kbd>Cmd+Shift+Down</kbd></td><td><code>focus-down</code></td></tr>
+                  <tr><td>Select tab 1</td><td><kbd>Cmd+1</kbd></td><td><code>select-tab-1</code></td></tr>
+                  <tr><td>Select tab 2</td><td><kbd>Cmd+2</kbd></td><td><code>select-tab-2</code></td></tr>
+                  <tr><td>Select tab 3</td><td><kbd>Cmd+3</kbd></td><td><code>select-tab-3</code></td></tr>
+                  <tr><td>Select tab 4</td><td><kbd>Cmd+4</kbd></td><td><code>select-tab-4</code></td></tr>
+                  <tr><td>Select tab 5</td><td><kbd>Cmd+5</kbd></td><td><code>select-tab-5</code></td></tr>
+                  <tr><td>Select tab 6</td><td><kbd>Cmd+6</kbd></td><td><code>select-tab-6</code></td></tr>
+                  <tr><td>Select tab 7</td><td><kbd>Cmd+7</kbd></td><td><code>select-tab-7</code></td></tr>
+                  <tr><td>Select tab 8</td><td><kbd>Cmd+8</kbd></td><td><code>select-tab-8</code></td></tr>
+                  <tr><td>Select tab 9</td><td><kbd>Cmd+9</kbd></td><td><code>select-tab-9</code></td></tr>
+                  <tr><td>Toggle broadcast</td><td><kbd>Cmd+B</kbd></td><td><code>toggle-broadcast</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Workspaces</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Workspace default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Select workspace 1</td><td><kbd>Cmd+Opt+1</kbd></td><td><code>select-workspace-1</code></td></tr>
+                  <tr><td>Select workspace 2</td><td><kbd>Cmd+Opt+2</kbd></td><td><code>select-workspace-2</code></td></tr>
+                  <tr><td>Select workspace 3</td><td><kbd>Cmd+Opt+3</kbd></td><td><code>select-workspace-3</code></td></tr>
+                  <tr><td>Select workspace 4</td><td><kbd>Cmd+Opt+4</kbd></td><td><code>select-workspace-4</code></td></tr>
+                  <tr><td>Select workspace 5</td><td><kbd>Cmd+Opt+5</kbd></td><td><code>select-workspace-5</code></td></tr>
+                  <tr><td>Select workspace 6</td><td><kbd>Cmd+Opt+6</kbd></td><td><code>select-workspace-6</code></td></tr>
+                  <tr><td>Select workspace 7</td><td><kbd>Cmd+Opt+7</kbd></td><td><code>select-workspace-7</code></td></tr>
+                  <tr><td>Select workspace 8</td><td><kbd>Cmd+Opt+8</kbd></td><td><code>select-workspace-8</code></td></tr>
+                  <tr><td>Select workspace 9</td><td><kbd>Cmd+Opt+9</kbd></td><td><code>select-workspace-9</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Search/terminal</h3>
+            <div class="shortcut-table-wrap" role="region" aria-label="Search and terminal default shortcuts" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Action</th><th scope="col">Default shortcut</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>Find</td><td><kbd>Cmd+F</kbd></td><td><code>find</code></td></tr>
+                  <tr><td>Find next</td><td><kbd>Cmd+G</kbd></td><td><code>find-next</code></td></tr>
+                  <tr><td>Find previous</td><td><kbd>Cmd+Shift+G</kbd></td><td><code>find-previous</code></td></tr>
+                  <tr><td>Copy</td><td><kbd>Cmd+C</kbd></td><td><code>copy</code></td></tr>
+                  <tr><td>Paste</td><td><kbd>Cmd+V</kbd></td><td><code>paste</code></td></tr>
+                  <tr><td>Paste selection</td><td><kbd>Cmd+Shift+V</kbd></td><td><code>paste-selection</code></td></tr>
+                  <tr><td>Select all</td><td><kbd>Cmd+A</kbd></td><td><code>select-all</code></td></tr>
+                  <tr><td>Clear screen</td><td><kbd>Cmd+K</kbd></td><td><code>clear-screen</code></td></tr>
+                  <tr><td>Increase font size</td><td><kbd>Cmd+Equal</kbd></td><td><code>font-increase</code></td></tr>
+                  <tr><td>Decrease font size</td><td><kbd>Cmd+Minus</kbd></td><td><code>font-decrease</code></td></tr>
+                  <tr><td>Reset font size</td><td><kbd>Cmd+0</kbd></td><td><code>font-reset</code></td></tr>
+                  <tr><td>Scroll to top</td><td><kbd>Cmd+Home</kbd></td><td><code>scroll-top</code></td></tr>
+                  <tr><td>Scroll to bottom</td><td><kbd>Cmd+End</kbd></td><td><code>scroll-bottom</code></td></tr>
+                  <tr><td>Scroll page up</td><td><kbd>Cmd+Page-Up</kbd></td><td><code>scroll-page-up</code></td></tr>
+                  <tr><td>Scroll page down</td><td><kbd>Cmd+Page-Down</kbd></td><td><code>scroll-page-down</code></td></tr>
+                  <tr><td>Scroll to selection</td><td><kbd>Cmd+J</kbd></td><td><code>scroll-to-selection</code></td></tr>
+                  <tr><td>Extend selection left</td><td><kbd>Shift+Left</kbd></td><td><code>selection-left</code></td></tr>
+                  <tr><td>Extend selection right</td><td><kbd>Shift+Right</kbd></td><td><code>selection-right</code></td></tr>
+                  <tr><td>Extend selection up</td><td><kbd>Shift+Up</kbd></td><td><code>selection-up</code></td></tr>
+                  <tr><td>Extend selection down</td><td><kbd>Shift+Down</kbd></td><td><code>selection-down</code></td></tr>
+                  <tr><td>Extend selection page up</td><td><kbd>Shift+Page-Up</kbd></td><td><code>selection-page-up</code></td></tr>
+                  <tr><td>Extend selection page down</td><td><kbd>Shift+Page-Down</kbd></td><td><code>selection-page-down</code></td></tr>
+                  <tr><td>Extend selection to home</td><td><kbd>Shift+Home</kbd></td><td><code>selection-home</code></td></tr>
+                  <tr><td>Extend selection to end</td><td><kbd>Shift+End</kbd></td><td><code>selection-end</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>No default shortcut</h3>
+            <p>These typed actions are available for customization but are unassigned by default.</p>
+            <div class="shortcut-table-wrap" role="region" aria-label="Actions with no default shortcut" tabindex="0">
+              <table class="shortcut-table shortcut-table-compact">
+                <thead><tr><th scope="col">Action</th><th scope="col">Action ID</th></tr></thead>
+                <tbody>
+                  <tr><td>New workspace</td><td><code>new-workspace</code></td></tr>
+                  <tr><td>Rename workspace</td><td><code>rename-workspace</code></td></tr>
+                  <tr><td>Delete workspace</td><td><code>delete-workspace</code></td></tr>
+                  <tr><td>Copy URL</td><td><code>copy-url</code></td></tr>
+                  <tr><td>Reset terminal</td><td><code>reset-terminal</code></td></tr>
+                  <tr><td>Previous prompt</td><td><code>previous-prompt</code></td></tr>
+                  <tr><td>Next prompt</td><td><code>next-prompt</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3 id="customize-shortcuts">Customize shortcuts</h3>
+            <p>Local commands use repeatable assignments. An action receives a chord or the literal value <code>disabled</code>:</p>
+            <pre><code>quicktty-shortcut = action-id=cmd+key
+quicktty-shortcut = action-id=disabled</code></pre>
+            <p>A chord has optional modifiers and exactly one key separated by <code>+</code>. Modifiers are <code>cmd</code>, <code>opt</code>, <code>ctrl</code>, and <code>shift</code>; canonical order is <code>cmd+opt+ctrl+shift+key</code>. Supported keys include letters, digits, F1–F20, arrows, navigation and named punctuation such as <code>left-bracket</code>, <code>minus</code>, and <code>slash</code>. A single key such as <code>f12</code> is valid.</p>
+            <h4>Assignment and conflict behavior</h4>
+            <p>Parsing starts from the built-in defaults and processes repeated <code>quicktty-shortcut</code> lines from top to bottom. For each action, the last valid assignment wins; <code>disabled</code> is a valid assignment.</p>
+            <p>An unknown action or malformed assignment reports a diagnostic without blocking other valid lines. During hot reload, an invalid assignment for a known action preserves that action’s last active value. Deleting every assignment for an action restores its built-in default.</p>
+            <p>If two local actions use the same chord, the last valid owner wins and the previous owner becomes disabled. The separately registered global Quake chord takes priority over any conflicting local action.</p>
+          </section>
+          <nav class="docs-sequence" aria-label="Documentation pages">
+            <a rel="prev" href="/docs/workspaces/"><span>Previous</span>Workspaces and terminal use</a>
+            <a class="docs-sequence-next" rel="next" href="/docs/agents/"><span>Next</span>Coding agent integrations</a>
+          </nav>
+        </article>
+      </div>
+    </main>
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Install QuickTTY, choose an update channel, configure the terminal workspace, and recover from common setup problems.">
+    <meta name="theme-color" content="#f2f3f1">
+    <link rel="canonical" href="https://quicktty.app/docs/getting-started/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Getting started — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      <header class="page-hero docs-page-hero shell reveal">
+        <p class="page-meta"><a href="/docs/">All documentation</a> / Setup guide</p>
+        <div>
+          <p class="eyebrow">Setup guide</p>
+          <h1>Getting started</h1>
+          <p class="lede">Install the signed app, understand its configuration files, and get to a reliable first workspace.</p>
+        </div>
+      </header>
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#getting-started">Requirements</a></li>
+            <li><a href="#installation-updates">Installation &amp; updates</a></li>
+            <li><a href="#configuration">Configuration</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+          </ol>
+        </nav>
+        <article class="docs-content">
+          <section id="getting-started">
+            <h2>Getting Started</h2>
+            <p>QuickTTY is a native macOS terminal workspace for Apple Silicon. It keeps tabs, binary splits, and named workspaces inside one physical window. Switching a workspace or changing between normal and Quake presentation does not restart its live shell processes.</p>
+            <h3>Requirements</h3>
+            <ul>
+              <li>macOS 15 or newer.</li>
+              <li>An Apple Silicon Mac.</li>
+              <li>A downloaded, signed, and notarized QuickTTY DMG.</li>
+            </ul>
+            <p>On first launch QuickTTY creates a <strong>Default</strong> workspace. Use the menus or default shortcuts to add tabs and split the active tab. Inactive workspaces continue running until the application exits.</p>
+          </section>
+          <section id="installation-updates">
+            <h2>Installation &amp; Updates</h2>
+            <ol>
+              <li><a href="https://github.com/dntsk/quicktty/releases/latest">Download the latest stable release</a>.</li>
+              <li>Open the DMG and move QuickTTY to Applications.</li>
+              <li>Launch QuickTTY. macOS can verify its Developer ID signature and notarization ticket.</li>
+            </ol>
+            <h3>Update channels</h3>
+            <p>The default <strong>stable</strong> channel reads the current GitHub latest feed and receives stable releases only. It never receives a prerelease.</p>
+            <p>The opt-in <strong>beta</strong> channel reads the versioned feed tracked in the QuickTTY repository. It is a superset of stable and offers the newest public build, whether that build is stable or beta. A newer stable can therefore follow a beta while the app remains subscribed to the beta channel.</p>
+            <pre><code>quicktty-update-channel = beta</code></pre>
+            <p>Use <strong>QuickTTY → Check for Updates…</strong> to request a check. See the <a href="/releases/">release channels page</a> for the current build.</p>
+          </section>
+          <section id="configuration">
+            <h2>Configuration</h2>
+            <p>The exact user configuration path is:</p>
+            <pre><code>~/.config/quicktty/config</code></pre>
+            <p>Keys prefixed with <code>quicktty-</code> configure the workspace shell. Other supported terminal keys pass to Ghostty, except top-level <code>keybind</code> assignments: QuickTTY owns keyboard command routing and clears Ghostty bindings in its generated effective configuration.</p>
+            <p>Choose <strong>QuickTTY → Open Configuration…</strong> to edit the file in a terminal tab. Valid changes hot reload without recreating terminal surfaces or shell processes. If parsing fails, the last valid configuration remains active and an inline diagnostic identifies the file and line.</p>
+            <pre><code>theme = catppuccin-mocha
+font-size = 14
+copy-on-select = clipboard
+
+quicktty-presentation-mode = normal
+quicktty-global-toggle = f12
+quicktty-quake-height = 75%
+quicktty-restore-workspaces = true
+quicktty-restore-agent-sessions = true</code></pre>
+            <p>Agent restoration requires both restore keys. It relaunches an eligible native agent by an opaque session ID into its original pane; it is not a PTY or process checkpoint. QuickTTY persists no arbitrary command or environment for restoration, and an unverified or invalid binding uses a fresh shell fallback.</p>
+            <p>The generated sibling file <code>~/.config/quicktty/.ghostty-effective-config</code> belongs to QuickTTY and should not be edited.</p>
+          </section>
+          <section id="troubleshooting">
+            <h2>Troubleshooting</h2>
+            <h3>A configuration change is ignored</h3>
+            <p>Read the inline diagnostic, correct the reported line in <code>~/.config/quicktty/config</code>, and save again. QuickTTY keeps the last valid configuration while errors remain.</p>
+            <h3>A shortcut reaches the shell</h3>
+            <p>Confirm its action ID and chord in the full registry. An unassigned or non-performable event intentionally follows the normal terminal input path.</p>
+            <h3>A pane failed to start</h3>
+            <p>Use <strong>Retry</strong> to create a fresh shell in the saved working directory, or <strong>Close Pane</strong> to remove the failed leaf without disturbing neighboring sessions.</p>
+            <h3>An update is not offered</h3>
+            <p>Confirm the selected channel. Stable excludes prereleases; beta follows the newest build in its repository feed. QuickTTY 0.1.1 may require a manual download of 0.1.2 because its stable feed was incomplete.</p>
+          </section>
+          <nav class="docs-sequence" aria-label="Documentation pages">
+            <a class="docs-sequence-next" rel="next" href="/docs/workspaces/"><span>Next</span>Workspaces and terminal use</a>
+          </nav>
+        </article>
+      </div>
+    </main>
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

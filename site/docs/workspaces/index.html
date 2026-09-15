@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Use QuickTTY tabs, splits, named workspaces, Quake mode, broadcast input, and terminal search.">
+    <meta name="theme-color" content="#f2f3f1">
+    <link rel="canonical" href="https://quicktty.app/docs/workspaces/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Workspaces and terminal use — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      <header class="page-hero docs-page-hero shell reveal">
+        <p class="page-meta"><a href="/docs/">All documentation</a> / Workspace guide</p>
+        <div>
+          <p class="eyebrow">Workspace guide</p>
+          <h1>Workspaces and terminal use</h1>
+          <p class="lede">Build a persistent working layout and move through live terminal sessions without multiplying windows.</p>
+        </div>
+      </header>
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#tabs-splits-workspaces">Tabs, splits &amp; workspaces</a></li>
+            <li><a href="#quake-mode">Quake mode</a></li>
+            <li><a href="#broadcast-input">Broadcast input</a></li>
+            <li><a href="#search">Search</a></li>
+          </ol>
+        </nav>
+        <article class="docs-content">
+          <section id="tabs-splits-workspaces">
+            <h2>Tabs, Splits &amp; Workspaces</h2>
+            <h3>Tabs</h3>
+            <p>Create a tab with <kbd>Cmd+T</kbd>, select tabs 1–9 with <kbd>Cmd+1</kbd> through <kbd>Cmd+9</kbd>, and close the active pane with <kbd>Cmd+W</kbd>. Closing the last pane also closes its tab.</p>
+            <h3>Splits</h3>
+            <p>Split right with <kbd>Cmd+D</kbd> or down with <kbd>Cmd+Shift+D</kbd>. Move between panes using previous/next or directional focus commands. Splits form a resizable binary tree inside each tab.</p>
+            <h3>Workspaces</h3>
+            <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <kbd>Cmd+Opt+1</kbd> through <kbd>Cmd+Opt+9</kbd>.</p>
+            <p>QuickTTY can restore workspace descriptions, tabs, split layout, current working directories, and focus after restart. It starts new processes; it does not preserve live processes across application termination.</p>
+          </section>
+          <section id="quake-mode">
+            <h2>Quake Mode</h2>
+            <p>Press <kbd>Cmd+Opt+P</kbd> to switch the existing window between Normal and Quake presentations. QuickTTY reuses the same panes and live processes; no shell is restarted.</p>
+            <p>While Quake presentation is active, <kbd>F12</kbd> globally shows or hides it on the display under the pointer.</p>
+            <p>Configure startup mode, global chord, height, animation duration, padding, focus-loss behavior, and screen pinning with <code>quicktty-presentation-mode</code>, <code>quicktty-global-toggle</code>, and the related <code>quicktty-quake-*</code> keys.</p>
+            <div class="note"><strong>Focus behavior</strong>Quake mode hides after focus loss by default, except while a menu, sheet, or system dialog is active.</div>
+          </section>
+          <section id="broadcast-input">
+            <h2>Broadcast Input</h2>
+            <p>Toggle broadcast for the active tab with <kbd>Cmd+B</kbd>. The tab and workspace chrome show when it is active.</p>
+            <p>QuickTTY routes the original logical keyboard event to every pane in that tab, allowing each terminal to encode it for its own keyboard mode. Paste asks for confirmation once and then targets those panes. Mouse events, scrolling, resizing, and interface commands are never broadcast.</p>
+            <p>Broadcast automatically turns off when you change tab or workspace, restore the app, or encounter a target surface error.</p>
+          </section>
+          <section id="search">
+            <h2>Search</h2>
+            <p>Start native terminal search with <kbd>Cmd+F</kbd>. Use <kbd>Cmd+G</kbd> for the next result and <kbd>Cmd+Shift+G</kbd> for the previous result. The overlay reports the current selection and total match count from Ghostty runtime callbacks.</p>
+            <p>Search is scoped to its terminal surface. Escape always closes search, regardless of whether the query is empty. Closing the pane clears its search state.</p>
+          </section>
+          <nav class="docs-sequence" aria-label="Documentation pages">
+            <a rel="prev" href="/docs/getting-started/"><span>Previous</span>Getting started</a>
+            <a class="docs-sequence-next" rel="next" href="/docs/shortcuts/"><span>Next</span>Keyboard shortcuts</a>
+          </nav>
+        </article>
+      </div>
+    </main>
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>
