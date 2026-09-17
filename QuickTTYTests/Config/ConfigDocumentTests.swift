@@ -17,6 +17,8 @@ struct ConfigDocumentTests {
         #expect(config.hideOnFocusLoss)
         #expect(config.restoreWorkspaces)
         #expect(config.restoreAgentSessions)
+        #expect(config.commandFinishNotifications)
+        #expect(config.commandFinishNotificationAfter == 10)
         #expect(config.configEditor == "nano")
         #expect(config.shortcuts == .defaults)
     }
@@ -58,6 +60,8 @@ struct ConfigDocumentTests {
                     "quicktty-hide-on-focus-loss",
                     "quicktty-restore-workspaces",
                     "quicktty-restore-agent-sessions",
+                    "quicktty-command-finish-notifications",
+                    "quicktty-command-finish-notification-after",
                     "quicktty-config-editor",
                 ]
         )
@@ -301,6 +305,60 @@ struct ConfigDocumentTests {
     }
 
     @Test
+    func commandFinishNotificationSettingsParseAndPreservePreviousValuesWhenInvalid() {
+        let parsed = ConfigDocument(
+            text: """
+                quicktty-command-finish-notifications = false
+                quicktty-command-finish-notification-after = 0
+                quicktty-command-finish-notification-after = 12.5
+                """
+        ).parse()
+
+        #expect(parsed.diagnostics.isEmpty)
+        #expect(!parsed.config.commandFinishNotifications)
+        #expect(parsed.config.commandFinishNotificationAfter == 12.5)
+
+        var previous = QuickTTYConfig()
+        previous.commandFinishNotifications = false
+        previous.commandFinishNotificationAfter = 27
+        let invalid = ConfigDocument(
+            text: """
+                quicktty-command-finish-notifications = TRUE
+                quicktty-command-finish-notification-after = -1
+                quicktty-command-finish-notification-after = nan
+                quicktty-command-finish-notification-after = inf
+                """
+        ).parse(previousConfig: previous)
+
+        #expect(!invalid.config.commandFinishNotifications)
+        #expect(invalid.config.commandFinishNotificationAfter == 27)
+        #expect(
+            invalid.diagnostics == [
+                ConfigDiagnostic(
+                    line: 1,
+                    key: QuickTTYConfig.Key.commandFinishNotifications.rawValue,
+                    reason: .invalidBoolean
+                ),
+                ConfigDiagnostic(
+                    line: 2,
+                    key: QuickTTYConfig.Key.commandFinishNotificationAfter.rawValue,
+                    reason: .invalidNumber(expected: "non-negative seconds")
+                ),
+                ConfigDiagnostic(
+                    line: 3,
+                    key: QuickTTYConfig.Key.commandFinishNotificationAfter.rawValue,
+                    reason: .invalidNumber(expected: "non-negative seconds")
+                ),
+                ConfigDiagnostic(
+                    line: 4,
+                    key: QuickTTYConfig.Key.commandFinishNotificationAfter.rawValue,
+                    reason: .invalidNumber(expected: "non-negative seconds")
+                ),
+            ]
+        )
+    }
+
+    @Test
     func configEditorRejectsNUL() {
         let result = ConfigDocument(
             text: "quicktty-config-editor = na\0no\n"
@@ -473,6 +531,8 @@ struct ConfigDocumentTests {
             "quicktty-hide-on-focus-loss = false",
             "quicktty-restore-workspaces = false",
             "quicktty-restore-agent-sessions = false",
+            "quicktty-command-finish-notifications = false",
+            "quicktty-command-finish-notification-after = 15.5",
             "quicktty-config-editor = code --wait",
             "include = themes/local.conf",
         ].joined(separator: "\r\n")
@@ -490,6 +550,8 @@ struct ConfigDocumentTests {
         #expect(!result.config.hideOnFocusLoss)
         #expect(!result.config.restoreWorkspaces)
         #expect(!result.config.restoreAgentSessions)
+        #expect(!result.config.commandFinishNotifications)
+        #expect(result.config.commandFinishNotificationAfter == 15.5)
         #expect(result.config.configEditor == "code --wait")
         #expect(
             document.filteredGhosttyData

@@ -50,6 +50,90 @@ struct TerminalNotificationControllerTests {
     }
 
     @Test
+    func commandEventsUseGenericBodiesAndCurrentPolicyBeforeAuthorization() {
+        let client = FakeTerminalNotificationClient(status: .authorized)
+        let registry = DestinationRegistry()
+        let short = registry.addDestination()
+        let completed = registry.addDestination()
+        let failed = registry.addDestination()
+        let controller = TerminalNotificationController(
+            client: client,
+            desktopNotificationsEnabled: { true },
+            destinationProvider: { registry.destinations[$0] },
+            isCurrentEvent: { event in
+                switch event {
+                case .activity:
+                    return false
+                case .commandCompleted(_, let durationNanoseconds),
+                    .commandFailed(_, let durationNanoseconds):
+                    return durationNanoseconds >= 10_000_000_000
+                }
+            },
+            isSuppressed: { _ in false },
+            activateDestination: { _ in }
+        )
+
+        controller.handle(
+            .commandCompleted(paneID: short.paneID, durationNanoseconds: 9_999_999_999)
+        )
+        #expect(client.authorizationStatusCallCount == 0)
+        controller.handle(
+            .commandCompleted(paneID: completed.paneID, durationNanoseconds: 10_000_000_000)
+        )
+        controller.handle(
+            .commandFailed(paneID: failed.paneID, durationNanoseconds: 10_000_000_000)
+        )
+
+        #expect(client.authorizationStatusCallCount == 1)
+        #expect(client.addedRequests.map(\.body) == ["A command completed.", "A command failed."])
+        #expect(client.addedRequests.allSatisfy { $0.userInfo.keys.count == 4 })
+    }
+
+    @Test
+    func newerIneligibleCommandAndRevalidationDiscardOlderCommandMappings() {
+        let client = FakeTerminalNotificationClient(status: .authorized)
+        let registry = DestinationRegistry()
+        let destination = registry.addDestination()
+        let context = NotificationTestContext()
+        let controller = TerminalNotificationController(
+            client: client,
+            desktopNotificationsEnabled: { context.enabled },
+            destinationProvider: { registry.destinations[$0] },
+            isCurrentEvent: { event in
+                switch event {
+                case .activity:
+                    return false
+                case .commandCompleted(_, let durationNanoseconds),
+                    .commandFailed(_, let durationNanoseconds):
+                    return durationNanoseconds >= 10_000_000_000
+                }
+            },
+            isSuppressed: { _ in false },
+            activateDestination: { _ in }
+        )
+
+        controller.handle(
+            .commandCompleted(
+                paneID: destination.paneID,
+                durationNanoseconds: 10_000_000_000
+            )
+        )
+        #expect(controller.destinationMappingCountForTesting == 1)
+        controller.handle(
+            .commandCompleted(paneID: destination.paneID, durationNanoseconds: 1)
+        )
+        #expect(controller.trackedNotificationCountForTesting == 0)
+
+        controller.handle(
+            .commandFailed(paneID: destination.paneID, durationNanoseconds: 10_000_000_000)
+        )
+        #expect(controller.destinationMappingCountForTesting == 1)
+        context.enabled = false
+        controller.revalidate()
+        #expect(controller.trackedNotificationCountForTesting == 0)
+    }
+
+    @Test
     func shortSuppressedDisabledAndStaleEffectsDoNotCheckAuthorization() {
         let client = FakeTerminalNotificationClient(status: .authorized)
         let registry = DestinationRegistry()

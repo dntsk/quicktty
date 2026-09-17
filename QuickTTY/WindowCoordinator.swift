@@ -190,10 +190,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private var configEditor = "nano"
     private var workspaceMenuTransientInteraction: QuakeWindowController.TransientInteraction?
     private var tabRenameTransientInteraction: QuakeWindowController.TransientInteraction?
+    private var commandPaletteShortcutConfigurationProvider:
+        (@MainActor () -> ShortcutConfiguration)?
+    private var commandPaletteCommandHandler: (@MainActor (CommandPaletteCommandID) -> Void)?
     private var isTabRenameEditing = false
     private var isPreparingForTermination = false
     private var isTerminalControlFrozen = false
     private var activityConfiguration: GhosttyActivityConfiguration
+    private var commandFinishNotificationsEnabled = true
+    private var commandFinishNotificationAfter: TimeInterval = 10
     private var activityCallbackGeneration = 0
 
     private lazy var terminalAutomationHostFacade = WindowCoordinatorTerminalAutomationHost(
@@ -319,6 +324,48 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
     var registeredGlobalChord: ShortcutChord? {
         hotKeyController.registeredChord
+    }
+
+    var canPresentCommandPalette: Bool {
+        guard !isPreparingForTermination,
+            commandPaletteShortcutConfigurationProvider != nil,
+            commandPaletteCommandHandler != nil,
+            activeWindow?.isVisible == true,
+            case .started = startupState
+        else { return false }
+        return true
+    }
+
+    var isCommandPalettePresented: Bool {
+        workspaceViewController.isCommandPalettePresented
+    }
+
+    func installCommandPalette(
+        shortcutConfiguration: @escaping @MainActor () -> ShortcutConfiguration,
+        performCommand: @escaping @MainActor (CommandPaletteCommandID) -> Void
+    ) {
+        commandPaletteShortcutConfigurationProvider = shortcutConfiguration
+        commandPaletteCommandHandler = performCommand
+        refreshCommandPaletteIfPresented()
+    }
+
+    func toggleCommandPalette() {
+        if isCommandPalettePresented {
+            dismissCommandPalette(restorePreviousResponder: true)
+            return
+        }
+        guard canPresentCommandPalette else { return }
+        workspaceViewController.cancelTabRename()
+        workspaceViewController.presentCommandPalette(
+            items: commandPaletteItems(),
+            onExecute: { [weak self] target in
+                self?.executeCommandPaletteTarget(target)
+            },
+            onDismiss: { [weak self] restoredPreviousResponder in
+                guard let self, !restoredPreviousResponder else { return }
+                focusActiveSurfaceIfPossible()
+            }
+        )
     }
 
     func createWorkspace() {
@@ -779,6 +826,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         {
             previousSurface.endSearchForDeactivation()
         }
+        refreshCommandPaletteIfPresented()
         return true
     }
 
@@ -1083,20 +1131,37 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         for paneID: PaneID
     ) {
         // WHY: A command can finish while the managed shell remains alive and accepts input.
-        guard activityConfiguration.progressStyleEnabled,
-            liveOwningTab(for: paneID) != nil
-        else { return }
-        let previousStatuses = terminalActivityController.statuses
-        let effects = terminalActivityController.handleCommandFinished(command, for: paneID)
-        applyActivityEffects(effects)
-        acknowledgeTerminalStatus(for: paneID)
-        refreshWorkspaceStatusesIfChanged(from: previousStatuses)
+        guard liveOwningTab(for: paneID) != nil else { return }
+        if activityConfiguration.progressStyleEnabled,
+            terminalActivityController.statuses[paneID] != nil
+        {
+            let previousStatuses = terminalActivityController.statuses
+            let effects = terminalActivityController.handleCommandFinished(command, for: paneID)
+            applyActivityEffects(effects)
+            acknowledgeTerminalStatus(for: paneID)
+            refreshWorkspaceStatusesIfChanged(from: previousStatuses)
+            return
+        }
+
+        let event: TerminalNotificationEvent
+        if command.exitCode == nil || command.exitCode == 0 {
+            event = .commandCompleted(
+                paneID: paneID,
+                durationNanoseconds: command.durationNanoseconds
+            )
+        } else {
+            event = .commandFailed(
+                paneID: paneID,
+                durationNanoseconds: command.durationNanoseconds
+            )
+        }
+        terminalNotificationController?.handle(event)
     }
 
     private func applyActivityEffects(_ effects: [TerminalActivityEffect]) {
         for effect in effects {
             terminalActivityEffectHandler?(effect)
-            terminalNotificationController?.handle(effect)
+            terminalNotificationController?.handle(.activity(effect))
         }
     }
 
@@ -2854,6 +2919,20 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         )
     }
 
+    func isCurrentTerminalNotificationEvent(_ event: TerminalNotificationEvent) -> Bool {
+        switch event {
+        case .activity(let effect):
+            return effect.isNotificationEligible && isCurrentTerminalActivityEffect(effect)
+        case .commandCompleted(let paneID, let durationNanoseconds),
+            .commandFailed(let paneID, let durationNanoseconds):
+            guard commandFinishNotificationsEnabled,
+                liveOwningTab(for: paneID) != nil
+            else { return false }
+            let durationSeconds = Double(durationNanoseconds) / 1_000_000_000
+            return durationSeconds >= commandFinishNotificationAfter
+        }
+    }
+
     func isCurrentTerminalActivityEffect(_ effect: TerminalActivityEffect) -> Bool {
         guard activityConfiguration.progressStyleEnabled,
             liveOwningTab(for: effect.paneID) != nil,
@@ -3745,9 +3824,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.applyChromePalette(ghosttyBridge.chromePalette)
         workspaceViewController.applySplitAppearance(ghosttyBridge.splitAppearance)
         activityConfiguration = ghosttyBridge.activityConfiguration
+        commandFinishNotificationsEnabled = config.commandFinishNotifications
+        commandFinishNotificationAfter = config.commandFinishNotificationAfter
         if !activityConfiguration.progressStyleEnabled {
             clearTerminalActivity()
         }
+        terminalNotificationController?.revalidate()
         configEditor = config.configEditor
         let geometry =
             QuakeWindowGeometry(
@@ -3776,6 +3858,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             onError(error)
         }
         synchronizeTabRenameTransientInteraction()
+        refreshCommandPaletteIfPresented()
     }
 
     func togglePresentationMode() {
@@ -3801,6 +3884,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         persist: Bool = true
     ) throws {
         guard !isPreparingForTermination, target != presentationMode else { return }
+        dismissCommandPalette(restorePreviousResponder: false)
         terminalAutomationCoordinator.cancelPendingPermissions()
         guard !isPreparingForTermination else { return }
         terminalControlPermissionController.cancel()
@@ -3883,8 +3967,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onRenameEditingChanged = { [weak self] isEditing in
             self?.setTabRenameEditing(isEditing)
         }
-        workspaceViewController.onWindowKeyStateChanged = { [weak self] _ in
-            self?.synchronizeTerminalAcknowledgements()
+        workspaceViewController.onWindowKeyStateChanged = { [weak self] isKeyWindow in
+            guard let self else { return }
+            if !isKeyWindow {
+                dismissCommandPalette(restorePreviousResponder: false)
+            }
+            synchronizeTerminalAcknowledgements()
         }
     }
 
@@ -4038,6 +4126,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             in: workspaceStore,
             liveTitles: liveSurfaceTitles
         )
+        refreshCommandPaletteIfPresented()
     }
 
     private var activeTerminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] {
@@ -4087,6 +4176,183 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             activeTab?.root.contains(PaneID(rawValue: record.task.paneID)) == true
         else { return }
         _ = returnControlToAgent(taskID: taskID)
+    }
+
+    private func commandPaletteItems() -> [CommandPaletteItem] {
+        guard let shortcutConfiguration = commandPaletteShortcutConfigurationProvider?() else {
+            return []
+        }
+        var items = CommandPaletteCatalog.commands.enumerated().map { index, descriptor in
+            CommandPaletteItem(
+                id: .command(descriptor.id),
+                target: .command(descriptor.id),
+                category: .commands,
+                title: descriptor.title,
+                subtitle: nil,
+                aliases: descriptor.aliases + [descriptor.id.rawValue],
+                symbolName: descriptor.symbolName,
+                shortcut: descriptor.shortcutAction
+                    .flatMap { shortcutConfiguration.chord(for: $0)?.displayString },
+                isActive: commandPaletteCommandIsActive(descriptor.id),
+                availability: commandPaletteAvailability(for: descriptor.id),
+                sourceOrder: index
+            )
+        }
+
+        for (workspaceIndex, workspace) in workspaceStore.workspaces.enumerated() {
+            let workspaceShortcut = workspaceSelectionShortcutAction(at: workspaceIndex)
+                .flatMap { shortcutConfiguration.chord(for: $0)?.displayString }
+            items.append(
+                CommandPaletteItem(
+                    id: .workspace(workspace.id),
+                    target: .workspace(workspace.id),
+                    category: .workspaces,
+                    title: workspace.name,
+                    subtitle: "Workspace",
+                    aliases: ["workspace", workspace.name],
+                    symbolName: "square.stack.3d.up",
+                    shortcut: workspaceShortcut,
+                    isActive: workspace.id == workspaceStore.activeWorkspaceID,
+                    availability: .enabled,
+                    sourceOrder: workspaceIndex
+                )
+            )
+
+            for (tabIndex, tab) in workspace.tabs.enumerated() {
+                let tabShortcut =
+                    workspace.id == workspaceStore.activeWorkspaceID
+                    ? tabSelectionShortcutAction(at: tabIndex)
+                        .flatMap { shortcutConfiguration.chord(for: $0)?.displayString }
+                    : nil
+                items.append(
+                    CommandPaletteItem(
+                        id: .tab(tab.id),
+                        target: .tab(workspaceID: workspace.id, tabID: tab.id),
+                        category: .tabs,
+                        title: tab.titleOverride ?? liveSurfaceTitles[tab.activePaneID]
+                            ?? tab.title,
+                        subtitle: workspace.name,
+                        aliases: ["tab", workspace.name, tab.title],
+                        symbolName: "rectangle.on.rectangle",
+                        shortcut: tabShortcut,
+                        isActive: workspace.id == workspaceStore.activeWorkspaceID
+                            && workspace.activeTabID == tab.id,
+                        availability: .enabled,
+                        sourceOrder: items.count
+                    )
+                )
+            }
+        }
+        return items
+    }
+
+    private func commandPaletteAvailability(
+        for command: CommandPaletteCommandID
+    ) -> CommandPaletteAvailability {
+        switch command {
+        case .quit, .togglePresentation, .newWorkspace, .checkForUpdates:
+            return .enabled
+        case .openConfiguration, .newTab:
+            return hasActiveWorkspace ? .enabled : .disabled(reason: "No active workspace")
+        case .agentIntegrations:
+            return canPresentAgentIntegrations
+                ? .enabled : .disabled(reason: "Agent integrations are unavailable")
+        case .closePane:
+            if isActivePaneZoomed { return .disabled(reason: "Exit pane zoom first") }
+            return canCloseActivePane ? .enabled : .disabled(reason: "No active pane")
+        case .closeTab:
+            return canCloseActiveTab ? .enabled : .disabled(reason: "No closable active tab")
+        case .splitRight, .splitDown:
+            if isActivePaneZoomed { return .disabled(reason: "Exit pane zoom first") }
+            return canSplitActivePane ? .enabled : .disabled(reason: "No available active pane")
+        case .previousPane, .nextPane, .focusLeft, .focusRight, .focusUp, .focusDown:
+            if isActivePaneZoomed { return .disabled(reason: "Exit pane zoom first") }
+            return canNavigateActivePanes
+                ? .enabled : .disabled(reason: "Requires multiple panes")
+        case .togglePaneZoom:
+            return canTogglePaneZoom ? .enabled : .disabled(reason: "Requires multiple panes")
+        case .toggleBroadcast:
+            return canToggleBroadcast ? .enabled : .disabled(reason: "No active tab")
+        case .renameWorkspace:
+            return hasActiveWorkspace ? .enabled : .disabled(reason: "No active workspace")
+        case .deleteWorkspace:
+            return canDeleteActiveWorkspace
+                ? .enabled : .disabled(reason: "The only workspace cannot be deleted")
+        }
+    }
+
+    private func commandPaletteCommandIsActive(_ command: CommandPaletteCommandID) -> Bool {
+        switch command {
+        case .togglePaneZoom: isActivePaneZoomed
+        case .toggleBroadcast: isBroadcastingActiveTab
+        default: false
+        }
+    }
+
+    private func executeCommandPaletteTarget(_ target: CommandPaletteTarget) {
+        guard !isPreparingForTermination else { return }
+        switch target {
+        case .command(let command):
+            guard commandPaletteAvailability(for: command).isEnabled else { return }
+            commandPaletteCommandHandler?(command)
+        case .workspace(let workspaceID):
+            guard workspaceStore.workspace(id: workspaceID) != nil else { return }
+            activateWorkspace(id: workspaceID)
+        case .tab(let workspaceID, let tabID):
+            guard
+                workspaceStore.workspace(id: workspaceID)?.tabs.contains(where: {
+                    $0.id == tabID
+                }) == true
+            else { return }
+            var candidate = workspaceStore
+            do {
+                try candidate.activateWorkspace(workspaceID)
+                try candidate.activateTab(tabID, in: workspaceID)
+            } catch {
+                return
+            }
+            guard commitWorkspaceStore(candidate) else { return }
+            refreshWorkspacePresentation(focusTerminal: true)
+        }
+    }
+
+    private func refreshCommandPaletteIfPresented() {
+        guard workspaceViewController.isCommandPalettePresented,
+            !isPreparingForTermination
+        else { return }
+        workspaceViewController.updateCommandPalette(items: commandPaletteItems())
+    }
+
+    private func dismissCommandPalette(restorePreviousResponder: Bool) {
+        guard workspaceViewController.isCommandPalettePresented else { return }
+        let restored = workspaceViewController.dismissCommandPalette(
+            restorePreviousResponder: restorePreviousResponder
+        )
+        if restorePreviousResponder, !restored {
+            focusActiveSurfaceIfPossible()
+        }
+    }
+
+    private func focusActiveSurfaceIfPossible() {
+        guard let paneID = activePaneID, let surface = surfaces[paneID] else { return }
+        focus(surface, paneID: paneID)
+    }
+
+    private func tabSelectionShortcutAction(at zeroBasedIndex: Int) -> ShortcutAction? {
+        let actions: [ShortcutAction] = [
+            .selectTab1, .selectTab2, .selectTab3, .selectTab4, .selectTab5,
+            .selectTab6, .selectTab7, .selectTab8, .selectTab9,
+        ]
+        return actions.indices.contains(zeroBasedIndex) ? actions[zeroBasedIndex] : nil
+    }
+
+    private func workspaceSelectionShortcutAction(at zeroBasedIndex: Int) -> ShortcutAction? {
+        let actions: [ShortcutAction] = [
+            .selectWorkspace1, .selectWorkspace2, .selectWorkspace3, .selectWorkspace4,
+            .selectWorkspace5, .selectWorkspace6, .selectWorkspace7, .selectWorkspace8,
+            .selectWorkspace9,
+        ]
+        return actions.indices.contains(zeroBasedIndex) ? actions[zeroBasedIndex] : nil
     }
 
     private func refreshWorkspacePresentation(focusTerminal: Bool) {
@@ -4729,6 +4995,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         // deferred work before any other freeze callback, without changing visible UI.
         presentationController.retireForApplicationTermination()
         normalWindowController.retireForApplicationTermination()
+        dismissCommandPalette(restorePreviousResponder: false)
+        commandPaletteShortcutConfigurationProvider = nil
+        commandPaletteCommandHandler = nil
         workspaceViewController.tabBarViewController.retireForApplicationTermination()
         createWorkspaceController?.retireForApplicationTermination()
         quakeWindowController.invalidateForApplicationTermination()
@@ -5077,6 +5346,14 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var workspaceStoreForTesting: WorkspaceStore {
             workspaceStore
+        }
+
+        var commandPaletteItemsForTesting: [CommandPaletteItem] {
+            commandPaletteItems()
+        }
+
+        func executeCommandPaletteTargetForTesting(_ target: CommandPaletteTarget) {
+            executeCommandPaletteTarget(target)
         }
 
         var zoomedPaneByTabIDForTesting: [TabID: PaneID] {

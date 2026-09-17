@@ -5,7 +5,7 @@ import UserNotifications
 final class TerminalNotificationController: NSObject {
     typealias EnabledProvider = @MainActor () -> Bool
     typealias DestinationProvider = @MainActor (PaneID) -> TerminalDestination?
-    typealias CurrentEffectValidation = @MainActor (TerminalActivityEffect) -> Bool
+    typealias CurrentEventValidation = @MainActor (TerminalNotificationEvent) -> Bool
     typealias SuppressionProvider = @MainActor (TerminalDestination) -> Bool
     typealias DestinationActivation = @MainActor (TerminalDestination) -> Void
     typealias ErrorLogger = @MainActor (TerminalNotificationClientError) -> Void
@@ -18,7 +18,7 @@ final class TerminalNotificationController: NSObject {
     }
 
     private struct PendingNotification: Equatable {
-        let effect: TerminalActivityEffect
+        let event: TerminalNotificationEvent
         let destination: TerminalDestination
     }
 
@@ -30,7 +30,7 @@ final class TerminalNotificationController: NSObject {
     private let client: any TerminalNotificationClient
     private let desktopNotificationsEnabled: EnabledProvider
     private let destinationProvider: DestinationProvider
-    private let isCurrentEffect: CurrentEffectValidation
+    private let isCurrentEvent: CurrentEventValidation
     private let isSuppressed: SuppressionProvider
     private let activateDestination: DestinationActivation
     private let logger: ErrorLogger
@@ -44,7 +44,7 @@ final class TerminalNotificationController: NSObject {
         client: any TerminalNotificationClient,
         desktopNotificationsEnabled: @escaping EnabledProvider,
         destinationProvider: @escaping DestinationProvider,
-        isCurrentEffect: @escaping CurrentEffectValidation,
+        isCurrentEvent: @escaping CurrentEventValidation,
         isSuppressed: @escaping SuppressionProvider,
         activateDestination: @escaping DestinationActivation,
         logger: @escaping ErrorLogger = { _ in }
@@ -52,22 +52,55 @@ final class TerminalNotificationController: NSObject {
         self.client = client
         self.desktopNotificationsEnabled = desktopNotificationsEnabled
         self.destinationProvider = destinationProvider
-        self.isCurrentEffect = isCurrentEffect
+        self.isCurrentEvent = isCurrentEvent
         self.isSuppressed = isSuppressed
         self.activateDestination = activateDestination
         self.logger = logger
     }
 
-    func handle(_ effect: TerminalActivityEffect) {
-        invalidate(paneID: effect.paneID)
-        guard let pending = validatedNotification(for: effect) else { return }
-        pendingNotifications[effect.paneID] = pending
+    convenience init(
+        client: any TerminalNotificationClient,
+        desktopNotificationsEnabled: @escaping EnabledProvider,
+        destinationProvider: @escaping DestinationProvider,
+        isCurrentEffect: @escaping @MainActor (TerminalActivityEffect) -> Bool,
+        isSuppressed: @escaping SuppressionProvider,
+        activateDestination: @escaping DestinationActivation,
+        logger: @escaping ErrorLogger = { _ in }
+    ) {
+        self.init(
+            client: client,
+            desktopNotificationsEnabled: desktopNotificationsEnabled,
+            destinationProvider: destinationProvider,
+            isCurrentEvent: { event in
+                guard case .activity(let effect) = event else { return false }
+                return effect.isNotificationEligible && isCurrentEffect(effect)
+            },
+            isSuppressed: isSuppressed,
+            activateDestination: activateDestination,
+            logger: logger
+        )
+    }
+
+    func handle(_ event: TerminalNotificationEvent) {
+        invalidate(paneID: event.paneID)
+        guard let pending = validatedNotification(for: event) else { return }
+        pendingNotifications[event.paneID] = pending
         resolveAuthorizationIfNeeded()
+    }
+
+    func handle(_ effect: TerminalActivityEffect) {
+        handle(.activity(effect))
     }
 
     func invalidate(paneID: PaneID) {
         pendingNotifications.removeValue(forKey: paneID)
         destinationMappings.removeValue(forKey: paneID)
+    }
+
+    func revalidate() {
+        guard !isShutdown else { return }
+        pendingNotifications = pendingNotifications.filter { isStillValid($0.value) }
+        destinationMappings = destinationMappings.filter { isStillValid($0.value.notification) }
     }
 
     func shutdown() {
@@ -109,22 +142,20 @@ final class TerminalNotificationController: NSObject {
     }
 
     private func validatedNotification(
-        for effect: TerminalActivityEffect
+        for event: TerminalNotificationEvent
     ) -> PendingNotification? {
-        guard !isShutdown, effect.isNotificationEligible, desktopNotificationsEnabled(),
-            isCurrentEffect(effect),
-            let destination = destinationProvider(effect.paneID),
-            destination.paneID == effect.paneID,
+        guard !isShutdown, desktopNotificationsEnabled(), isCurrentEvent(event),
+            let destination = destinationProvider(event.paneID),
+            destination.paneID == event.paneID,
             !isSuppressed(destination)
         else {
             return nil
         }
-        return PendingNotification(effect: effect, destination: destination)
+        return PendingNotification(event: event, destination: destination)
     }
 
     private func isStillValid(_ pending: PendingNotification) -> Bool {
-        pending.effect.isNotificationEligible && desktopNotificationsEnabled()
-            && isCurrentEffect(pending.effect)
+        desktopNotificationsEnabled() && isCurrentEvent(pending.event)
             && destinationProvider(pending.destination.paneID) == pending.destination
             && !isSuppressed(pending.destination)
     }
@@ -205,7 +236,7 @@ final class TerminalNotificationController: NSObject {
         let request = TerminalNotificationRequest(
             identifier: identifier,
             title: "QuickTTY",
-            body: pending.effect.notificationBody,
+            body: pending.event.notificationBody,
             userInfo: pending.destination.userInfo
         )
         let mapping = DestinationMapping(identifier: identifier, notification: pending)
@@ -280,29 +311,6 @@ extension TerminalNotificationController: UNUserNotificationCenterDelegate {
                 return
             }
             handleDefaultResponse(identifier: identifier, userInfo: userInfo)
-        }
-    }
-}
-
-extension TerminalActivityEffect {
-    var paneID: PaneID {
-        switch self {
-        case .waiting(let paneID), .failed(let paneID), .completed(let paneID, _),
-            .cleared(let paneID):
-            paneID
-        }
-    }
-
-    fileprivate var notificationBody: String {
-        switch self {
-        case .waiting:
-            "A terminal task needs attention."
-        case .failed:
-            "A terminal task failed."
-        case .completed:
-            "A terminal task completed."
-        case .cleared:
-            preconditionFailure("Cleared terminal activity is not notification eligible")
         }
     }
 }

@@ -14,6 +14,8 @@ struct QuickTTYConfig: Equatable, Sendable {
         case hideOnFocusLoss = "quicktty-hide-on-focus-loss"
         case restoreWorkspaces = "quicktty-restore-workspaces"
         case restoreAgentSessions = "quicktty-restore-agent-sessions"
+        case commandFinishNotifications = "quicktty-command-finish-notifications"
+        case commandFinishNotificationAfter = "quicktty-command-finish-notification-after"
         case configEditor = "quicktty-config-editor"
     }
 
@@ -28,6 +30,8 @@ struct QuickTTYConfig: Equatable, Sendable {
     var hideOnFocusLoss = true
     var restoreWorkspaces = true
     var restoreAgentSessions = true
+    var commandFinishNotifications = true
+    var commandFinishNotificationAfter: TimeInterval = 10
     var configEditor = "nano"
 
     var shouldRestoreAgentSessions: Bool {

@@ -46,6 +46,8 @@ final class WorkspaceViewController: NSViewController {
     private var splitHostingConstraints: [NSLayoutConstraint] = []
     private var splitResizeHandler: ((UUID, Double) -> Void)?
     private var splitEqualizeHandler: ((UUID) -> Void)?
+    private var commandPaletteViewController: CommandPaletteViewController?
+    private weak var commandPalettePreviousResponder: NSResponder?
 
     #if DEBUG
         private var hostedSurfacesForTesting: [PaneID: GhosttySurfaceView] = [:]
@@ -189,6 +191,75 @@ final class WorkspaceViewController: NSViewController {
         view.appearance = appearance
         chromeView.appearance = appearance
         tabBarViewController.applyChromePalette(palette)
+        commandPaletteViewController?.applyPalette(palette)
+    }
+
+    func presentCommandPalette(
+        items: [CommandPaletteItem],
+        onExecute: @escaping (CommandPaletteTarget) -> Void,
+        onDismiss: @escaping (_ restoredPreviousResponder: Bool) -> Void
+    ) {
+        loadViewIfNeeded()
+        if let commandPaletteViewController {
+            commandPaletteViewController.apply(items: items, palette: chromePalette)
+            commandPaletteViewController.focusSearch()
+            return
+        }
+
+        commandPalettePreviousResponder = view.window?.firstResponder
+        let controller = CommandPaletteViewController(chromeHeight: Self.chromeHeight)
+        controller.onExecute = { [weak self] target in
+            self?.removeCommandPalette(restorePreviousResponder: false)
+            onExecute(target)
+        }
+        controller.onDismiss = { [weak self] in
+            let restored = self?.removeCommandPalette(restorePreviousResponder: true) ?? false
+            onDismiss(restored)
+        }
+        addChild(controller)
+        let overlay = controller.view
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        commandPaletteViewController = controller
+        controller.apply(items: items, palette: chromePalette)
+        DispatchQueue.main.async { [weak controller] in
+            controller?.focusSearch()
+        }
+    }
+
+    func updateCommandPalette(items: [CommandPaletteItem]) {
+        commandPaletteViewController?.apply(items: items, palette: chromePalette)
+    }
+
+    @discardableResult
+    func dismissCommandPalette(restorePreviousResponder: Bool) -> Bool {
+        removeCommandPalette(restorePreviousResponder: restorePreviousResponder)
+    }
+
+    var isCommandPalettePresented: Bool {
+        commandPaletteViewController != nil
+    }
+
+    @discardableResult
+    private func removeCommandPalette(restorePreviousResponder: Bool) -> Bool {
+        guard let controller = commandPaletteViewController else { return false }
+        commandPaletteViewController = nil
+        controller.invalidate()
+        controller.view.removeFromSuperview()
+        controller.removeFromParent()
+
+        let previousResponder = commandPalettePreviousResponder
+        commandPalettePreviousResponder = nil
+        guard restorePreviousResponder, let previousResponder, let window = view.window else {
+            return false
+        }
+        return window.makeFirstResponder(previousResponder)
     }
 
     func applySplitAppearance(_ splitAppearance: GhosttySplitAppearance) {
@@ -391,6 +462,14 @@ final class WorkspaceViewController: NSViewController {
 
         var terminalContentSubviewIdentifiersForTesting: [ObjectIdentifier] {
             terminalContentView.subviews.map(ObjectIdentifier.init)
+        }
+
+        var commandPaletteViewControllerForTesting: CommandPaletteViewController? {
+            commandPaletteViewController
+        }
+
+        var commandPaletteIsPresentedForTesting: Bool {
+            commandPaletteViewController != nil
         }
 
         var configurationDiagnosticViewForTesting: NSView {

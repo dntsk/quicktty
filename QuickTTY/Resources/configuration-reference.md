@@ -57,6 +57,14 @@ Restoration relaunches an agent by its opaque native session ID into the origina
 
 Terminal editor command for the configuration, including arguments, for example `code --wait`. Default: `nano`. The `open-config` action opens it in a new terminal tab.
 
+### `quicktty-command-finish-notifications`
+
+Whether QuickTTY sends a macOS notification after a long shell command finishes outside the selected tab of the key window. Default: `true`. Notifications require Ghostty shell integration or OSC 133 command markers. They contain only a generic success or failure message and do not create tab badges. `desktop-notifications = false` disables all QuickTTY notifications.
+
+### `quicktty-command-finish-notification-after`
+
+Minimum command duration in seconds before a completion notification is eligible. Default: `10`. The value must be finite and nonnegative; `0` permits every marked command. The boundary is inclusive.
+
 ### `quicktty-update-channel`
 
 Update channel: `stable` or `beta`. Default: `stable`. Stable reads the GitHub latest feed and excludes prereleases. Beta reads QuickTTY's versioned appcast, which is a superset of stable.
@@ -86,7 +94,10 @@ The global Quake toggle is outside the local registry; its default is `quicktty-
 |---|---|
 | `quit` | `cmd+q` |
 | `open-config` | `cmd+comma` |
+| `command-palette` | `cmd+shift+p` |
 | `toggle-presentation` | `cmd+opt+p` |
+
+`command-palette` opens an in-window fuzzy search over QuickTTY commands and every workspace and tab. Unavailable commands remain visible with a reason; terminal/Ghostty actions are not included.
 
 ### Tabs and panes
 

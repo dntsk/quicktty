@@ -146,4 +146,46 @@ struct ShortcutChord: Equatable, Hashable, Sendable {
         return (canonicalOrder.filter(modifiers.contains).map(\.rawValue) + [key.rawValue])
             .joined(separator: "+")
     }
+
+    var displayString: String {
+        let modifierSymbols: [(ShortcutModifier, String)] = [
+            (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘"),
+        ]
+        return modifierSymbols.compactMap { modifier, symbol in
+            modifiers.contains(modifier) ? symbol : nil
+        }.joined() + key.displayString
+    }
+}
+
+extension ShortcutKey {
+    fileprivate var displayString: String {
+        switch self {
+        case .left: "←"
+        case .right: "→"
+        case .up: "↑"
+        case .down: "↓"
+        case .home: "↖"
+        case .end: "↘"
+        case .pageUp: "⇞"
+        case .pageDown: "⇟"
+        case .tab: "⇥"
+        case .enter: "↩"
+        case .escape: "⎋"
+        case .space: "Space"
+        case .delete: "⌫"
+        case .forwardDelete: "⌦"
+        case .grave: "`"
+        case .minus: "−"
+        case .equal: "="
+        case .leftBracket: "["
+        case .rightBracket: "]"
+        case .backslash: "\\"
+        case .semicolon: ";"
+        case .quote: "'"
+        case .comma: ","
+        case .period: "."
+        case .slash: "/"
+        default: rawValue.uppercased()
+        }
+    }
 }

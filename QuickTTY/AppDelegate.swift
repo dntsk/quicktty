@@ -141,8 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 destinationProvider: { [weak windowCoordinator] paneID in
                     windowCoordinator?.terminalDestination(for: paneID)
                 },
-                isCurrentEffect: { [weak windowCoordinator] effect in
-                    windowCoordinator?.isCurrentTerminalActivityEffect(effect) == true
+                isCurrentEvent: { [weak windowCoordinator] event in
+                    windowCoordinator?.isCurrentTerminalNotificationEvent(event) == true
                 },
                 isSuppressed: { [weak windowCoordinator] destination in
                     windowCoordinator?.shouldSuppressNotification(for: destination) == true
@@ -170,6 +170,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 initialChannel: config.updateChannel
             )
             self.updateManager = updateManager
+            windowCoordinator.installCommandPalette(
+                shortcutConfiguration: { [weak self] in
+                    self?.shortcutController.activeConfiguration ?? .defaults
+                },
+                performCommand: { [weak self] command in
+                    self?.performCommandPaletteCommand(command)
+                }
+            )
 
             Self.applyRuntimeShortcutConfiguration(
                 config.shortcuts,
@@ -185,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installSplitPaneMenuItems()
             installCloseMenuItems()
             installPresentationMenuItem()
+            installCommandPaletteMenuItem()
             installTabSelectionMenuItems()
             installWorkspaceMenuItems()
             installPaneNavigationMenuItems()
@@ -648,6 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let closePaneMenuItemAction = #selector(AppDelegate.closeActivePane)
     static let closeTabMenuItemAction = #selector(AppDelegate.closeActiveTab)
     static let openConfigurationMenuItemAction = #selector(AppDelegate.openConfiguration)
+    static let commandPaletteMenuItemAction = #selector(AppDelegate.toggleCommandPalette)
     static let togglePresentationMenuItemAction = #selector(AppDelegate.togglePresentationMode)
     static let splitRightMenuItemAction = #selector(AppDelegate.splitRight)
     static let splitDownMenuItemAction = #selector(AppDelegate.splitDown)
@@ -1113,6 +1123,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.removeItem(duplicate)
         }
         return canonicalItem
+    }
+
+    static func makeCommandPaletteMenuItem(
+        target: AnyObject,
+        action: Selector = commandPaletteMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Command Palette…", action: action, keyEquivalent: "p")
+        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installCommandPaletteMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = commandPaletteMenuItemAction,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu = viewMenu(in: mainMenu)
+        let canonicalItems = viewMenu.items.filter {
+            $0.title == "Command Palette…"
+                || ($0.keyEquivalent.lowercased() == "p"
+                    && normalizedShortcutModifiers(for: $0) == [.command, .shift])
+        }
+        let item =
+            canonicalItems.first
+            ?? makeCommandPaletteMenuItem(
+                target: target,
+                action: action
+            )
+        item.title = "Command Palette…"
+        item.action = action
+        item.keyEquivalent = "p"
+        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = target
+        for duplicate in canonicalItems.dropFirst() {
+            viewMenu.removeItem(duplicate)
+        }
+        if !viewMenu.items.contains(where: { $0 === item }) {
+            viewMenu.addItem(item)
+        }
+        shortcutController?.register(item, for: .commandPalette)
+        return mainMenu
     }
 
     static func makeTogglePaneZoomMenuItem(
@@ -1680,6 +1735,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == Self.commandPaletteMenuItemAction {
+            return windowCoordinator?.canPresentCommandPalette == true
+        }
         if menuItem.action == Self.agentIntegrationsMenuItemAction {
             return Self.validateAgentIntegrationsMenuItem(
                 menuItem,
@@ -1809,6 +1867,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowCoordinator?.focusPane(direction: .down)
     }
 
+    @objc private func toggleCommandPalette() {
+        windowCoordinator?.toggleCommandPalette()
+    }
+
     @objc private func togglePaneZoom() {
         windowCoordinator?.toggleZoomActivePane()
     }
@@ -1819,6 +1881,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePresentationMode() {
         windowCoordinator?.togglePresentationMode()
+    }
+
+    private func performCommandPaletteCommand(_ command: CommandPaletteCommandID) {
+        switch command {
+        case .quit:
+            NSApp.terminate(nil)
+        case .openConfiguration:
+            openConfiguration()
+        case .agentIntegrations:
+            openAgentIntegrations()
+        case .checkForUpdates:
+            checkForUpdates()
+        case .togglePresentation:
+            togglePresentationMode()
+        case .newTab:
+            createNewTab()
+        case .closePane:
+            closeActivePane()
+        case .closeTab:
+            closeActiveTab()
+        case .splitRight:
+            splitRight()
+        case .splitDown:
+            splitDown()
+        case .previousPane:
+            focusPreviousPane()
+        case .nextPane:
+            focusNextPane()
+        case .togglePaneZoom:
+            togglePaneZoom()
+        case .focusLeft:
+            focusLeftPane()
+        case .focusRight:
+            focusRightPane()
+        case .focusUp:
+            focusUpPane()
+        case .focusDown:
+            focusDownPane()
+        case .toggleBroadcast:
+            toggleBroadcast()
+        case .newWorkspace:
+            createWorkspace()
+        case .renameWorkspace:
+            renameWorkspace()
+        case .deleteWorkspace:
+            deleteWorkspace()
+        }
     }
 
     private func normalWindowFrameDidChange(_ normalWindowFrame: NormalWindowFrame) {
@@ -2042,6 +2151,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installPresentationMenuItem() {
         let mainMenu = Self.installPresentationMenuItem(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installCommandPaletteMenuItem() {
+        let mainMenu = Self.installCommandPaletteMenuItem(
             in: NSApp.mainMenu,
             target: self,
             shortcutController: shortcutController

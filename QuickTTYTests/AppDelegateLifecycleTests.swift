@@ -120,6 +120,15 @@ private final class PaneZoomMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class CommandPaletteMenuActionTarget: NSObject {
+    private(set) var invocationCount = 0
+
+    @objc func toggleCommandPalette() {
+        invocationCount += 1
+    }
+}
+
+@MainActor
 private final class PaneNavigationMenuActionTarget: NSObject {
     private(set) var invocations: [String] = []
 
@@ -1411,6 +1420,41 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func commandPaletteMenuInstallerNormalizesRegistersAndDispatches() throws {
+        let target = CommandPaletteMenuActionTarget()
+        let controller = ShortcutController()
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+        let reusable = NSMenuItem(title: "Foreign Palette", action: nil, keyEquivalent: "P")
+        reusable.keyEquivalentModifierMask = [.command, .shift]
+        let duplicate = NSMenuItem(title: "Command Palette…", action: nil, keyEquivalent: "x")
+        viewMenu.addItem(reusable)
+        viewMenu.addItem(duplicate)
+
+        for _ in 0..<2 {
+            _ = AppDelegate.installCommandPaletteMenuItem(
+                in: mainMenu,
+                target: target,
+                action: #selector(CommandPaletteMenuActionTarget.toggleCommandPalette),
+                shortcutController: controller
+            )
+        }
+
+        let item = try #require(viewMenu.item(withTitle: "Command Palette…"))
+        #expect(viewMenu.items.filter { $0.title == "Command Palette…" }.count == 1)
+        #expect(item === reusable)
+        #expect(item.keyEquivalent == "p")
+        #expect(item.keyEquivalentModifierMask == [.command, .shift])
+        #expect(item.target === target)
+        #expect(controller.menuItem(for: .commandPalette) === item)
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        #expect(target.invocationCount == 1)
+    }
+
+    @Test
     func paneZoomMenuInstallerNormalizesRegistersDispatchesAndValidatesState() throws {
         let target = PaneZoomMenuActionTarget()
         let controller = ShortcutController()
@@ -1923,6 +1967,11 @@ struct AppDelegateLifecycleTests {
             shortcutController: controller
         )
         mainMenu = AppDelegate.installPaneNavigationMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installCommandPaletteMenuItem(
             in: mainMenu,
             target: delegate,
             shortcutController: controller

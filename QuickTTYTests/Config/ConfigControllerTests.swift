@@ -60,6 +60,8 @@ struct ConfigControllerTests {
             font-family = Changed\r
             quicktty-restore-workspaces = false\r
             quicktty-restore-agent-sessions = false\r
+            quicktty-command-finish-notifications = false\r
+            quicktty-command-finish-notification-after = 18.5\r
             quicktty-config-editor = code --wait\r
             """.utf8
         ).write(to: fixture.configURL)
@@ -68,6 +70,8 @@ struct ConfigControllerTests {
 
         #expect(!controller.activeConfig.restoreWorkspaces)
         #expect(!controller.activeConfig.restoreAgentSessions)
+        #expect(!controller.activeConfig.commandFinishNotifications)
+        #expect(controller.activeConfig.commandFinishNotificationAfter == 18.5)
         #expect(controller.activeConfig.configEditor == "code --wait")
         #expect(
             try Data(contentsOf: fixture.effectiveURL)

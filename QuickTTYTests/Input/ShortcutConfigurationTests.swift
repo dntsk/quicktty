@@ -96,6 +96,7 @@ struct ShortcutConfigurationTests {
         let expected: [String: String?] = [
             "quit": "cmd+q",
             "open-config": "cmd+comma",
+            "command-palette": "cmd+shift+p",
             "toggle-presentation": "cmd+opt+p",
             "new-tab": "cmd+t",
             "close-pane": "cmd+w",
@@ -176,6 +177,10 @@ struct ShortcutConfigurationTests {
             #expect(actual[id] == defaultValue)
         }
         #expect(!ids.contains("quicktty-global-toggle"))
+        #expect(ShortcutAction.commandPalette.scope == .application)
+        #expect(ShortcutAction.commandPalette.targetPolicy == .application)
+        #expect(ShortcutAction.commandPalette.executionRoute == .application)
+        #expect(ShortcutAction.commandPalette.menuPolicy == .command)
         #expect(ShortcutAction.togglePaneZoom.scope == .tabPane)
         #expect(ShortcutAction.togglePaneZoom.targetPolicy == .activeWindow)
         #expect(ShortcutAction.togglePaneZoom.executionRoute == .tabPane)

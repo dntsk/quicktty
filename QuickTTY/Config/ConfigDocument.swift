@@ -164,6 +164,8 @@ struct ConfigDocument: Equatable, Sendable {
         var invalidShortcutLines: [ShortcutAction: Int] = [:]
         var hasValidGlobalToggle = false
         var hasValidRestoreAgentSessions = false
+        var hasValidCommandFinishNotifications = false
+        var hasValidCommandFinishNotificationAfter = false
 
         for (index, line) in lines.enumerated() {
             let lineNumber = index + 1
@@ -212,6 +214,8 @@ struct ConfigDocument: Equatable, Sendable {
                 previousConfig: previousConfig,
                 hasValidGlobalToggle: &hasValidGlobalToggle,
                 hasValidRestoreAgentSessions: &hasValidRestoreAgentSessions,
+                hasValidCommandFinishNotifications: &hasValidCommandFinishNotifications,
+                hasValidCommandFinishNotificationAfter: &hasValidCommandFinishNotificationAfter,
                 to: &config,
                 diagnostics: &diagnostics
             )
@@ -527,6 +531,8 @@ struct ConfigDocument: Equatable, Sendable {
         previousConfig: QuickTTYConfig?,
         hasValidGlobalToggle: inout Bool,
         hasValidRestoreAgentSessions: inout Bool,
+        hasValidCommandFinishNotifications: inout Bool,
+        hasValidCommandFinishNotificationAfter: inout Bool,
         to config: inout QuickTTYConfig,
         diagnostics: inout [ConfigDiagnostic]
     ) {
@@ -653,6 +659,35 @@ struct ConfigDocument: Equatable, Sendable {
             }
             config.restoreAgentSessions = value == "true"
             hasValidRestoreAgentSessions = true
+        case .commandFinishNotifications:
+            guard value == "true" || value == "false" else {
+                if !hasValidCommandFinishNotifications, let previousConfig {
+                    config.commandFinishNotifications = previousConfig.commandFinishNotifications
+                }
+                diagnostics.append(
+                    ConfigDiagnostic(line: line, key: key.rawValue, reason: .invalidBoolean)
+                )
+                return
+            }
+            config.commandFinishNotifications = value == "true"
+            hasValidCommandFinishNotifications = true
+        case .commandFinishNotificationAfter:
+            guard let duration = Double(value), duration.isFinite, duration >= 0 else {
+                if !hasValidCommandFinishNotificationAfter, let previousConfig {
+                    config.commandFinishNotificationAfter =
+                        previousConfig.commandFinishNotificationAfter
+                }
+                diagnostics.append(
+                    ConfigDiagnostic(
+                        line: line,
+                        key: key.rawValue,
+                        reason: .invalidNumber(expected: "non-negative seconds")
+                    )
+                )
+                return
+            }
+            config.commandFinishNotificationAfter = duration
+            hasValidCommandFinishNotificationAfter = true
         case .configEditor:
             guard !value.utf8.contains(0), !value.contains("\n"), !value.contains("\r") else {
                 diagnostics.append(

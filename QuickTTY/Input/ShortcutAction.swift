@@ -103,6 +103,7 @@ enum TerminalShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable
 enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
     case quit
     case openConfig = "open-config"
+    case commandPalette = "command-palette"
     case togglePresentation = "toggle-presentation"
     case newTab = "new-tab"
     case closePane = "close-pane"
@@ -171,6 +172,7 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         switch self {
         case .quit: chord(.q, .command)
         case .openConfig: chord(.comma, .command)
+        case .commandPalette: chord(.p, .command, .shift)
         case .togglePresentation: chord(.p, .command, .option)
         case .newTab: chord(.t, .command)
         case .closePane: chord(.w, .command)
@@ -238,7 +240,7 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
             return .terminal
         }
         switch self {
-        case .quit, .openConfig, .togglePresentation:
+        case .quit, .openConfig, .commandPalette, .togglePresentation:
             return .application
         case .newWorkspace, .renameWorkspace, .deleteWorkspace,
             .selectWorkspace1, .selectWorkspace2, .selectWorkspace3, .selectWorkspace4,

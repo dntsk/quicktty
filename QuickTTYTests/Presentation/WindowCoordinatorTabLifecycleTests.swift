@@ -3390,6 +3390,123 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func ordinaryLongCommandsNotifyAtExactThresholdWithoutChangingActivityPresentation() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let notificationClient = CoordinatorNotificationClient(status: .authorized)
+        weak var coordinatorReference: WindowCoordinator?
+        let notificationController = TerminalNotificationController(
+            client: notificationClient,
+            desktopNotificationsEnabled: { true },
+            destinationProvider: { coordinatorReference?.terminalDestination(for: $0) },
+            isCurrentEvent: {
+                coordinatorReference?.isCurrentTerminalNotificationEvent($0) == true
+            },
+            isSuppressed: {
+                coordinatorReference?.shouldSuppressNotification(for: $0) == true
+            },
+            activateDestination: { coordinatorReference?.activate(destination: $0) }
+        )
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalNotificationController: notificationController
+        )
+        coordinatorReference = coordinator
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
+        let statusRefreshCount = coordinator.refreshWorkspaceStatusesInvocationCountForTesting
+
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 9_999_999_999)
+        )
+        #expect(notificationClient.addedRequests.isEmpty)
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 10_000_000_000)
+        )
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 7, durationNanoseconds: 10_000_000_000)
+        )
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: nil, durationNanoseconds: 10_000_000_000)
+        )
+
+        #expect(
+            notificationClient.addedRequests.map(\.body)
+                == ["A command completed.", "A command failed.", "A command completed."]
+        )
+        #expect(coordinator.terminalActivityStatusesForTesting.isEmpty)
+        #expect(
+            coordinator.refreshWorkspaceStatusesInvocationCountForTesting == statusRefreshCount
+        )
+
+        coordinator.setActiveWindowIsKeyForTesting(true)
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 10_000_000_000)
+        )
+        #expect(notificationClient.addedRequests.count == 3)
+
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        var disabled = QuickTTYConfig()
+        disabled.commandFinishNotifications = false
+        coordinator.applyConfiguration(disabled)
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 60_000_000_000)
+        )
+        #expect(notificationClient.addedRequests.count == 3)
+    }
+
+    @Test
+    func commandFinishedWithTrackedOSCActivityUsesOnlyExistingActivityNotification() throws {
+        let clock = CoordinatorActivityClock()
+        let activityController = TerminalActivityController(now: { clock.now })
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let notificationClient = CoordinatorNotificationClient(status: .authorized)
+        weak var coordinatorReference: WindowCoordinator?
+        let notificationController = TerminalNotificationController(
+            client: notificationClient,
+            desktopNotificationsEnabled: { true },
+            destinationProvider: { coordinatorReference?.terminalDestination(for: $0) },
+            isCurrentEvent: {
+                coordinatorReference?.isCurrentTerminalNotificationEvent($0) == true
+            },
+            isSuppressed: { _ in false },
+            activateDestination: { _ in }
+        )
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            terminalActivityController: activityController,
+            terminalNotificationController: notificationController
+        )
+        coordinatorReference = coordinator
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        coordinator.setActiveWindowIsKeyForTesting(false)
+        let paneID = try #require(coordinator.activeSurfaceForTesting?.paneID)
+
+        bridge.surfaceProgressHandler?(
+            paneID,
+            GhosttyProgressReport(state: .set, progress: 50)
+        )
+        clock.now = 10
+        bridge.surfaceCommandFinishedHandler?(
+            paneID,
+            GhosttyCommandFinished(exitCode: 0, durationNanoseconds: 20_000_000_000)
+        )
+
+        #expect(notificationClient.addedRequests.map(\.body) == ["A terminal task completed."])
+        #expect(coordinator.terminalActivityStatusesForTesting[paneID]?.phase == .completed)
+    }
+
+    @Test
     func surfaceRemovalAndStaleGenerationCallbacksCannotRestoreActivity() throws {
         let scheduler = CoordinatorActivityScheduler()
         let activityController = TerminalActivityController(
@@ -8442,6 +8559,11 @@ struct WindowCoordinatorTabLifecycleTests {
             return ratio(in: first, splitID: splitID) ?? ratio(in: second, splitID: splitID)
         }
     }
+}
+
+@MainActor
+private final class CoordinatorActivityClock {
+    var now: TimeInterval = 0
 }
 
 @MainActor
