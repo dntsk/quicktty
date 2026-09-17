@@ -1,9 +1,9 @@
-Subject: [PATCH 3/3] termio/Exec: retain Darwin child wait status
+Subject: [PATCH 2/3] termio/Exec: retain Darwin child wait status
 Origin: QuickTTY local fix (not an upstream backport)
-Base-Commit: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28 (v1.3.1)
+Base-Commit: f9a3f24a56bf05f70894e1a084809d4fffadf420 (1.3.2-dev)
 
 The pinned libxev ProcessKqueue.wait reaps the child but discards the raw
-wait status; its earlier kqueue result loses signal termination. Register
+wait status; its kqueue result still maps signal termination to zero. Register
 the same low-level proc completion on Darwin's static kqueue backend so
 Exec owns the single reap. Preserve EXITSTATUS or 128 + TERMSIG, reporting
 u32 max for unavailable/unrepresentable status, never manufacturing success.
@@ -35,10 +35,9 @@ failure after exit retains the raw status, or unknown on ECHILD. Interrupted
 or failed probes defer to a later tick without blocking or an EINTR loop.
 Other platforms retain the high-level watcher and original timer behavior.
 
-No launch mode, C ABI, dependency, or PTY reader changes. The prior revision
-passed git apply --check as reported by the controller, but native compilation
-failed on a trailing statement semicolon in processExitDarwin. This revision
-removes that semicolon; it has not been compiler-checked or runtime-tested.
+No launch mode, C ABI, dependency, or PTY reader changes. This rebased
+revision applies to Ghostty 1.3.2-dev and Zig 0.16.0 and has passed the native
+XCFramework build; runtime verification remains outstanding.
 Normal nonzero status propagation through login, cancellation/fault timing,
 and final-tail PTY EOF ordering remain runtime gates; this is not a general
 upstream fix.
@@ -48,18 +47,19 @@ libxev ProcessKqueue.wait without modifying that dependency.
 diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 --- a/src/termio/Exec.zig
 +++ b/src/termio/Exec.zig
-@@ -33,6 +33,9 @@
+@@ -35,6 +35,9 @@
  /// The termios poll rate in milliseconds.
  const TERMIOS_POLL_MS = 200;
- 
+
 +const darwin_process_status = builtin.os.tag.isDarwin() and
 +    !xev.dynamic and xev.backend == .kqueue;
 +
  /// If we build with flatpak support then we have to keep track of
  /// a potential execution on the host.
  const FlatpakHostCommand = if (!build_config.flatpak) struct {
-@@ -155,12 +158,29 @@
- 
+@@ -156,13 +159,30 @@
+     } };
+
      // Start our process watcher. If we have an xev.Process use it.
 -    if (process) |*p| p.wait(
 -        td.loop,
@@ -95,30 +95,33 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
          switch (self.subprocess.process orelse break :flatpak) {
              // If we're in flatpak and we have a flatpak command
              // then we can run the special flatpak logic for watching.
-@@ -194,6 +214,9 @@
- pub fn threadExit(self: *Exec, td: *termio.Termio.ThreadData) void {
+@@ -197,6 +217,9 @@
      assert(td.backend == .exec);
      const exec = &td.backend.exec;
- 
+
 +    if (comptime darwin_process_status) {
 +        exec.darwin_exit = .{ .stopped = true };
 +    }
      if (exec.exited) self.subprocess.externalExit();
      self.subprocess.stop();
-@@ -236,6 +259,9 @@
+
+@@ -239,6 +262,10 @@
      assert(td.backend == .exec);
      const execdata = &td.backend.exec;
- 
+
 +    if (comptime darwin_process_status) {
 +        if (execdata.darwin_exit.stopped or td.loop.stopped()) return;
 +    }
-     if (!focused) {
-         // Flag the timer to end on the next iteration. This is
-         // a lot cheaper than doing full timer cancellation.
-@@ -292,6 +318,76 @@
++
+     // Windows has no termios, so there is nothing to poll.
+     if (comptime builtin.os.tag == .windows) return;
+
+@@ -291,6 +318,76 @@
+             .runtime_ms = runtime_ms,
+         },
      }, .{ .forever = {} });
- }
- 
++}
++
 +// A null result is not proof of exit: keep cleanup ownership and poll later.
 +// A value means the child was reaped, or ECHILD released our ownership.
 +fn probeDarwinChild(pid: posix.pid_t) ?u32 {
@@ -140,7 +143,7 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +    const raw: u32 = @bitCast(raw_status);
 +    if (posix.W.IFEXITED(raw)) return posix.W.EXITSTATUS(raw);
 +    if (posix.W.IFSIGNALED(raw)) {
-+        const signal: u32 = posix.W.TERMSIG(raw);
++        const signal: u32 = @intFromEnum(posix.W.TERMSIG(raw));
 +        return if (signal > 0 and signal <= 127) 128 + signal else unknown;
 +    }
 +
@@ -187,12 +190,11 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +        );
 +    }
 +    return .disarm;
-+}
-+
+ }
+
  fn processExit(
-     td_: ?*termio.Termio.ThreadData,
-     _: *xev.Loop,
-@@ -332,7 +428,11 @@
+@@ -332,7 +429,11 @@
+
      _ = r catch |err| switch (err) {
          // This is sent when our timer is canceled. That's fine.
 -        error.Canceled => return .disarm,
@@ -201,15 +203,13 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +                td_.?.backend.exec.darwin_exit = .{ .stopped = true };
 +            return .disarm;
 +        },
- 
+
          else => {
              log.warn("error in termios timer callback err={}", .{err});
-             @panic("crash in termios timer callback");
-@@ -342,6 +442,20 @@
-     const td = td_.?;
+@@ -344,6 +445,20 @@
      assert(td.backend == .exec);
      const exec = &td.backend.exec;
- 
+
 +    if (comptime darwin_process_status) {
 +        if (exec.darwin_exit.stopped or td.loop.stopped()) return .disarm;
 +        if (exec.darwin_exit.poll_pid) |pid| {
@@ -226,7 +226,10 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +
      // This is kind of hacky but we rebuild a Pty struct to get the
      // termios data.
-@@ -387,9 +501,9 @@
+     const mode: ptypkg.Mode = (Pty{
+@@ -386,11 +501,11 @@
+     }
+
      // Repeat the timer
 -    if (exec.termios_timer_running) {
 +    if (exec.termios_timer_running or polling) {
@@ -238,11 +241,10 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
              termio.Termio.ThreadData,
              td,
              termiosTimer,
-@@ -497,6 +611,12 @@
-     /// Process start time and boolean of whether its already exited.
-     start: std.time.Instant,
+@@ -511,6 +626,12 @@
+     start: std.Io.Timestamp,
      exited: bool = false,
- 
+
 +    /// IO-thread-only fallback ownership; cancellation/teardown is terminal.
 +    darwin_exit: if (darwin_process_status) struct {
 +        poll_pid: ?posix.pid_t = null,
@@ -251,10 +253,14 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +
      /// The data stream is the main IO for the pty.
      write_stream: xev.Stream,
-@@ -539,3 +659,6 @@
+
+@@ -547,6 +668,9 @@
+     termios_mode: ptypkg.Mode = .{},
+
      pub fn deinit(self: *ThreadData, alloc: Allocator) void {
 +        if (comptime darwin_process_status) {
 +            self.darwin_exit = .{ .stopped = true };
 +        }
-         posix.close(self.read_thread_pipe);
- 
+         _ = posix.system.close(self.read_thread_pipe);
+
+         // Clear our write pool. We know we aren't ever going to do

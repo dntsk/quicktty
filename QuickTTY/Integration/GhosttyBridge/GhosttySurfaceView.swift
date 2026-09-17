@@ -366,6 +366,7 @@ extension TerminalShortcutAction {
 
 enum GhosttySurfaceCallbackEvent: Sendable {
     case clipboardRead(token: UInt, location: GhosttyClipboardLocation)
+    case clipboardReadDenied(token: UInt)
     case clipboardConfirmation(GhosttyClipboardConfirmationRequest)
     case clipboardWrite(
         location: GhosttyClipboardLocation,
@@ -660,12 +661,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         let readTokens =
             callbackContextOwnership?.takeUnretainedValue().deactivateAndDrain() ?? []
         for token in readTokens {
-            completeClipboardRequest(
-                surface: surface,
-                token: token,
-                data: "",
-                confirmed: true
-            )
+            denyClipboardRequest(surface: surface, token: token)
         }
 
         clipboardInvalidationRoute(paneID)
@@ -760,7 +756,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         addCursorRect(bounds, cursor: cursor)
     }
 
-    // Adapted from SurfaceView_AppKit.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+    // Adapted from SurfaceView_AppKit.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         removeMouseTrackingArea()
@@ -1236,7 +1232,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
         window?.invalidateCursorRects(for: self)
     }
 
-    // Adapted from SurfaceView_AppKit.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+    // Adapted from SurfaceView_AppKit.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
     private func installFocusClickMonitor() {
         guard surface != nil, focusClickMonitor == nil else { return }
         focusClickMonitor = NSEvent.addLocalMonitorForEvents(
@@ -1354,7 +1350,7 @@ final class GhosttySurfaceView: NSView, @MainActor NSTextInputClient {
     }
 }
 
-// Adapted from SurfaceView_AppKit.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+// Adapted from SurfaceView_AppKit.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
 extension GhosttySurfaceView {
     override func mouseDown(with event: NSEvent) {
         _ = sendMouseButton(.press, button: .left, event: event)
@@ -2123,7 +2119,7 @@ extension GhosttySurfaceView {
 }
 
 // Adapted from Ghostty.App.swift and SurfaceView_AppKit.swift at
-// 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+// f9a3f24a56bf05f70894e1a084809d4fffadf420.
 extension GhosttySurfaceView {
     @IBAction func copy(_ sender: Any?) {
         _ = terminalActionRoute(paneID, .copy)
@@ -2179,6 +2175,8 @@ extension GhosttySurfaceView {
         switch event {
         case .clipboardRead(let token, let location):
             processClipboardRead(token: token, location: location)
+        case .clipboardReadDenied(let token):
+            processClipboardReadDenial(token: token)
         case .clipboardConfirmation(let request):
             processClipboardConfirmation(request, handler: confirmationHandler)
         case .clipboardWrite(let location, let contents):
@@ -2452,18 +2450,37 @@ extension GhosttySurfaceView {
 
     private func processClipboardRead(token: UInt, location: GhosttyClipboardLocation) {
         guard let context = callbackContextOwnership?.takeUnretainedValue(),
-            context.beginInitialCompletion(token: token),
+            let request = context.beginInitialCompletion(token: token),
             let surface
         else { return }
 
-        let data = clipboardClient.read(location) ?? ""
+        let contents: [GhosttyClipboardContent]
+        if request.requestsText {
+            contents = [
+                GhosttyClipboardContent(
+                    mime: "text/plain",
+                    data: clipboardClient.read(location) ?? ""
+                )
+            ]
+        } else {
+            contents = []
+        }
         completeClipboardRequest(
             surface: surface,
             token: token,
-            data: data,
+            contents: contents,
+            availableMIMEs: request.listsAvailableTypes ? ["text/plain"] : [],
             confirmed: false
         )
         context.finishInitialCompletion(token: token)
+    }
+
+    private func processClipboardReadDenial(token: UInt) {
+        guard let context = callbackContextOwnership?.takeUnretainedValue(),
+            context.finishQueuedClipboardReadDenial(token: token),
+            let surface
+        else { return }
+        denyClipboardRequest(surface: surface, token: token)
     }
 
     private func processClipboardConfirmation(
@@ -2492,14 +2509,18 @@ extension GhosttySurfaceView {
         else { return }
 
         switch resolution {
-        case .read(let token, let data):
+        case .read(let token, let contents, let availableMIMEs):
             guard let surface else { return }
             completeClipboardRequest(
                 surface: surface,
                 token: token,
-                data: data,
+                contents: contents,
+                availableMIMEs: availableMIMEs,
                 confirmed: true
             )
+        case .deniedRead(let token):
+            guard let surface else { return }
+            denyClipboardRequest(surface: surface, token: token)
         case .write(let location, let contents):
             guard surface != nil else { return }
             clipboardClient.write(location, contents)
@@ -2527,21 +2548,43 @@ extension GhosttySurfaceView {
     private func completeClipboardRequest(
         surface: ghostty_surface_t,
         token: UInt,
-        data: String,
+        contents: [GhosttyClipboardContent],
+        availableMIMEs: [String],
         confirmed: Bool
     ) {
         guard let state = UnsafeMutableRawPointer(bitPattern: token) else { return }
-        data.withCString { pointer in
-            ghostty_surface_complete_clipboard_request(
-                surface,
-                pointer,
-                state,
-                confirmed
-            )
+        var scopedContents: [ghostty_clipboard_content_s] = []
+        var scopedMIMEs: [UnsafePointer<CChar>?] = []
+        withGhosttyClipboardContents(contents, scopedContents: &scopedContents) { values in
+            withGhosttyClipboardMIMEs(availableMIMEs, scopedMIMEs: &scopedMIMEs) { mimes in
+                var completion = ghostty_clipboard_complete_s(
+                    contents: values.baseAddress,
+                    contents_len: values.count,
+                    available: mimes.baseAddress,
+                    available_len: mimes.count,
+                    confirmed: confirmed,
+                    remember: false
+                )
+                ghostty_surface_complete_clipboard_request(surface, &completion, state)
+            }
         }
 
         #if DEBUG
-            appendClipboardObservation(.completion(data: data, confirmed: confirmed))
+            appendClipboardObservation(
+                .completion(
+                    data: contents.first(where: { $0.mime == "text/plain" })?.data ?? "",
+                    confirmed: confirmed
+                )
+            )
+        #endif
+    }
+
+    private func denyClipboardRequest(surface: ghostty_surface_t, token: UInt) {
+        guard let state = UnsafeMutableRawPointer(bitPattern: token) else { return }
+        ghostty_surface_deny_clipboard_request(surface, state)
+
+        #if DEBUG
+            appendClipboardObservation(.completion(data: "", confirmed: true))
         #endif
     }
 
@@ -2560,7 +2603,12 @@ extension GhosttySurfaceView {
 
 final class SurfaceCallbackContext: Sendable {
     enum ClipboardConfirmationResolution: Sendable {
-        case read(token: UInt, data: String)
+        case read(
+            token: UInt,
+            contents: [GhosttyClipboardContent],
+            availableMIMEs: [String]
+        )
+        case deniedRead(token: UInt)
         case write(
             location: GhosttyClipboardLocation,
             contents: [GhosttyClipboardContent]
@@ -2571,11 +2619,17 @@ final class SurfaceCallbackContext: Sendable {
     private enum ReadPhase: Sendable {
         case queued
         case completingInitial
-        case confirmationQueued(GhosttyClipboardConfirmationRequest)
+        case confirmationQueued(
+            GhosttyClipboardConfirmationRequest,
+            availableMIMEs: [String]
+        )
+        case denialQueued
     }
 
     private struct PendingRead: Sendable {
         let location: GhosttyClipboardLocation
+        let requestsText: Bool
+        let listsAvailableTypes: Bool
         var phase: ReadPhase
     }
 
@@ -2647,11 +2701,18 @@ final class SurfaceCallbackContext: Sendable {
 
     func registerClipboardRead(
         token: UInt,
-        location: GhosttyClipboardLocation
+        location: GhosttyClipboardLocation,
+        requestsText: Bool,
+        listsAvailableTypes: Bool
     ) -> Bool {
         let accepted = state.withLock { state in
             guard state.isActive, state.reads[token] == nil else { return false }
-            state.reads[token] = PendingRead(location: location, phase: .queued)
+            state.reads[token] = PendingRead(
+                location: location,
+                requestsText: requestsText,
+                listsAvailableTypes: listsAvailableTypes,
+                phase: .queued
+            )
             return true
         }
         guard accepted else { return false }
@@ -2662,15 +2723,17 @@ final class SurfaceCallbackContext: Sendable {
         return true
     }
 
-    func beginInitialCompletion(token: UInt) -> Bool {
+    func beginInitialCompletion(
+        token: UInt
+    ) -> (requestsText: Bool, listsAvailableTypes: Bool)? {
         state.withLock { state in
             guard state.isActive,
                 var pending = state.reads[token],
                 case .queued = pending.phase
-            else { return false }
+            else { return nil }
             pending.phase = .completingInitial
             state.reads[token] = pending
-            return true
+            return (pending.requestsText, pending.listsAvailableTypes)
         }
     }
 
@@ -2685,7 +2748,8 @@ final class SurfaceCallbackContext: Sendable {
 
     func registerClipboardReadConfirmation(
         token: UInt,
-        data: String,
+        contents: [GhosttyClipboardContent],
+        availableMIMEs: [String],
         kind: GhosttyClipboardConfirmationKind
     ) {
         let request = state.withLock { state -> GhosttyClipboardConfirmationRequest? in
@@ -2699,9 +2763,9 @@ final class SurfaceCallbackContext: Sendable {
                 paneID: paneID,
                 kind: kind,
                 location: pending.location,
-                contents: [GhosttyClipboardContent(mime: "text/plain", data: data)]
+                contents: contents
             )
-            pending.phase = .confirmationQueued(request)
+            pending.phase = .confirmationQueued(request, availableMIMEs: availableMIMEs)
             state.reads[token] = pending
             return request
         }
@@ -2709,6 +2773,34 @@ final class SurfaceCallbackContext: Sendable {
 
         Task { @MainActor [self] in
             deliverClipboardConfirmationIfActive(request)
+        }
+    }
+
+    func queueClipboardReadDenial(token: UInt) {
+        let accepted = state.withLock { state in
+            guard state.isActive,
+                var pending = state.reads[token],
+                case .completingInitial = pending.phase
+            else { return false }
+            pending.phase = .denialQueued
+            state.reads[token] = pending
+            return true
+        }
+        guard accepted else { return }
+
+        Task { @MainActor [self] in
+            deliverClipboardReadDenialIfActive(token: token)
+        }
+    }
+
+    func finishQueuedClipboardReadDenial(token: UInt) -> Bool {
+        state.withLock { state in
+            guard state.isActive,
+                let pending = state.reads[token],
+                case .denialQueued = pending.phase
+            else { return false }
+            state.reads.removeValue(forKey: token)
+            return true
         }
     }
 
@@ -2760,15 +2852,20 @@ final class SurfaceCallbackContext: Sendable {
             guard state.isActive else { return nil }
 
             for (token, pending) in state.reads {
-                guard case .confirmationQueued(let request) = pending.phase,
+                guard case .confirmationQueued(let request, let availableMIMEs) = pending.phase,
                     request.id == id
                 else { continue }
                 state.reads.removeValue(forKey: token)
-                let data =
-                    response == .allow
-                    ? request.contents.first(where: { $0.mime == "text/plain" })?.data ?? ""
-                    : ""
-                return .read(token: token, data: data)
+                switch response {
+                case .deny:
+                    return .deniedRead(token: token)
+                case .allow:
+                    return .read(
+                        token: token,
+                        contents: request.contents,
+                        availableMIMEs: availableMIMEs
+                    )
+                }
             }
 
             guard let request = state.writes.removeValue(forKey: id) else { return nil }
@@ -2982,6 +3079,19 @@ final class SurfaceCallbackContext: Sendable {
     }
 
     @MainActor
+    private func deliverClipboardReadDenialIfActive(token: UInt) {
+        let isQueued = state.withLock { state in
+            guard state.isActive,
+                let pending = state.reads[token],
+                case .denialQueued = pending.phase
+            else { return false }
+            return true
+        }
+        guard isQueued else { return }
+        eventHandler(paneID, .clipboardReadDenied(token: token))
+    }
+
+    @MainActor
     private func deliverClipboardConfirmationIfActive(
         _ request: GhosttyClipboardConfirmationRequest
     ) {
@@ -2991,7 +3101,7 @@ final class SurfaceCallbackContext: Sendable {
                 return true
             }
             return state.reads.values.contains { pending in
-                guard case .confirmationQueued(let queued) = pending.phase else {
+                guard case .confirmationQueued(let queued, _) = pending.phase else {
                     return false
                 }
                 return queued.id == request.id

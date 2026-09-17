@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import GhosttyKit
 
-// Adapted from Ghostty.Input.swift and Helpers/KeyboardLayout.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+// Adapted from Ghostty.Input.swift and Helpers/KeyboardLayout.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
 enum GhosttyInputAction: Equatable, Sendable {
     case release
     case press

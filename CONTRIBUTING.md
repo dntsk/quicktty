@@ -18,7 +18,7 @@ QuickTTY development requires:
 - a full Xcode installation;
 - XcodeGen 2.45.4 or newer;
 - Apple Swift Format, available as `swift format`;
-- Zig exactly 0.15.2 for the pinned Ghostty revision.
+- Zig exactly 0.16.0 for the pinned Ghostty revision.
 
 Clone the repository with all submodules:
 

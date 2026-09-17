@@ -3,6 +3,7 @@ struct GhosttyOpenURL: Equatable, Sendable {
         case unknown
         case text
         case html
+        case osc8
     }
 
     let kind: Kind

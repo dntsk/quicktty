@@ -1,6 +1,6 @@
 import AppKit
 
-// Adapted from NSEvent+Extension.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+// Adapted from NSEvent+Extension.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
 extension NSEvent {
     func ghosttyKeyEvent(
         _ action: GhosttyInputAction,

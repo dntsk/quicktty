@@ -2,7 +2,7 @@ import Combine
 import SwiftUI
 
 // Adapted from Vendor/ghostty/macos/Sources/Ghostty/Surface View/SurfaceView.swift:400-600
-// at commit 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+// at commit f9a3f24a56bf05f70894e1a084809d4fffadf420.
 @MainActor
 final class SearchState: ObservableObject {
     @Published var needle: String

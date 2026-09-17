@@ -1,24 +1,29 @@
-Subject: [PATCH 4/4] QuickTTY managed launch, reader EOF and bounded terminal tail
+Subject: [PATCH 3/3] QuickTTY managed launch, reader EOF and bounded terminal tail
 Origin: QuickTTY local fix (not an upstream backport)
-Base-Commit: 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28 (after patches 0001-0003)
+Base-Commit: f9a3f24a56bf05f70894e1a084809d4fffadf420 (1.3.2-dev, after patches 0002-0003)
 
 Add explicit managed-only helper launch and atomic reader completion state.
-Read the current bounded terminal tail under the renderer lock with bounded
-suffix storage. Preserve normal launch behavior and existing public C layouts.
-New quicktty-prefixed exports are private to this embedding integration.
-Ghostty MIT license applies. Runtime verification remains outstanding.
+The Zig 0.16 reader pipeline publishes COMPLETE only after the gather stage
+proves PTY EOF and the parse stage drains every published batch. Cancellation,
+unconfirmed HUP, setup failure, and teardown fail closed. Read the current
+bounded terminal tail under the renderer lock with bounded suffix storage.
+Preserve normal launch behavior and existing public C layouts. New
+quicktty-prefixed exports are private to this embedding integration.
+Ghostty MIT license applies. Native compilation and package-symbol validation
+have passed; runtime verification remains outstanding.
 
 diff --git a/include/ghostty.h b/include/ghostty.h
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
-@@ -1073,6 +1073,24 @@
- 
- ghostty_surface_t ghostty_surface_new(ghostty_app_t,
-                                       const ghostty_surface_config_s*);
+@@ -1169,6 +1169,26 @@
+
+ GHOSTTY_API ghostty_surface_t ghostty_surface_new(ghostty_app_t,
+                                                      const ghostty_surface_config_s*);
 +// Explicit managed launch; helper_path is copied before return. No shell fallback.
-+ghostty_surface_t quicktty_surface_new_managed(ghostty_app_t app,
-+                                               const ghostty_surface_config_s *options,
-+                                               const char *helper_path);
++GHOSTTY_API ghostty_surface_t quicktty_surface_new_managed(
++    ghostty_app_t app,
++    const ghostty_surface_config_s *options,
++    const char *helper_path);
 +typedef enum quicktty_output_state_e {
 +  QUICKTTY_OUTPUT_FAILED = 0,
 +  QUICKTTY_OUTPUT_PENDING = 1,
@@ -26,22 +31,23 @@ diff --git a/include/ghostty.h b/include/ghostty.h
 +} quicktty_output_state_e;
 +// COMPLETE proves reader EOF after parsing, independently of root process exit.
 +// Normal surfaces return FAILED. No waiting or side effects.
-+quicktty_output_state_e quicktty_surface_output_state(ghostty_surface_t surface);
++GHOSTTY_API quicktty_output_state_e quicktty_surface_output_state(
++    ghostty_surface_t surface);
 +// Current screen tail, including history, under one lock. Bounds: 1...65536.
 +// No EOF gate: final callers must first check output_state. Free with free_text.
-+bool quicktty_surface_read_tail(ghostty_surface_t surface,
-+                                size_t maximum_utf8_bytes,
-+                                ghostty_text_s *text,
-+                                bool *is_truncated);
- void ghostty_surface_free(ghostty_surface_t);
- void* ghostty_surface_userdata(ghostty_surface_t);
- ghostty_app_t ghostty_surface_app(ghostty_surface_t);
++GHOSTTY_API bool quicktty_surface_read_tail(ghostty_surface_t surface,
++                                               size_t maximum_utf8_bytes,
++                                               ghostty_text_s *text,
++                                               bool *is_truncated);
+ GHOSTTY_API void ghostty_surface_free(ghostty_surface_t);
+ GHOSTTY_API void* ghostty_surface_userdata(ghostty_surface_t);
+ GHOSTTY_API ghostty_app_t ghostty_surface_app(ghostty_surface_t);
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -463,6 +463,16 @@
+@@ -502,6 +502,16 @@
      };
- 
+
      pub fn init(self: *Surface, app: *App, opts: Options) !void {
 +        return self.initWithManagedHelper(app, opts, null);
 +    }
@@ -56,34 +62,34 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
          self.* = .{
              .app = app,
              .platform = try .init(opts.platform_tag, opts.platform),
-@@ -487,8 +497,10 @@
+@@ -526,8 +536,10 @@
          // If we have a working directory from the options then we set it.
          if (opts.working_directory) |c_wd| {
              const wd = std.mem.sliceTo(c_wd, 0);
 +            if (managed_helper_path != null and wd.len == 0) return error.InvalidWorkingDirectory;
              if (wd.len > 0) wd: {
-                 var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {
+                 var dir = std.Io.Dir.openDirAbsolute(global.io(), wd, .{}) catch |err| {
 +                    if (managed_helper_path != null) return err;
                      log.warn(
                          "error opening requested working directory dir={s} err={}",
                          .{ wd, err },
-@@ -498,6 +510,7 @@
-                 defer dir.close();
- 
-                 const stat = dir.stat() catch |err| {
+@@ -537,6 +549,7 @@
+                 defer dir.close(global.io());
+
+                 const stat = dir.stat(global.io()) catch |err| {
 +                    if (managed_helper_path != null) return err;
                      log.warn(
                          "failed to stat requested working directory dir={s} err={}",
                          .{ wd, err },
-@@ -506,6 +519,7 @@
+@@ -545,6 +558,7 @@
                  };
- 
+
                  if (stat.kind != .directory) {
 +                    if (managed_helper_path != null) return error.InvalidWorkingDirectory;
                      log.warn(
                          "requested working directory is not a directory dir={s}",
                          .{wd},
-@@ -517,6 +531,7 @@
+@@ -556,6 +570,7 @@
                  if (wd_val.finalize(config.arenaAlloc())) |_| {
                      config.@"working-directory" = wd_val;
                  } else |err| {
@@ -91,26 +97,26 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
                      log.warn(
                          "error finalizing working directory config dir={s} err={}",
                          .{ wd_val.path, err },
-@@ -526,7 +541,7 @@
+@@ -565,7 +580,7 @@
          }
- 
+
          // If we have a command from the options then we set it.
 -        if (opts.command) |c_command| {
 +        if (if (managed_helper_path == null) opts.command else null) |c_command| {
              const cmd = std.mem.sliceTo(c_command, 0);
              if (cmd.len > 0) {
                  config.command = .{ .shell = cmd };
-@@ -549,7 +564,7 @@
+@@ -588,7 +603,7 @@
          }
- 
+
          // If we have an initial input then we set it.
 -        if (opts.initial_input) |c_input| {
 +        if (if (managed_helper_path == null) opts.initial_input else null) |c_input| {
              const alloc = config.arenaAlloc();
- 
+
              // We need to escape the string because the "raw" field
-@@ -575,12 +590,13 @@
- 
+@@ -614,12 +629,13 @@
+
          // Initialize our surface right away. We're given a view that is
          // ready to use.
 -        try self.core_surface.init(
@@ -123,11 +129,11 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +            managed_helper_path,
          );
          errdefer self.core_surface.deinit();
- 
-@@ -1565,6 +1581,35 @@
+
+@@ -1826,6 +1842,35 @@
          return try app.newSurface(opts.*);
      }
- 
+
 +    /// Separate opt-in entry point; inherited/normal options never carry mode.
 +    export fn quicktty_surface_new_managed(
 +        app_: ?*App,
@@ -160,9 +166,9 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
      export fn ghostty_surface_free(ptr: *Surface) void {
          ptr.app.closeSurface(ptr);
      }
-@@ -1648,6 +1693,177 @@
+@@ -1909,6 +1954,177 @@
          ) orelse return false;
- 
+
          return readTextLocked(surface, core_sel, result);
 +    }
 +
@@ -183,12 +189,12 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        is_truncated.* = false;
 +        if (maximum_utf8_bytes == 0 or maximum_utf8_bytes > 65536) return false;
 +
-+        const storage = global.alloc.alloc(u8, maximum_utf8_bytes) catch return false;
-+        defer global.alloc.free(storage);
++        const storage = global.alloc().alloc(u8, maximum_utf8_bytes) catch return false;
++        defer global.alloc().free(storage);
 +        var suffix = TailWriter.init(storage);
 +        const core_surface = &surface.core_surface;
-+        core_surface.renderer_state.mutex.lock();
-+        defer core_surface.renderer_state.mutex.unlock();
++        core_surface.renderer_state.mutex.lockUncancelable(global.io());
++        defer core_surface.renderer_state.mutex.unlock(global.io());
 +
 +        const screen = core_surface.io.terminal.screens.active;
 +        const pages = &screen.pages;
@@ -218,10 +224,10 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        var skip: usize = 0;
 +        while (skip < suffix.len and suffix.at(skip) & 0xc0 == 0x80) : (skip += 1) {}
 +        if (skip > 3) return false;
-+        const text = global.alloc.allocSentinel(u8, suffix.len - skip, 0) catch return false;
++        const text = global.alloc().allocSentinel(u8, suffix.len - skip, 0) catch return false;
 +        for (text, 0..) |*byte, i| byte.* = suffix.at(skip + i);
 +        if (!std.unicode.utf8ValidateSlice(text)) {
-+            global.alloc.free(text);
++            global.alloc().free(text);
 +            return false;
 +        }
 +        result.text = text.ptr;
@@ -336,15 +342,16 @@ diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
 +        try std.testing.expectEqual(@as(u8, 0xa1), sink.at(1));
 +        try std.testing.expectEqual(@as(u8, 'z'), sink.at(2));
      }
- 
+
      fn readTextLocked(
 diff --git a/src/Surface.zig b/src/Surface.zig
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -464,6 +464,19 @@
+@@ -471,6 +471,19 @@
+     app: *App,
      rt_app: *apprt.runtime.App,
      rt_surface: *apprt.runtime.Surface,
- ) !void {
++) !void {
 +    return self.initWithManagedHelper(alloc, config_original, app, rt_app, rt_surface, null);
 +}
 +
@@ -357,12 +364,11 @@ diff --git a/src/Surface.zig b/src/Surface.zig
 +    rt_app: *apprt.runtime.App,
 +    rt_surface: *apprt.runtime.Surface,
 +    managed_helper_path: ?[:0]const u8,
-+) !void {
+ ) !void {
      // Apply our conditional state. If we fail to apply the conditional state
      // then we log and attempt to move forward with the old config.
-     var config_: ?configpkg.Config = config_original.changeConditionalState(
-@@ -476,13 +489,24 @@
- 
+@@ -484,7 +497,7 @@
+
      // We want a config pointer for everything so we get that either
      // based on our conditional state or the original config.
 -    const config: *const configpkg.Config = if (config_) |*c| config: {
@@ -370,10 +376,10 @@ diff --git a/src/Surface.zig b/src/Surface.zig
          // We want to preserve our original working directory. We
          // don't need to dupe memory here because termio will derive
          // it. We preserve this so directory inheritance works.
-         c.@"working-directory" = config_original.@"working-directory";
+@@ -492,6 +505,17 @@
          break :config c;
      } else config_original;
-+
+
 +    // Borrow only during init; managed invariants apply AFTER conditionals.
 +    var managed_config = conditional_config.*;
 +    const config: *const configpkg.Config = if (managed_helper_path != null) managed: {
@@ -384,59 +390,60 @@ diff --git a/src/Surface.zig b/src/Surface.zig
 +        managed_config.env = config_original.env;
 +        break :managed &managed_config;
 +    } else conditional_config;
- 
++
      // Get our configuration
      var derived_config = try DerivedConfig.init(alloc, config);
-@@ -516,6 +540,7 @@
+     errdefer derived_config.deinit();
+@@ -521,6 +545,7 @@
          &derived_config.font,
          font_size,
      );
 +    errdefer app.font_grid_set.deref(font_grid_key);
- 
+
      // Build our size struct which has all the sizes we need.
      const size: rendererpkg.Size = size: {
-@@ -621,6 +646,7 @@
+@@ -636,6 +661,7 @@
      // be scoped here to be valid.
      {
          var env = rt_surface.defaultTermioEnv() catch |err| env: {
 +            if (managed_helper_path != null) return err;
              // If an error occurs, we don't want to block surface startup.
              log.warn("error getting env map for surface err={}", .{err});
-             break :env internal_os.getEnvMap(alloc) catch
-@@ -633,6 +659,7 @@
- 
+             break :env global.environMap() catch std.process.Environ.Map.init(alloc);
+@@ -653,6 +679,7 @@
+
          // Initialize our IO backend
          var io_exec = try termio.Exec.init(alloc, .{
 +            .managed_helper_path = managed_helper_path,
              .command = command,
              .env = env,
              .env_override = config.env,
-@@ -704,6 +731,11 @@
+@@ -720,6 +747,11 @@
          .{&self.renderer_thread},
      );
-     self.renderer_thr.setName("renderer") catch {};
+     self.renderer_thr.setName(global.io(), "renderer") catch {};
 +    errdefer {
 +        self.renderer_thread.stop.notify() catch {};
 +        self.renderer_thr.join();
 +        self.renderer.threadEnter(rt_surface) catch {};
 +    }
- 
+
      // Start our IO thread
      self.io_thr = try std.Thread.spawn(
-@@ -712,6 +744,10 @@
+@@ -728,6 +760,10 @@
          .{ &self.io_thread, &self.io },
      );
-     self.io_thr.setName("io") catch {};
+     self.io_thr.setName(global.io(), "io") catch {};
 +    errdefer {
 +        self.io_thread.stop.notify() catch {};
 +        self.io_thr.join();
 +    }
- 
+
      // Determine our initial window size if configured. We need to do this
      // quite late in the process because our height/width are in grid dimensions,
-@@ -1200,6 +1236,18 @@
+@@ -1238,6 +1274,18 @@
  }
- 
+
  fn childExited(self: *Surface, info: apprt.surface.Message.ChildExited) void {
 +    if (self.io.managed_output != null) {
 +        if (self.child_exited) return;
@@ -452,19 +459,19 @@ diff --git a/src/Surface.zig b/src/Surface.zig
 +
      // Mark our flag that we exited immediately
      self.child_exited = true;
- 
-@@ -1717,6 +1765,7 @@
+
+@@ -1772,6 +1820,7 @@
      };
      self.config.deinit();
      self.config = derived;
 +    if (self.io.managed_output != null) self.config.wait_after_command = true;
- 
+
      // If our mouse is hidden but we disabled mouse hiding, then show it again.
      if (!self.config.mouse_hide_while_typing and self.mouse.hidden) {
 diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 --- a/src/termio/Exec.zig
 +++ b/src/termio/Exec.zig
-@@ -90,6 +90,8 @@
+@@ -92,6 +92,8 @@
      io: *termio.Termio,
      td: *termio.Termio.ThreadData,
  ) !void {
@@ -473,37 +480,36 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
      // Start our subprocess
      const pty_fds = self.subprocess.start(alloc) catch |err| {
          // If we specifically got this error then we are in the forked
-@@ -215,6 +217,8 @@
+@@ -217,6 +219,8 @@
      assert(td.backend == .exec);
      const exec = &td.backend.exec;
- 
+
 +    // Cancellation must win over EOF produced by our own teardown.
 +    if (self.subprocess.managed_output) |state| state.finish(.failed);
      if (comptime darwin_process_status) {
          exec.darwin_exit = .{ .stopped = true };
      }
-@@ -680,6 +684,8 @@
+@@ -690,6 +694,8 @@
  };
- 
+
  pub const Config = struct {
 +    /// Explicit factory-only option; copied into the subprocess arena.
 +    managed_helper_path: ?[:0]const u8 = null,
      command: ?configpkg.Command = null,
      env: EnvMap,
      env_override: configpkg.RepeatableStringMap = .{},
-@@ -702,6 +708,7 @@
-     });
- 
+@@ -708,6 +714,7 @@
+     const c = @import("posix_c");
+
      arena: std.heap.ArenaAllocator,
 +    managed_output: ?*termio.Termio.ManagedOutput = null,
      cwd: ?[:0]const u8,
      env: ?EnvMap,
      args: []const [:0]const u8,
-@@ -741,6 +748,17 @@
-         var arena = std.heap.ArenaAllocator.init(gpa);
+@@ -748,6 +755,17 @@
          errdefer arena.deinit();
          const alloc = arena.allocator();
-+
+
 +        // Resolve the explicit managed program before doing any shell work.
 +        const managed_args = if (cfg.managed_helper_path) |path|
 +            try managedCommand(alloc, path)
@@ -514,11 +520,12 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +            ptr.* = .{};
 +            break :state ptr;
 +        } else null;
- 
++
          // Get our env. If a default env isn't provided by the caller
          // then we get it ourselves.
-@@ -872,6 +890,9 @@
- 
+         var env = cfg.env;
+@@ -881,6 +899,9 @@
+
          // Setup our shell integration, if we can.
          const shell_command: configpkg.Command = shell: {
 +            // No forced shell integration, passwd/HOME lookup, or command
@@ -527,24 +534,24 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
              const default_shell_command: configpkg.Command =
                  cfg.command orelse .{ .shell = switch (builtin.os.tag) {
                      .windows => "cmd.exe",
-@@ -937,7 +958,7 @@
+@@ -946,7 +967,7 @@
          }
- 
+
          // Build our args list
 -        const args: []const [:0]const u8 = execCommand(
 +        const args: []const [:0]const u8 = if (managed_args) |args| args else execCommand(
              alloc,
              shell_command,
              internal_os.passwd,
-@@ -983,6 +1004,7 @@
+@@ -992,6 +1013,7 @@
              .env = env,
              .cwd = cwd,
              .args = args,
 +            .managed_output = managed_output,
- 
+
              .rt_pre_exec_info = cfg.rt_pre_exec_info,
              .rt_post_fork_info = cfg.rt_post_fork_info,
-@@ -1055,7 +1077,7 @@
+@@ -1064,7 +1086,7 @@
          // If we can't access the cwd, then don't set any cwd and inherit.
          // This is important because our cwd can be set by the shell (OSC 7)
          // and we don't want to break new windows.
@@ -553,7 +560,7 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
              if ((comptime build_config.flatpak) and internal_os.isFlatpak()) {
                  // Flatpak sandboxing prevents access to certain reserved paths
                  // regardless of configured permissions. Perform a test spawn
-@@ -1140,10 +1162,10 @@
+@@ -1162,10 +1184,10 @@
                      const f = struct {
                          fn callback(cmd: *Command) ?u8 {
                              const sp = cmd.getData(Subprocess) orelse unreachable;
@@ -568,39 +575,139 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
                              return null;
                          }
                      };
-@@ -1197,6 +1219,11 @@
+@@ -1219,6 +1241,14 @@
      fn childPreExec(self: *Subprocess) !void {
          // Setup our pty
          try self.pty.?.childPreExec();
 +        // Command's legacy chdir is best-effort. Managed launches must not
 +        // silently inherit the app cwd if the requested path disappears.
 +        if (self.managed_output != null) {
-+            if (self.cwd) |cwd| try posix.chdir(cwd);
++            if (self.cwd) |cwd| switch (posix.errno(posix.system.chdir(cwd))) {
++                .SUCCESS => {},
++                else => |err| return posix.unexpectedErrno(err),
++            };
 +        }
      }
- 
+
      /// Called to notify that we exited externally so we can unset our
-@@ -1386,6 +1413,11 @@
-         };
-         defer crash.sentry.thread_state = null;
- 
-+        if (io.managed_output) |state| {
-+            readManaged(fd, io, quit, state);
-+            return;
-+        }
+@@ -1523,6 +1553,12 @@
+         /// signal, EOF, or pty error). The parse stage drains any
+         /// remaining batches and then exits.
+         done: bool = false,
 +
-         // First thing, we want to set the fd to non-blocking. We do this
-         // so that we can try to read from the fd in a tight loop and only
-         // check the quit fd occasionally.
-@@ -1465,6 +1497,59 @@
++        /// True only when the gather stage proved PTY EOF.
++        complete: bool = false,
++
++        /// Whether this pipeline must prove managed output completion.
++        managed: bool = false,
+
+         /// The buffer storage itself.
+         bufs: [buffer_count][buffer_capacity]u8 = undefined,
+@@ -1531,6 +1567,7 @@
+     fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
+         // Always close our end of the pipe when we exit.
+         defer _ = posix.system.close(quit);
++        defer if (io.managed_output) |state| state.finish(.failed);
+
+         // Right now, on Darwin, `std.Thread.setName` can only name the current
+         // thread, and we have no way to get the current thread from within it,
+@@ -1558,7 +1595,7 @@
+         }
+
+         // Shared pipeline
+-        var pipeline: Pipeline = .{};
++        var pipeline: Pipeline = .{ .managed = io.managed_output != null };
+
+         // The idle self-pipe (see the Pipeline field docs). If we
+         // can't create it we still run correctly, bridge polls are
+@@ -1602,7 +1639,12 @@
+                 pipeline.mutex.lockUncancelable(global.io());
+                 defer pipeline.mutex.unlock(global.io());
+                 while (pipeline.count == 0) {
+-                    if (pipeline.done) return;
++                    if (pipeline.done) {
++                        if (io.managed_output) |state| {
++                            state.finish(if (pipeline.complete) .complete else .failed);
++                        }
++                        return;
++                    }
+                     pipeline.batch_ready.waitUncancelable(global.io(), &pipeline.mutex);
+                 }
+                 const slot = pipeline.tail;
+@@ -1648,11 +1690,15 @@
+             setQosClass();
+         }
+
++        var complete = false;
++        var saw_hup = false;
++
+         // However we exit, tell the parse stage the stream is over so
+         // it drains the ring and joins us.
+         defer {
+             pipeline.mutex.lockUncancelable(global.io());
+             pipeline.done = true;
++            pipeline.complete = complete;
+             pipeline.mutex.unlock(global.io());
+             pipeline.batch_ready.signal(global.io());
+         }
+@@ -1697,6 +1743,11 @@
+                     buf[total..],
+                 ) catch |err| switch (err) {
+                     error.WouldBlock => {
++                        if (saw_hup) {
++                            fatal = true;
++                            break :gather;
++                        }
++
+                         // Anything below the threshold is interactive.
+                         if (total < bridge_threshold) break :gather;
+
+@@ -1787,9 +1838,14 @@
+
+                     // The pty is closed. We're probably gracefully
+                     // shutting down.
+-                    error.NotOpenForReading,
+-                    error.InputOutput,
+-                    => {
++                    error.InputOutput => {
++                        log.info("io gather reached pty eof", .{});
++                        complete = true;
++                        fatal = true;
++                        break :gather;
++                    },
++
++                    error.NotOpenForReading => {
+                         log.info("io gather exiting", .{});
+                         fatal = true;
+                         break :gather;
+@@ -1804,7 +1860,13 @@
+                 // This happens on macOS instead of WouldBlock when the
+                 // child process dies. Deliver what we have and let the
+                 // outer poll detect HUP.
+-                if (n == 0) break :gather;
++                if (n == 0) {
++                    if (pipeline.managed) {
++                        complete = true;
++                        fatal = true;
++                    }
++                    break :gather;
++                }
+
+                 total += n;
+
+@@ -1846,11 +1908,68 @@
              // read thread.
              if (pollfds[0].revents & posix.POLL.HUP != 0) {
                  log.info("pty fd closed, read thread exiting", .{});
-+                return;
-+            }
-+        }
-+    }
-+
++                if (pipeline.managed) {
++                    saw_hup = true;
++                    continue;
++                }
+                 return;
+             }
+         }
+     }
+
 +    /// Managed POSIX reader: EOF is independent of the process watcher.
 +    /// Every return except proven EOF fails closed; no mailbox producer here.
 +    fn readManaged(
@@ -649,26 +756,34 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +            if (quitfds[0].revents != 0) return;
 +            if (n == 0) {
 +                state.finish(.complete);
-                 return;
-             }
-         }
-@@ -1703,6 +1788,47 @@
-     };
- }
- 
++                return;
++            }
++        }
++    }
++
+     /// Clears the bridging flag armed before a bridge poll, closing
+     /// the window in which the parse stage writes idle wakes.
+     fn clearBridging(pipeline: *Pipeline) void {
+@@ -2181,8 +2300,50 @@
+ /// not available on a particular platform.
+ pub fn getProcessInfo(self: *Exec, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
+     return self.subprocess.getProcessInfo(info);
++}
++
 +/// Exact argv, with no quoting, shell parser, login wrapper, or fallback.
 +fn managedCommand(alloc: Allocator, path: [:0]const u8) ![]const [:0]const u8 {
 +    if (builtin.os.tag == .windows or build_config.flatpak) return error.UnsupportedManagedLaunch;
 +    if (path.len == 0 or path.len >= std.fs.max_path_bytes or
 +        !std.fs.path.isAbsolute(path) or !std.unicode.utf8ValidateSlice(path))
 +        return error.InvalidManagedHelper;
-+    const helper = try std.fs.openFileAbsolute(path, .{});
-+    defer helper.close();
-+    const stat = try helper.stat();
-+    if (stat.kind != .file or stat.mode & 0o111 == 0) return error.InvalidManagedHelper;
++    const helper = try std.Io.Dir.openFileAbsolute(global.io(), path, .{});
++    defer helper.close(global.io());
++    const stat = try helper.stat(global.io());
++    if (stat.kind != .file or stat.permissions.toMode() & 0o111 == 0)
++        return error.InvalidManagedHelper;
 +    return managedArgv(alloc, path);
-+}
-+
+ }
+
 +fn managedArgv(alloc: Allocator, path: [:0]const u8) ![]const [:0]const u8 {
 +    const args = try alloc.alloc([:0]const u8, 3);
 +    errdefer alloc.free(args);
@@ -699,12 +814,12 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +
  test "execCommand darwin: shell command" {
      if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
- 
+
 diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
 --- a/src/termio/Termio.zig
 +++ b/src/termio/Termio.zig
-@@ -24,6 +24,22 @@
- 
+@@ -27,7 +27,23 @@
+
  /// Mutex state argument for queueMessage.
  pub const MutexState = enum { locked, unlocked };
 +
@@ -719,34 +834,33 @@ diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
 +        _ = self.state.cmpxchgStrong(.pending, outcome, .release, .monotonic);
 +    }
 +};
-+
+
 +/// Managed-only shared state. Exec's arena owns it until after reader join.
 +/// The pointer is immutable after init; no ThreadData fields are shared.
 +managed_output: ?*ManagedOutput = null,
- 
++
  /// Allocator
  alloc: Allocator,
-@@ -298,7 +314,10 @@
-         .default_cursor_blink = opts.config.cursor_blink,
+
+@@ -307,6 +323,9 @@
+         .enquiry_response = opts.config.enquiry_response,
      };
- 
--    const thread_enter_state = try ThreadEnterState.create(
+
 +    const managed_output = switch (backend) {
 +        .exec => |exec| exec.subprocess.managed_output,
 +    };
-+    const thread_enter_state = if (managed_output != null) null else try ThreadEnterState.create(
+     const thread_enter_state = try ThreadEnterState.create(
          alloc,
          opts.full_config,
-     );
-@@ -316,6 +335,7 @@
-         .mailbox = opts.mailbox,
-         .terminal_stream = .initAlloc(alloc, handler),
+@@ -328,6 +347,7 @@
+             .handler = handler,
+         }),
          .thread_enter_state = thread_enter_state,
 +        .managed_output = managed_output,
      };
  }
- 
-@@ -686,7 +706,13 @@
+
+@@ -683,7 +703,13 @@
  /// Process output from readdata but the lock is already held.
  fn processOutputLocked(self: *Termio, buf: []const u8) void {
      // Schedule a render. We can call this first because we have the lock.
@@ -758,35 +872,14 @@ diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
 +        }
 +        unreachable;
 +    };
- 
+
      // Whenever a character is typed, we ensure the cursor is in the
      // non-blink state so it is rendered if visible. If we're under
-@@ -721,12 +747,16 @@
-                 log.err("error recording pty read in inspector err={}", .{err});
-             };
- 
--            self.terminal_stream.next(byte) catch |err|
-+            self.terminal_stream.next(byte) catch |err| {
-+                if (self.managed_output) |state| state.finish(.failed);
-                 log.err("error processing terminal data: {}", .{err});
-+            };
-         }
-     } else {
--        self.terminal_stream.nextSlice(buf) catch |err|
-+        self.terminal_stream.nextSlice(buf) catch |err| {
-+            if (self.managed_output) |state| state.finish(.failed);
-             log.err("error processing terminal data: {}", .{err});
-+        };
+@@ -731,6 +757,18 @@
      }
- 
-     // If our stream handling caused messages to be sent to the mailbox
-@@ -735,6 +765,18 @@
-         self.terminal_stream.handler.termio_messaged = false;
-         self.mailbox.notify();
-     }
-+}
-+
-+test "QuickTTY output proof is monotonic and parsing failure wins EOF" {
+ }
+
++test "QuickTTY output proof is monotonic" {
 +    var state: ManagedOutput = .{};
 +    try std.testing.expectEqual(OutputState.pending, state.state.load(.acquire));
 +    state.finish(.failed);
@@ -796,6 +889,8 @@ diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
 +    eof.finish(.complete);
 +    eof.finish(.failed);
 +    try std.testing.expectEqual(OutputState.complete, eof.state.load(.acquire));
- }
- 
++}
++
  /// Sends a DSR response for the current color scheme to the pty.
+ /// Record a Kitty clipboard protocol session grant so future requests
+ /// carrying the password skip the permission prompt.

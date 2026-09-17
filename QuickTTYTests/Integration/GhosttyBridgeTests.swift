@@ -358,8 +358,8 @@ struct GhosttyBridgeTests {
 
     @Test
     func processExitPayloadMatchesPinnedHeader() {
-        #expect(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue == 55)
-        #expect(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue == 58)
+        #expect(GHOSTTY_ACTION_SHOW_CHILD_EXITED.rawValue == 58)
+        #expect(GHOSTTY_ACTION_COMMAND_FINISHED.rawValue == 61)
         #expect(MemoryLayout<ghostty_surface_message_childexited_s>.size == 16)
         #expect(MemoryLayout<ghostty_surface_message_childexited_s>.stride == 16)
         #expect(MemoryLayout<ghostty_surface_message_childexited_s>.alignment == 8)
@@ -373,6 +373,7 @@ struct GhosttyBridgeTests {
             (.unknown, "custom-scheme:value"),
             (.text, "/tmp/read me.txt"),
             (.html, "https://example.com/index.html"),
+            (.osc8, "https://example.com/terminal-link"),
         ]
 
         for (kind, expectedURL) in cases {
@@ -408,8 +409,8 @@ struct GhosttyBridgeTests {
             kind: .text
         )
 
-        #expect(emptyAction == .unknown(rawValue: 54))
-        #expect(invalidAction == .unknown(rawValue: 54))
+        #expect(emptyAction == .unknown(rawValue: 57))
+        #expect(invalidAction == .unknown(rawValue: 57))
         #expect(!bridge.scheduleRuntimeActionForTesting(emptyAction))
         #expect(!bridge.scheduleRuntimeActionForTesting(invalidAction))
         #expect(opened.isEmpty)

@@ -606,41 +606,84 @@ private func copyGhosttyCommandFinished(
 private func ghosttyRuntimeReadClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
     _ location: ghostty_clipboard_e,
-    _ state: UnsafeMutableRawPointer?
-) -> Bool {
+    _ state: UnsafeMutableRawPointer?,
+    _ mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ mimeCount: Int,
+    _ list: Bool
+) -> ghostty_clipboard_read_result_e {
     guard let userdata,
         let state,
         let location = GhosttyClipboardLocation(cValue: location)
-    else { return false }
+    else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+
+    var requestsText = false
+    if let mimes, mimeCount > 0 {
+        for index in 0..<mimeCount {
+            guard let pointer = mimes[index] else { continue }
+            if String(cString: pointer) == "text/plain" {
+                requestsText = true
+                break
+            }
+        }
+    }
+    guard requestsText || list else { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
 
     let context = Unmanaged<SurfaceCallbackContext>
         .fromOpaque(userdata)
         .takeUnretainedValue()
     return context.registerClipboardRead(
         token: UInt(bitPattern: state),
-        location: location
-    )
+        location: location,
+        requestsText: requestsText,
+        listsAvailableTypes: list
+    ) ? GHOSTTY_CLIPBOARD_READ_STARTED : GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
 }
 
 private func ghosttyRuntimeConfirmReadClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
-    _ string: UnsafePointer<CChar>?,
+    _ confirmation: UnsafePointer<ghostty_clipboard_confirm_s>?,
     _ state: UnsafeMutableRawPointer?,
     _ request: ghostty_clipboard_request_e
 ) {
-    guard let userdata,
-        let string,
-        let state,
-        let kind = GhosttyClipboardConfirmationKind(cValue: request)
-    else { return }
+    guard let userdata, let state else { return }
 
-    let data = String(cString: string)
+    let token = UInt(bitPattern: state)
     let context = Unmanaged<SurfaceCallbackContext>
         .fromOpaque(userdata)
         .takeUnretainedValue()
+    guard let confirmation,
+        let kind = GhosttyClipboardConfirmationKind(cValue: request)
+    else {
+        context.queueClipboardReadDenial(token: token)
+        return
+    }
+
+    let value = confirmation.pointee
+    let contents: [GhosttyClipboardContent]
+    if value.contents_len == 0 {
+        contents = []
+    } else if let pointer = value.contents {
+        contents = GhosttyClipboardContent.copying(pointer, count: value.contents_len)
+    } else {
+        context.queueClipboardReadDenial(token: token)
+        return
+    }
+    guard contents.contains(where: { $0.mime == "text/plain" }) else {
+        context.queueClipboardReadDenial(token: token)
+        return
+    }
+
+    var availableMIMEs: [String] = []
+    if let available = value.available {
+        for index in 0..<value.available_len {
+            guard let pointer = available[index] else { continue }
+            availableMIMEs.append(String(cString: pointer))
+        }
+    }
     context.registerClipboardReadConfirmation(
-        token: UInt(bitPattern: state),
-        data: data,
+        token: token,
+        contents: contents,
+        availableMIMEs: availableMIMEs,
         kind: kind
     )
 }
@@ -971,13 +1014,27 @@ final class GhosttyBridge {
         let locations = [
             GHOSTTY_CLIPBOARD_STANDARD.rawValue,
             GHOSTTY_CLIPBOARD_SELECTION.rawValue,
+            GHOSTTY_CLIPBOARD_PRIMARY.rawValue,
         ]
         let requests = [
             GHOSTTY_CLIPBOARD_REQUEST_PASTE.rawValue,
             GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ.rawValue,
             GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE.rawValue,
+            GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ.rawValue,
+            GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE.rawValue,
+            GHOSTTY_CLIPBOARD_REQUEST_LIST.rawValue,
         ]
-        return locations == [0, 1] && requests == [0, 1, 2]
+        let readResults = [
+            GHOSTTY_CLIPBOARD_READ_STARTED.rawValue,
+            GHOSTTY_CLIPBOARD_READ_UNAVAILABLE.rawValue,
+            GHOSTTY_CLIPBOARD_READ_UNSUPPORTED.rawValue,
+        ]
+        return locations == [0, 1, 2]
+            && requests == [0, 1, 2, 3, 4, 5]
+            && readResults == [0, 1, 2]
+            && MemoryLayout<ghostty_clipboard_content_s>.size == 24
+            && MemoryLayout<ghostty_clipboard_complete_s>.size == 40
+            && MemoryLayout<ghostty_clipboard_confirm_s>.size == 48
     }
 
     static var runtimeActionTagsMatchPinnedHeader: Bool {
@@ -1019,8 +1076,8 @@ final class GhosttyBridge {
             && MemoryLayout<ghostty_action_search_selected_s>.stride == 8
             && MemoryLayout<ghostty_action_search_selected_s>.alignment == 8
         return actual == [
-            0, 1, 2, 5, 12, 26, 36, 40, 47, 48, 54, 55, 56, 58, 59, 60, 61,
-            62,
+            0, 1, 2, 5, 12, 26, 38, 42, 49, 50, 57, 58, 59, 61, 62, 63, 64,
+            65,
         ]
             && scrollbarPayloadMatchesPinnedHeader
             && searchPayloadsMatchPinnedHeader
@@ -1098,6 +1155,7 @@ final class GhosttyBridge {
                     case .unknown: GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN
                     case .text: GHOSTTY_ACTION_OPEN_URL_KIND_TEXT
                     case .html: GHOSTTY_ACTION_OPEN_URL_KIND_HTML
+                    case .osc8: GHOSTTY_ACTION_OPEN_URL_KIND_OSC8
                     }
                 var payload = ghostty_action_u()
                 payload.open_url = ghostty_action_open_url_s(
@@ -1120,9 +1178,8 @@ final class GhosttyBridge {
             _ contents: [GhosttyClipboardContent]
         ) -> [GhosttyClipboardContent] {
             var scopedContents: [ghostty_clipboard_content_s] = []
-            return withScopedClipboardContents(
+            return withGhosttyClipboardContents(
                 contents,
-                at: contents.startIndex,
                 scopedContents: &scopedContents
             ) { values in
                 guard let baseAddress = values.baseAddress else { return [] }
@@ -1130,33 +1187,6 @@ final class GhosttyBridge {
                     baseAddress,
                     count: values.count
                 )
-            }
-        }
-
-        private static func withScopedClipboardContents<Result>(
-            _ contents: [GhosttyClipboardContent],
-            at index: Int,
-            scopedContents: inout [ghostty_clipboard_content_s],
-            _ body: (UnsafeBufferPointer<ghostty_clipboard_content_s>) -> Result
-        ) -> Result {
-            guard index < contents.endIndex else {
-                return scopedContents.withUnsafeBufferPointer(body)
-            }
-
-            let content = contents[index]
-            return content.mime.withCString { mime in
-                content.data.withCString { data in
-                    scopedContents.append(
-                        ghostty_clipboard_content_s(mime: mime, data: data)
-                    )
-                    defer { scopedContents.removeLast() }
-                    return withScopedClipboardContents(
-                        contents,
-                        at: contents.index(after: index),
-                        scopedContents: &scopedContents,
-                        body
-                    )
-                }
             }
         }
 
@@ -1214,6 +1244,7 @@ final class GhosttyBridge {
                 switch openURL.kind {
                 case GHOSTTY_ACTION_OPEN_URL_KIND_TEXT: .text
                 case GHOSTTY_ACTION_OPEN_URL_KIND_HTML: .html
+                case GHOSTTY_ACTION_OPEN_URL_KIND_OSC8: .osc8
                 default: .unknown
                 }
             return .openURL(GhosttyOpenURL(kind: kind, url: url))

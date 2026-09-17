@@ -2,8 +2,8 @@
 set -eu
 
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-REQUIRED_GHOSTTY_COMMIT=332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28
-REQUIRED_ZIG_VERSION=0.15.2
+REQUIRED_GHOSTTY_COMMIT=f9a3f24a56bf05f70894e1a084809d4fffadf420
+REQUIRED_ZIG_VERSION=0.16.0
 QUICKTTY_FORCE_GHOSTTY_REBUILD=${QUICKTTY_FORCE_GHOSTTY_REBUILD:-0}
 
 case "$QUICKTTY_FORCE_GHOSTTY_REBUILD" in
@@ -70,13 +70,13 @@ published_share_dir=$ghostty_dir/zig-out/share
 xcframework_dir=$published_xcframework_dir
 cache_dir=$repo_root/.build/ghostty
 # Order is part of the build identity; do not replace this with a glob.
-patch_names='0001-free-text-abi.patch 0002-screen-point-bounds.patch 0003-darwin-process-exit-status.patch 0004-managed-terminal-control.patch'
+patch_names='0002-screen-point-bounds.patch 0003-darwin-process-exit-status.patch 0004-managed-terminal-control.patch'
 patch_dir=$script_dir/patches/ghostty
 
 # Fixed, whitespace-free paths only; validation and application share this list.
 patch_targets() {
     case "$1" in
-        0001-free-text-abi.patch | 0002-screen-point-bounds.patch)
+        0002-screen-point-bounds.patch)
             printf '%s\n' 'src/apprt/embedded.zig' ;;
         0003-darwin-process-exit-status.patch)
             printf '%s\n' 'src/termio/Exec.zig' ;;
@@ -86,16 +86,11 @@ patch_targets() {
     esac
 }
 
-case "$repo_root" in
-    *[[:space:]]*) fail "repository path contains whitespace unsupported by zig ar MRI commands: $repo_root" ;;
-esac
-
 command -v git >/dev/null 2>&1 || fail "required command not found: git"
 command -v zig >/dev/null 2>&1 || fail "required command not found: zig"
 command -v xcodebuild >/dev/null 2>&1 || fail "required command not found: xcodebuild"
 command -v nm >/dev/null 2>&1 || fail "required command not found: nm"
 command -v ar >/dev/null 2>&1 || fail "required command not found: ar"
-command -v ranlib >/dev/null 2>&1 || fail "required command not found: ranlib"
 command -v mktemp >/dev/null 2>&1 || fail "required command not found: mktemp"
 command -v grep >/dev/null 2>&1 || fail "required command not found: grep"
 command -v awk >/dev/null 2>&1 || fail "required command not found: awk"
@@ -138,46 +133,11 @@ archive_has_required_symbols() {
     done
 }
 
-manifest_contains_archive() {
-    manifest_check_path=$1
-    manifest_expected_archive=$2
-
-    awk -v expected="$manifest_expected_archive" '
-        NF > 0 && $NF == expected { found = 1 }
-        END { exit !found }
-    ' "$manifest_check_path"
-}
-
-validate_manifest_inputs() {
-    manifest_input_path=$1
-    manifest_inputs_output_path=$2
-
-    awk 'NF > 0 && $NF ~ /[.]a$/ { print $NF }' "$manifest_input_path" >"$manifest_inputs_output_path" \
-        || fail "could not parse Zig cache manifest: $manifest_input_path"
-
-    manifest_archive_count=0
-    while IFS= read -r archive_relative || [ -n "$archive_relative" ]; do
-        case "$archive_relative" in
-            .zig-cache/o/*) ;;
-            *) fail "manifest archive input is not a relative path under .zig-cache/o/: $archive_relative" ;;
-        esac
-        case "/$archive_relative/" in
-            */../* | */./*) fail "manifest archive input contains a traversal component: $archive_relative" ;;
-        esac
-
-        archive_absolute=$source_dir/$archive_relative
-        safe_path "$archive_absolute" || fail "unsafe manifest archive input: $archive_absolute"
-        [ -f "$archive_absolute" ] || fail "manifest archive input is not a regular file: $archive_absolute"
-        ar -t "$archive_absolute" >/dev/null 2>&1 || fail "manifest input is not a valid archive: $archive_absolute"
-        manifest_archive_count=$((manifest_archive_count + 1))
-    done <"$manifest_inputs_output_path"
-}
-
 locate_fat_archive() {
     fat_archive=
     fat_archive_count=0
 
-    for fat_archive_candidate in "$xcframework_dir"/*/libghostty-fat.a; do
+    for fat_archive_candidate in "$xcframework_dir"/*/libghostty-internal.a; do
         [ -f "$fat_archive_candidate" ] || continue
         safe_path "$fat_archive_candidate" || return 1
         fat_archive=$fat_archive_candidate
@@ -245,7 +205,7 @@ validate_cached_xcframework() {
         return 1
     }
     locate_fat_archive || {
-        cache_validation_error="cached XCFramework must contain exactly one libghostty-fat.a; found $fat_archive_count"
+        cache_validation_error="cached XCFramework must contain exactly one libghostty-internal.a; found $fat_archive_count"
         return 1
     }
 
@@ -410,7 +370,7 @@ set -- \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
     -Doptimize=ReleaseFast \
-    -Dversion-string=1.3.1
+    -Dversion-string=1.3.2-dev
 
 # Version discovery inside .build would otherwise find the superproject's Git metadata.
 # A fresh source stage also avoids deleting or reusing the user's Vendor Zig cache.
@@ -543,75 +503,12 @@ safe_directory "$xcframework_dir" || fail 'unsafe staged XCFramework'
 validate_share "$staged_share_dir" || fail 'staged Ghostty share resources are missing or unsafe'
 [ -f "$xcframework_dir/Info.plist" ] || fail 'staged GhosttyKit Info.plist is missing'
 [ -d "$xcframework_dir" ] || fail "Ghostty build completed without producing $xcframework_dir"
-locate_fat_archive || fail "Ghostty build must produce exactly one libghostty-fat.a in $xcframework_dir; found $fat_archive_count"
+locate_fat_archive || fail "Ghostty build must produce exactly one libghostty-internal.a in $xcframework_dir; found $fat_archive_count"
 
-source_archive=
-source_archive_count=0
-for source_archive_candidate in "$source_dir"/.zig-cache/o/*/libghostty.a; do
-    [ -f "$source_archive_candidate" ] || continue
-    safe_path "$source_archive_candidate" || fail "unsafe staged native archive: $source_archive_candidate"
-    archive_exports_symbol "$source_archive_candidate" _ghostty_init || continue
-
-    source_archive=$source_archive_candidate
-    source_archive_count=$((source_archive_count + 1))
-done
-
-[ "$source_archive_count" -eq 1 ] || fail "expected exactly one native .zig-cache/o/*/libghostty.a exporting _ghostty_init; found $source_archive_count"
-source_archive_relative=${source_archive#"$source_dir"/}
-printf 'Selected native Ghostty archive: %s\n' "$source_archive"
-
-repack_dir=$(mktemp -d "$stage_dir/archive-repack.XXXXXX") || fail "could not create Ghostty archive repack directory"
-safe_directory "$repack_dir" || fail 'unsafe Ghostty repack directory'
-candidate_inputs_path=$repack_dir/candidate-inputs.txt
-selected_manifest_path=
-manifest_count=0
-selected_manifest_archive_count=0
-for manifest_candidate in "$source_dir"/.zig-cache/h/*.txt; do
-    [ -f "$manifest_candidate" ] || continue
-    safe_path "$manifest_candidate" || fail "unsafe staged Zig manifest: $manifest_candidate"
-    manifest_contains_archive "$manifest_candidate" "$source_archive_relative" || continue
-
-    validate_manifest_inputs "$manifest_candidate" "$candidate_inputs_path"
-    [ "$manifest_archive_count" -ge 2 ] || continue
-
-    selected_manifest_path=$manifest_candidate
-    selected_manifest_archive_count=$manifest_archive_count
-    manifest_count=$((manifest_count + 1))
-done
-
-[ "$manifest_count" -eq 1 ] || fail "expected exactly one Zig cache manifest containing $source_archive_relative and at least two existing archive inputs; found $manifest_count"
-printf 'Selected Zig archive manifest: %s (%s archives)\n' "$selected_manifest_path" "$selected_manifest_archive_count"
-
-archive_inputs_path=$repack_dir/archive-inputs.txt
-validate_manifest_inputs "$selected_manifest_path" "$archive_inputs_path"
-[ "$manifest_archive_count" -eq "$selected_manifest_archive_count" ] \
-    || fail "Zig cache manifest archive inputs changed during repack preparation: $selected_manifest_path"
-
-repacked_archive=$repack_dir/libghostty-fat.a
-mri_path=$repack_dir/repack.mri
-{
-    printf 'create %s\n' "$repacked_archive" || fail 'could not write MRI archive destination'
-    while IFS= read -r archive_relative || [ -n "$archive_relative" ]; do
-        printf 'addlib %s/%s\n' "$source_dir" "$archive_relative" || fail 'could not write MRI archive input'
-    done <"$archive_inputs_path" || fail 'could not read MRI archive inputs'
-    printf 'save\nend\n' || fail 'could not finish MRI stream'
-} >"$mri_path" || fail "could not create zig ar MRI stream"
-
-zig ar -M <"$mri_path" || fail "could not repack Ghostty archive from Zig build manifest"
-ranlib "$repacked_archive" || fail "could not index repacked Ghostty archive"
-ar -t "$repacked_archive" >/dev/null 2>&1 || fail "repacked Ghostty output is not a valid archive: $repacked_archive"
-archive_has_required_symbols "$repacked_archive" \
-    || fail "repacked Ghostty archive failed representative bundled symbol validation: $repacked_archive"
-
-safe_path "$repacked_archive" || fail 'unsafe repacked Ghostty archive'
-safe_path "$fat_archive" || fail 'unsafe generated Ghostty archive'
-printf 'Replacing staged Ghostty archive: %s (from %s)\n' "$fat_archive" "$repacked_archive" >&2
-mv -f "$repacked_archive" "$fat_archive" || fail "could not atomically replace generated Ghostty archive"
-printf 'Repacked generated Ghostty archive from %s manifest inputs: %s\n' \
-    "$selected_manifest_archive_count" "$fat_archive"
-
-archive_has_required_symbols "$fat_archive" || fail "generated Ghostty archive failed representative bundled symbol validation: $fat_archive"
-printf 'Validated representative bundled Ghostty symbols: %s\n' "$fat_archive"
+ar -t "$fat_archive" >/dev/null 2>&1 || fail "generated Ghostty output is not a valid archive: $fat_archive"
+archive_has_required_symbols "$fat_archive" \
+    || fail "generated Ghostty archive failed representative bundled symbol validation: $fat_archive"
+printf 'Validated upstream bundled Ghostty archive and representative symbols: %s\n' "$fat_archive"
 
 final_archive_checksum=$(archive_sha256 "$fat_archive") || fail "could not checksum generated Ghostty archive: $fat_archive"
 temporary_stamp=$stage_dir/completed.stamp
@@ -668,7 +565,7 @@ mv "$staged_share_dir" "$published_share_dir"
 
 # Validate the public paths before the stamp makes this build reusable.
 xcframework_dir=$published_xcframework_dir
-locate_fat_archive || fail 'published GhosttyKit must contain exactly one libghostty-fat.a'
+locate_fat_archive || fail 'published GhosttyKit must contain exactly one libghostty-internal.a'
 archive_has_required_symbols "$fat_archive" || fail 'published Ghostty archive failed symbol validation'
 published_archive_checksum=$(archive_sha256 "$fat_archive") || fail 'could not checksum published Ghostty archive'
 [ "$published_archive_checksum" = "$final_archive_checksum" ] || fail 'published Ghostty archive checksum changed'

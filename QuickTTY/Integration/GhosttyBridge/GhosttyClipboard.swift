@@ -30,10 +30,21 @@ struct GhosttyClipboardContent: Equatable, Sendable {
 
     init?(cValue: ghostty_clipboard_content_s) {
         guard let mime = cValue.mime,
-            let data = cValue.data,
-            let ownedMIME = String(validatingCString: mime),
-            let ownedData = String(validatingCString: data)
+            let ownedMIME = String(validatingCString: mime)
         else { return nil }
+
+        let ownedData: String
+        if cValue.len == 0 {
+            ownedData = ""
+        } else {
+            guard let data = cValue.data,
+                let value = String(
+                    data: Data(bytes: data, count: cValue.len),
+                    encoding: .utf8
+                )
+            else { return nil }
+            ownedData = value
+        }
 
         self.init(mime: ownedMIME, data: ownedData)
     }
@@ -45,6 +56,59 @@ struct GhosttyClipboardContent: Equatable, Sendable {
         UnsafeBufferPointer(start: pointer, count: count).compactMap {
             GhosttyClipboardContent(cValue: $0)
         }
+    }
+}
+
+func withGhosttyClipboardContents<Result>(
+    _ contents: [GhosttyClipboardContent],
+    at index: Int = 0,
+    scopedContents: inout [ghostty_clipboard_content_s],
+    _ body: (UnsafeBufferPointer<ghostty_clipboard_content_s>) -> Result
+) -> Result {
+    guard index < contents.endIndex else {
+        return scopedContents.withUnsafeBufferPointer(body)
+    }
+
+    let content = contents[index]
+    return content.mime.withCString { mime in
+        content.data.withCString { data in
+            scopedContents.append(
+                ghostty_clipboard_content_s(
+                    mime: mime,
+                    data: data,
+                    len: content.data.utf8.count
+                )
+            )
+            defer { scopedContents.removeLast() }
+            return withGhosttyClipboardContents(
+                contents,
+                at: contents.index(after: index),
+                scopedContents: &scopedContents,
+                body
+            )
+        }
+    }
+}
+
+func withGhosttyClipboardMIMEs<Result>(
+    _ mimes: [String],
+    at index: Int = 0,
+    scopedMIMEs: inout [UnsafePointer<CChar>?],
+    _ body: (UnsafeBufferPointer<UnsafePointer<CChar>?>) -> Result
+) -> Result {
+    guard index < mimes.endIndex else {
+        return scopedMIMEs.withUnsafeBufferPointer(body)
+    }
+
+    return mimes[index].withCString { mime in
+        scopedMIMEs.append(mime)
+        defer { scopedMIMEs.removeLast() }
+        return withGhosttyClipboardMIMEs(
+            mimes,
+            at: mimes.index(after: index),
+            scopedMIMEs: &scopedMIMEs,
+            body
+        )
     }
 }
 
@@ -180,7 +244,7 @@ struct GhosttyClipboardClient {
         }
     }
 
-    // Adapted from Ghostty.Shell.swift at 332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28.
+    // Adapted from Ghostty.Shell.swift at f9a3f24a56bf05f70894e1a084809d4fffadf420.
     private static func shellEscape(_ value: String) -> String {
         let characters = "\\ ()[]{}<>\"'`!#$&;|*?\t"
         var result = value
