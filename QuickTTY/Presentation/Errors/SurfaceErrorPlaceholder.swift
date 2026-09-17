@@ -5,6 +5,7 @@ import SwiftUI
 struct SurfaceErrorPlaceholder: NSViewRepresentable {
     let presentation: SurfaceFailurePresentation
     let palette: GhosttyChromePalette
+    var isClosePaneEnabled = true
     let onRetry: @MainActor () -> Void
     let onClosePane: @MainActor () -> Void
 
@@ -16,6 +17,7 @@ struct SurfaceErrorPlaceholder: NSViewRepresentable {
         view.apply(
             presentation: presentation,
             palette: palette,
+            isClosePaneEnabled: isClosePaneEnabled,
             onRetry: onRetry,
             onClosePane: onClosePane
         )
@@ -151,6 +153,7 @@ final class SurfaceErrorPlaceholderView: NSView {
     func apply(
         presentation: SurfaceFailurePresentation,
         palette: GhosttyChromePalette,
+        isClosePaneEnabled: Bool = true,
         onRetry: @escaping @MainActor () -> Void,
         onClosePane: @escaping @MainActor () -> Void
     ) {
@@ -162,6 +165,7 @@ final class SurfaceErrorPlaceholderView: NSView {
             accessibilityLabel: "Terminal unavailable",
             accessibilityValue: presentation.message,
             palette: palette,
+            isSecondaryActionEnabled: isClosePaneEnabled,
             onRetry: onRetry,
             onSecondaryAction: onClosePane
         )
@@ -194,6 +198,7 @@ final class SurfaceErrorPlaceholderView: NSView {
         accessibilityLabel: String,
         accessibilityValue: String,
         palette: GhosttyChromePalette,
+        isSecondaryActionEnabled: Bool = true,
         onRetry: @escaping @MainActor () -> Void,
         onSecondaryAction: @escaping @MainActor () -> Void
     ) {
@@ -202,6 +207,7 @@ final class SurfaceErrorPlaceholderView: NSView {
         retryButton.title = retryTitle ?? ""
         retryButton.isHidden = retryTitle == nil
         secondaryButton.title = secondaryTitle
+        secondaryButton.isEnabled = isSecondaryActionEnabled
         let buttonSize = naturalButtonSize
         contentWidthConstraint?.constant = ceil(
             max(titleLabel.fittingSize.width, buttonSize.width)

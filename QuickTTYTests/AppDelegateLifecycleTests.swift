@@ -111,6 +111,15 @@ private final class SplitPaneMenuActionTarget: NSObject {
 }
 
 @MainActor
+private final class PaneZoomMenuActionTarget: NSObject {
+    private(set) var invocationCount = 0
+
+    @objc func togglePaneZoom() {
+        invocationCount += 1
+    }
+}
+
+@MainActor
 private final class PaneNavigationMenuActionTarget: NSObject {
     private(set) var invocations: [String] = []
 
@@ -1402,6 +1411,52 @@ struct AppDelegateLifecycleTests {
     }
 
     @Test
+    func paneZoomMenuInstallerNormalizesRegistersDispatchesAndValidatesState() throws {
+        let target = PaneZoomMenuActionTarget()
+        let controller = ShortcutController()
+        let mainMenu = NSMenu()
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
+        let viewMenu = NSMenu(title: "View")
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+        let reusable = NSMenuItem(title: "Foreign Zoom", action: nil, keyEquivalent: "X")
+        reusable.keyEquivalentModifierMask = [.command, .shift]
+        let titledDuplicate = NSMenuItem(title: "Zoom Pane", action: nil, keyEquivalent: "z")
+        let foreign = NSMenuItem(title: "Foreign", action: nil, keyEquivalent: "x")
+        foreign.keyEquivalentModifierMask = [.command, .option]
+        [reusable, titledDuplicate, foreign].forEach(viewMenu.addItem)
+
+        for _ in 0..<2 {
+            _ = AppDelegate.installTogglePaneZoomMenuItem(
+                in: mainMenu,
+                target: target,
+                action: #selector(PaneZoomMenuActionTarget.togglePaneZoom),
+                shortcutController: controller
+            )
+        }
+
+        let item = try #require(viewMenu.item(withTitle: "Zoom Pane"))
+        #expect(viewMenu.items.filter { $0.title == "Zoom Pane" }.count == 1)
+        #expect(item === reusable)
+        #expect(item.keyEquivalent == "x")
+        #expect(item.keyEquivalentModifierMask == [.command, .shift])
+        #expect(item.target === target)
+        #expect(controller.menuItem(for: .togglePaneZoom) === item)
+        #expect(viewMenu.items.contains { $0 === foreign })
+        #expect(NSApp.sendAction(item.action!, to: item.target, from: item))
+        #expect(target.invocationCount == 1)
+
+        #expect(
+            AppDelegate.validateTogglePaneZoomMenuItem(
+                item, canTogglePaneZoom: true, isActivePaneZoomed: true))
+        #expect(item.state == .on)
+        #expect(
+            !AppDelegate.validateTogglePaneZoomMenuItem(
+                item, canTogglePaneZoom: false, isActivePaneZoomed: false))
+        #expect(item.state == .off)
+    }
+
+    @Test
     func paneNavigationMenuItemsUsePinnedShortcutsAndDispatchActions() throws {
         let target = PaneNavigationMenuActionTarget()
         let mainMenu = AppDelegate.installPaneNavigationMenuItems(
@@ -1868,6 +1923,11 @@ struct AppDelegateLifecycleTests {
             shortcutController: controller
         )
         mainMenu = AppDelegate.installPaneNavigationMenuItems(
+            in: mainMenu,
+            target: delegate,
+            shortcutController: controller
+        )
+        mainMenu = AppDelegate.installTogglePaneZoomMenuItem(
             in: mainMenu,
             target: delegate,
             shortcutController: controller

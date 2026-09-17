@@ -99,6 +99,7 @@ The global Quake toggle is outside the local registry; its default is `quicktty-
 | `split-down` | `cmd+shift+d` |
 | `previous-pane` | `cmd+left-bracket` |
 | `next-pane` | `cmd+right-bracket` |
+| `toggle-pane-zoom` | `cmd+shift+x` |
 | `focus-left` | `cmd+shift+left` |
 | `focus-right` | `cmd+shift+right` |
 | `focus-up` | `cmd+shift+up` |

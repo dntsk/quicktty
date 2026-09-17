@@ -21,6 +21,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     private let backgroundView = TabItemBackgroundView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let titleStack = NSStackView()
+    private let paneZoomButton = NSButton()
     private let statusBadge = TerminalStatusBadgeView(frame: .zero)
     private let renameEditor = NSTextField(string: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
@@ -33,6 +34,7 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     }
 
     private var closeHandler: (() -> Void)?
+    private var exitPaneZoomHandler: (() -> Void)?
     private var renameSession: RenameSession?
     private var isStartingRename = false
     private var tabIndex = 0
@@ -52,9 +54,29 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         titleStack.alignment = .centerY
         titleStack.distribution = .fill
         titleStack.spacing = 4
+        titleStack.addArrangedSubview(paneZoomButton)
         titleStack.addArrangedSubview(statusBadge)
         titleStack.addArrangedSubview(titleLabel)
         titleStack.translatesAutoresizingMaskIntoConstraints = false
+
+        paneZoomButton.image = NSImage(
+            systemSymbolName: "arrow.down.right.and.arrow.up.left",
+            accessibilityDescription: "Exit Zoom Pane"
+        )
+        paneZoomButton.contentTintColor = .secondaryLabelColor
+        paneZoomButton.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        paneZoomButton.isBordered = false
+        paneZoomButton.imagePosition = .imageOnly
+        paneZoomButton.target = self
+        paneZoomButton.action = #selector(exitPaneZoom)
+        paneZoomButton.toolTip = "Exit Zoom Pane"
+        paneZoomButton.setAccessibilityLabel("Exit Zoom Pane")
+        paneZoomButton.isHidden = true
+        paneZoomButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            paneZoomButton.widthAnchor.constraint(equalToConstant: 14),
+            paneZoomButton.heightAnchor.constraint(equalToConstant: 14),
+        ])
 
         renameEditor.isBordered = false
         renameEditor.drawsBackground = false
@@ -143,11 +165,13 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         isSelected: Bool,
         isPartOfMultiSelection: Bool,
         isBroadcasting: Bool,
+        isPaneZoomed: Bool,
         chromePalette: GhosttyChromePalette,
         dragSessionGenerationProvider: @escaping () -> Int,
         beginSelectionHandler: @escaping (TabSelectionModel.Gesture) -> Void,
         finishSelectionHandler: @escaping () -> Void,
         closeHandler: @escaping () -> Void,
+        exitPaneZoomHandler: @escaping () -> Void,
         renameHandler: @escaping () -> Void,
         menuProvider: @escaping () -> NSMenu
     ) {
@@ -155,6 +179,8 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
         updateStatus(status)
         self.tabIndex = tabIndex
         self.isBroadcasting = isBroadcasting
+        paneZoomButton.isHidden = !isPaneZoomed
+        self.exitPaneZoomHandler = exitPaneZoomHandler
         backgroundView.isActive = isActive
         backgroundView.isSelected = isSelected
         backgroundView.isPartOfMultiSelection = isPartOfMultiSelection
@@ -203,6 +229,8 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
     override func prepareForReuse() {
         cancelRenaming()
         closeHandler = nil
+        exitPaneZoomHandler = nil
+        paneZoomButton.isHidden = true
         backgroundView.beginSelectionHandler = nil
         backgroundView.finishSelectionHandler = nil
         backgroundView.plainDoubleClickHandler = nil
@@ -307,6 +335,26 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
             titleLabel.frame
         }
 
+        var paneZoomIndicatorIsVisibleForTesting: Bool {
+            !paneZoomButton.isHidden
+        }
+
+        var broadcastIndicatorIsVisibleForTesting: Bool {
+            !broadcastIndicator.isHidden
+        }
+
+        var paneZoomIndicatorToolTipForTesting: String? {
+            paneZoomButton.toolTip
+        }
+
+        var paneZoomIndicatorAccessibilityLabelForTesting: String? {
+            paneZoomButton.accessibilityLabel()
+        }
+
+        func clickPaneZoomIndicatorForTesting() {
+            paneZoomButton.performClick(nil)
+        }
+
         var shortcutForTesting: String {
             shortcutLabel.stringValue
         }
@@ -322,6 +370,10 @@ final class TabItemView: NSCollectionViewItem, NSTextFieldDelegate {
 
     @objc private func closeTab() {
         closeHandler?()
+    }
+
+    @objc private func exitPaneZoom() {
+        exitPaneZoomHandler?()
     }
 
     private func automaticallyFinishRenaming(commit shouldCommit: Bool) {

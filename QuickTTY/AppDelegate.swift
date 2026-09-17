@@ -188,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installTabSelectionMenuItems()
             installWorkspaceMenuItems()
             installPaneNavigationMenuItems()
+            installTogglePaneZoomMenuItem()
             installToggleBroadcastMenuItem()
             installTerminalMenuItems()
 
@@ -661,6 +662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let focusRightPaneMenuItemAction = #selector(AppDelegate.focusRightPane)
     static let focusUpPaneMenuItemAction = #selector(AppDelegate.focusUpPane)
     static let focusDownPaneMenuItemAction = #selector(AppDelegate.focusDownPane)
+    static let togglePaneZoomMenuItemAction = #selector(AppDelegate.togglePaneZoom)
     static let toggleBroadcastMenuItemAction = #selector(AppDelegate.toggleBroadcast)
     static let agentIntegrationsMenuItemAction = #selector(AppDelegate.openAgentIntegrations)
     static let copyMenuItemAction = #selector(NSText.copy(_:))
@@ -1111,6 +1113,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.removeItem(duplicate)
         }
         return canonicalItem
+    }
+
+    static func makeTogglePaneZoomMenuItem(
+        target: AnyObject,
+        action: Selector = togglePaneZoomMenuItemAction
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Zoom Pane", action: action, keyEquivalent: "x")
+        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = target
+        return item
+    }
+
+    @discardableResult
+    static func installTogglePaneZoomMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        action: Selector = togglePaneZoomMenuItemAction,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let viewMenu = viewMenu(in: mainMenu)
+        let canonicalItems = viewMenu.items.filter(isCanonicalTogglePaneZoomMenuItem)
+        let canonicalItem: NSMenuItem
+
+        if let existingItem = canonicalItems.first {
+            canonicalItem = existingItem
+            canonicalItem.title = "Zoom Pane"
+            canonicalItem.action = action
+            canonicalItem.keyEquivalent = "x"
+            canonicalItem.keyEquivalentModifierMask = [.command, .shift]
+            canonicalItem.target = target
+            for duplicate in canonicalItems.dropFirst() {
+                viewMenu.removeItem(duplicate)
+            }
+        } else {
+            canonicalItem = makeTogglePaneZoomMenuItem(target: target, action: action)
+            viewMenu.addItem(canonicalItem)
+        }
+
+        shortcutController?.register(canonicalItem, for: .togglePaneZoom)
+        return mainMenu
+    }
+
+    static func validateTogglePaneZoomMenuItem(
+        _ item: NSMenuItem,
+        canTogglePaneZoom: Bool,
+        isActivePaneZoomed: Bool
+    ) -> Bool {
+        item.state = isActivePaneZoomed ? .on : .off
+        return canTogglePaneZoom
+    }
+
+    private static func isCanonicalTogglePaneZoomMenuItem(_ item: NSMenuItem) -> Bool {
+        item.title == "Zoom Pane"
+            || (item.keyEquivalent.lowercased() == "x"
+                && normalizedShortcutModifiers(for: item) == [.command, .shift])
     }
 
     static func makeToggleBroadcastMenuItem(
@@ -1629,6 +1687,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 installerReady: windowCoordinator?.canPresentAgentIntegrations == true
             )
         }
+        if menuItem.action == Self.togglePaneZoomMenuItemAction {
+            return Self.validateTogglePaneZoomMenuItem(
+                menuItem,
+                canTogglePaneZoom: windowCoordinator?.canTogglePaneZoom ?? false,
+                isActivePaneZoomed: windowCoordinator?.isActivePaneZoomed ?? false
+            )
+        }
         if menuItem.action == Self.toggleBroadcastMenuItemAction {
             return Self.validateToggleBroadcastMenuItem(
                 menuItem,
@@ -1742,6 +1807,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func focusDownPane() {
         windowCoordinator?.focusPane(direction: .down)
+    }
+
+    @objc private func togglePaneZoom() {
+        windowCoordinator?.toggleZoomActivePane()
     }
 
     @objc private func toggleBroadcast() {
@@ -1940,6 +2009,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installPaneNavigationMenuItems() {
         let mainMenu = Self.installPaneNavigationMenuItems(
+            in: NSApp.mainMenu,
+            target: self,
+            shortcutController: shortcutController
+        )
+        if NSApp.mainMenu == nil {
+            NSApp.mainMenu = mainMenu
+        }
+    }
+
+    private func installTogglePaneZoomMenuItem() {
+        let mainMenu = Self.installTogglePaneZoomMenuItem(
             in: NSApp.mainMenu,
             target: self,
             shortcutController: shortcutController

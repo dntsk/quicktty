@@ -1036,6 +1036,106 @@ struct GhosttySplitTreeViewTests {
     }
 
     @Test
+    func paneZoomRendersOnlySelectedLeafAndRestoresSameSurfaceInstances() async throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let first = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/sleep 60")
+        )
+        let second = try bridge.makeSurface(
+            configuration: GhosttySurfaceConfiguration(command: "/bin/sleep 60")
+        )
+        let root = SplitNode.split(
+            id: UUID(),
+            axis: .horizontal,
+            ratio: 0.35,
+            first: .pane(first.paneID),
+            second: .pane(second.paneID)
+        )
+        let surfaces = [first.paneID: first, second.paneID: second]
+        let controller = WorkspaceViewController()
+        let window = mountWorkspace(controller)
+        defer { window.orderOut(nil) }
+
+        func display(zoomedPaneID: PaneID?) {
+            controller.displayTerminal(
+                root: root,
+                surfaces: surfaces,
+                failures: [:],
+                palette: .fallback,
+                activePaneID: first.paneID,
+                zoomedPaneID: zoomedPaneID,
+                onResize: { _, _ in },
+                onEqualize: { _ in },
+                onRetryUnavailablePane: { _ in },
+                onCloseUnavailablePane: { _ in }
+            )
+        }
+
+        display(zoomedPaneID: nil)
+        await settleWorkspace(controller, in: window)
+        let hosted = controller.hostedSurfaceIdentifiersForTesting
+        #expect(
+            Set(controller.renderedSurfaceIdentifiersForTesting)
+                == Set([ObjectIdentifier(first), ObjectIdentifier(second)]))
+
+        display(zoomedPaneID: first.paneID)
+        await settleWorkspace(controller, in: window)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(controller.renderedSurfaceIdentifiersForTesting == [ObjectIdentifier(first)])
+        #expect(!first.processExitedForTesting)
+        #expect(!second.processExitedForTesting)
+
+        display(zoomedPaneID: PaneID())
+        await settleWorkspace(controller, in: window)
+        #expect(
+            Set(controller.renderedSurfaceIdentifiersForTesting)
+                == Set([ObjectIdentifier(first), ObjectIdentifier(second)]))
+
+        display(zoomedPaneID: nil)
+        await settleWorkspace(controller, in: window)
+        #expect(controller.hostedSurfaceIdentifiersForTesting == hosted)
+        #expect(
+            Set(controller.renderedSurfaceIdentifiersForTesting)
+                == Set([ObjectIdentifier(first), ObjectIdentifier(second)]))
+    }
+
+    @Test
+    func zoomedUnavailablePaneDisablesCloseUntilUnzoomed() throws {
+        let placeholder = SurfaceErrorPlaceholderView(
+            frame: NSRect(x: 0, y: 0, width: 640, height: 320)
+        )
+        var closeCount = 0
+
+        placeholder.apply(
+            presentation: .unavailable,
+            palette: .fallback,
+            isClosePaneEnabled: false,
+            onRetry: {},
+            onClosePane: { closeCount += 1 }
+        )
+        var views = mountedViews(in: placeholder)
+        let retryButton = try #require(button(titled: "Retry", in: views))
+        let closeButton = try #require(button(titled: "Close Pane", in: views))
+        #expect(retryButton.isEnabled)
+        #expect(!closeButton.isEnabled)
+        closeButton.performClick(nil)
+        #expect(closeCount == 0)
+
+        placeholder.apply(
+            presentation: .unavailable,
+            palette: .fallback,
+            onRetry: {},
+            onClosePane: { closeCount += 1 }
+        )
+        views = mountedViews(in: placeholder)
+        let enabledCloseButton = try #require(button(titled: "Close Pane", in: views))
+        #expect(enabledCloseButton.isEnabled)
+        enabledCloseButton.performClick(nil)
+        #expect(closeCount == 1)
+    }
+
+    @Test
     func unavailablePaneMountsPlaceholderAndButtonsRouteItsPaneIdentity() async throws {
         let controller = WorkspaceViewController()
         let paneID = PaneID(

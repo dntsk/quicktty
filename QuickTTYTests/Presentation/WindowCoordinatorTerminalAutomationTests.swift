@@ -413,6 +413,38 @@ struct WindowCoordinatorTerminalAutomationTests {
     }
 
     @Test
+    func managedSplitSucceedsAndClearsExistingPaneZoom() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.shutdown() }
+        try fixture.coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let tabBefore = try #require(
+            fixture.coordinator.workspaceStoreForTesting.tab(id: fixture.originTabID)
+        )
+        fixture.coordinator.toggleZoomActivePane()
+        #expect(fixture.coordinator.isActivePaneZoomed)
+
+        let session = try resolvedSession(in: fixture)
+        let response = await fixture.coordinator.terminalAutomationHost.createSplit(
+            anchorPaneID: fixture.originPaneID,
+            in: fixture.workspaceID,
+            direction: .down,
+            ratio: 0.5,
+            launch: try launch(),
+            policy: .keep,
+            focus: false,
+            expectedSession: session.identity
+        )
+        _ = try requireCreatedTask(response)
+        let tabAfter = try #require(
+            fixture.coordinator.workspaceStoreForTesting.tab(id: fixture.originTabID)
+        )
+
+        #expect(tabAfter.root != tabBefore.root)
+        #expect(!fixture.coordinator.isActivePaneZoomed)
+        #expect(fixture.coordinator.zoomedPaneByTabIDForTesting[fixture.originTabID] == nil)
+    }
+
+    @Test
     func focusedManagedTabAndSplitActivateExactTargetsWithoutChangingModeOrWindow() async throws {
         let fixture = try makeFixture(mode: .quake)
         defer { fixture.shutdown() }

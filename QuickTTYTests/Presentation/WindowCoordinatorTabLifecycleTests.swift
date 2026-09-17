@@ -6445,6 +6445,114 @@ struct WindowCoordinatorTabLifecycleTests {
     }
 
     @Test
+    func paneZoomIsRuntimeOnlyAndLocksDirectPaneCommands() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+
+        #expect(!coordinator.canTogglePaneZoom)
+        coordinator.toggleZoomActivePane()
+        #expect(coordinator.zoomedPaneByTabIDForTesting.isEmpty)
+
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let tab = activeTab(of: coordinator)
+        let activeSurface = try #require(coordinator.activeSurfaceForTesting)
+        let surfaceIDs = coordinator.surfaceIDsForTesting
+        let store = coordinator.workspaceStoreForTesting
+        let persisted = try JSONEncoder().encode(coordinator.workspaceStoreForPersistence)
+        guard case .split(let splitID, _, _, _, _) = tab.root else {
+            Issue.record("Expected split root")
+            return
+        }
+
+        coordinator.toggleZoomActivePane()
+
+        #expect(coordinator.canTogglePaneZoom)
+        #expect(coordinator.isActivePaneZoomed)
+        #expect(coordinator.zoomedPaneByTabIDForTesting == [tab.id: tab.activePaneID])
+        #expect(!coordinator.canCloseActivePane)
+        #expect(!coordinator.canSplitActivePane)
+        #expect(!coordinator.canNavigateActivePanes)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(try JSONEncoder().encode(coordinator.workspaceStoreForPersistence) == persisted)
+
+        coordinator.requestCloseActivePane()
+        try coordinator.splitActivePaneForTesting(axis: .vertical)
+        coordinator.focusPreviousPane()
+        coordinator.focusNextPane()
+        coordinator.focusPane(direction: .left)
+        coordinator.focusPane(direction: .right)
+        coordinator.workspaceViewControllerForTesting.invokeResizeForTesting(
+            splitID: splitID, ratio: 0.75)
+        coordinator.workspaceViewControllerForTesting.invokeEqualizeForTesting(splitID: splitID)
+
+        #expect(coordinator.workspaceStoreForTesting == store)
+        #expect(coordinator.surfaceIDsForTesting == surfaceIDs)
+        #expect(coordinator.activeSurfaceForTesting === activeSurface)
+        #expect(coordinator.isActivePaneZoomed)
+
+        coordinator.toggleZoomActivePane()
+        #expect(!coordinator.isActivePaneZoomed)
+        #expect(coordinator.zoomedPaneByTabIDForTesting.isEmpty)
+        #expect(coordinator.canCloseActivePane)
+        #expect(coordinator.canSplitActivePane)
+        #expect(coordinator.canNavigateActivePanes)
+    }
+
+    @Test
+    func paneZoomPersistsPerTabButExternalSelectionAndProcessExitClearIt() throws {
+        let bridge = try GhosttyBridge()
+        defer { bridge.shutdown() }
+        let coordinator = WindowCoordinator(
+            ghosttyBridge: bridge,
+            surfaceConfiguration: GhosttySurfaceConfiguration(command: "exec /bin/cat")
+        )
+        defer { coordinator.prepareForBridgeShutdownForTesting() }
+        try coordinator.start()
+        try coordinator.splitActivePaneForTesting(axis: .horizontal)
+        let firstTab = activeTab(of: coordinator)
+        let firstPaneID = try #require(firstTab.root.leaves.first)
+        coordinator.toggleZoomActivePane()
+
+        try coordinator.createShellTab()
+        try coordinator.splitActivePaneForTesting(axis: .vertical)
+        let secondTab = activeTab(of: coordinator)
+        let exitingPaneID = secondTab.activePaneID
+        coordinator.toggleZoomActivePane()
+
+        #expect(
+            coordinator.zoomedPaneByTabIDForTesting
+                == [firstTab.id: firstTab.activePaneID, secondTab.id: secondTab.activePaneID])
+
+        coordinator.activateTab(at: 1)
+        #expect(coordinator.isActivePaneZoomed)
+        #expect(activeTab(of: coordinator).id == firstTab.id)
+
+        let destination = TerminalDestination(
+            workspaceID: coordinator.workspaceStoreForTesting.activeWorkspaceID,
+            tabID: firstTab.id,
+            paneID: firstPaneID
+        )
+        coordinator.activate(destination: destination)
+        #expect(!coordinator.isActivePaneZoomed)
+        #expect(coordinator.zoomedPaneByTabIDForTesting[firstTab.id] == nil)
+        #expect(coordinator.zoomedPaneByTabIDForTesting[secondTab.id] == exitingPaneID)
+
+        coordinator.activateTab(at: 2)
+        #expect(coordinator.isActivePaneZoomed)
+        coordinator.surfaceDidRequestCloseForTesting(id: exitingPaneID, processAlive: false)
+        #expect(!coordinator.isActivePaneZoomed)
+        #expect(coordinator.zoomedPaneByTabIDForTesting[secondTab.id] == nil)
+        #expect(activeTab(of: coordinator).root.leaves.count == 1)
+    }
+
+    @Test
     func paneNavigationIsANoOpForASingleLivePane() throws {
         let bridge = try GhosttyBridge()
         defer { bridge.shutdown() }

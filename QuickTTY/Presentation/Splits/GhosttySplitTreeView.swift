@@ -147,6 +147,7 @@ struct GhosttySplitTreeView: View {
     private let agentResumePresentations: [PaneID: AgentResumePresentation]
     private(set) var terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation]
     private let activePaneID: PaneID?
+    private let allowsPaneClose: Bool
     @ObservedObject private var presentationState: WorkspacePresentationState
     private let callbacks: GhosttySplitTreeCallbacks
 
@@ -157,6 +158,7 @@ struct GhosttySplitTreeView: View {
         agentResumePresentations: [PaneID: AgentResumePresentation] = [:],
         terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] = [:],
         activePaneID: PaneID? = nil,
+        zoomedPaneID: PaneID? = nil,
         presentationState: WorkspacePresentationState = WorkspacePresentationState(),
         onResize: @escaping (UUID, Double) -> Void,
         onEqualize: @escaping (UUID) -> Void,
@@ -166,12 +168,15 @@ struct GhosttySplitTreeView: View {
         onForgetAgentResume: @escaping (PaneID) -> Void = { _ in },
         onReturnControlToAgent: @escaping (UUID) -> Void = { _ in }
     ) {
-        self.root = GhosttySplitTreeDescriptor(root: root)
+        let effectiveZoomedPaneID = zoomedPaneID.flatMap { root.contains($0) ? $0 : nil }
+        let displayedRoot = effectiveZoomedPaneID.map(SplitNode.pane) ?? root
+        self.root = GhosttySplitTreeDescriptor(root: displayedRoot)
         self.surfaces = surfaces
         self.failures = failures
         self.agentResumePresentations = agentResumePresentations
         self.terminalAutomationPresentations = terminalAutomationPresentations
         self.activePaneID = activePaneID
+        allowsPaneClose = effectiveZoomedPaneID == nil
         self.presentationState = presentationState
         callbacks = GhosttySplitTreeCallbacks(
             onResize: onResize,
@@ -202,6 +207,7 @@ struct GhosttySplitTreeView: View {
             terminalAutomationPresentations: terminalAutomationPresentations,
             palette: palette,
             activePaneID: activePaneID,
+            allowsPaneClose: allowsPaneClose,
             splitAppearance: presentationState.splitAppearance,
             dividerColor: dividerColor,
             callbacks: callbacks
@@ -222,6 +228,7 @@ private struct GhosttySplitNodeView: View {
     let terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation]
     let palette: GhosttyChromePalette
     let activePaneID: PaneID?
+    let allowsPaneClose: Bool
     let splitAppearance: GhosttySplitAppearance
     let dividerColor: Color
     let callbacks: GhosttySplitTreeCallbacks
@@ -246,6 +253,7 @@ private struct GhosttySplitNodeView: View {
                     SurfaceErrorPlaceholder(
                         presentation: failure,
                         palette: palette,
+                        isClosePaneEnabled: allowsPaneClose,
                         onRetry: { callbacks.retryUnavailablePane(paneID) },
                         onClosePane: { callbacks.closeUnavailablePane(paneID) }
                     )
@@ -262,6 +270,7 @@ private struct GhosttySplitNodeView: View {
                     SurfaceErrorPlaceholder(
                         presentation: .unavailable,
                         palette: palette,
+                        isClosePaneEnabled: allowsPaneClose,
                         onRetry: { callbacks.retryUnavailablePane(paneID) },
                         onClosePane: { callbacks.closeUnavailablePane(paneID) }
                     )
@@ -294,6 +303,7 @@ private struct GhosttySplitNodeView: View {
                         terminalAutomationPresentations: terminalAutomationPresentations,
                         palette: palette,
                         activePaneID: activePaneID,
+                        allowsPaneClose: allowsPaneClose,
                         splitAppearance: splitAppearance,
                         dividerColor: dividerColor,
                         callbacks: callbacks
@@ -308,6 +318,7 @@ private struct GhosttySplitNodeView: View {
                         terminalAutomationPresentations: terminalAutomationPresentations,
                         palette: palette,
                         activePaneID: activePaneID,
+                        allowsPaneClose: allowsPaneClose,
                         splitAppearance: splitAppearance,
                         dividerColor: dividerColor,
                         callbacks: callbacks

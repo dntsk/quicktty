@@ -111,6 +111,7 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
     case splitDown = "split-down"
     case previousPane = "previous-pane"
     case nextPane = "next-pane"
+    case togglePaneZoom = "toggle-pane-zoom"
     case focusLeft = "focus-left"
     case focusRight = "focus-right"
     case focusUp = "focus-up"
@@ -178,6 +179,7 @@ enum ShortcutAction: String, CaseIterable, Equatable, Hashable, Sendable {
         case .splitDown: chord(.d, .command, .shift)
         case .previousPane: chord(.leftBracket, .command)
         case .nextPane: chord(.rightBracket, .command)
+        case .togglePaneZoom: chord(.x, .command, .shift)
         case .focusLeft: chord(.left, .command, .shift)
         case .focusRight: chord(.right, .command, .shift)
         case .focusUp: chord(.up, .command, .shift)

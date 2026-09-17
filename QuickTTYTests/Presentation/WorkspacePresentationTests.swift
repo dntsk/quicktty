@@ -936,6 +936,60 @@ struct WorkspacePresentationTests {
     }
 
     @Test
+    func paneZoomIndicatorsCoexistWithStatusAndBroadcastAndExitExactTab() throws {
+        let firstPaneID = PaneID()
+        let secondPaneID = PaneID()
+        let first = TerminalTab(
+            title: "First",
+            pane: TerminalPaneDescriptor(id: firstPaneID, cwd: "/tmp")
+        )
+        let second = try TerminalTab(
+            title: "Second",
+            root: .pane(secondPaneID),
+            paneDescriptors: [TerminalPaneDescriptor(id: secondPaneID, cwd: "/tmp")],
+            isBroadcasting: true
+        )
+        let tabs = [first, second]
+        let fixture = Self.makeMountedTabBar(tabs: tabs, activeTabID: first.id)
+        defer { fixture.window.orderOut(nil) }
+        var exitedTabIDs: [TabID] = []
+        var activatedTabIDs: [TabID] = []
+        fixture.tabBar.onExitPaneZoom = { exitedTabIDs.append($0) }
+        fixture.tabBar.onActivateTab = { activatedTabIDs.append($0) }
+
+        fixture.tabBar.apply(
+            tabs: tabs,
+            activeTabID: first.id,
+            destinations: [],
+            statuses: [
+                first.id: TerminalStatusPresentation(phase: .working, percent: 25)
+            ],
+            zoomedTabIDs: [first.id, second.id]
+        )
+        fixture.tabBar.collectionViewForTesting.layoutSubtreeIfNeeded()
+        let firstItem = fixture.tabBar.tabItemForTesting(at: 0)
+        let secondItem = fixture.tabBar.tabItemForTesting(at: 1)
+
+        #expect(fixture.tabBar.zoomedTabIDsForTesting == [first.id, second.id])
+        #expect(firstItem.paneZoomIndicatorIsVisibleForTesting)
+        #expect(secondItem.paneZoomIndicatorIsVisibleForTesting)
+        #expect(firstItem.badgeRepresentationForTesting == "25%")
+        #expect(secondItem.broadcastIndicatorIsVisibleForTesting)
+        #expect(secondItem.paneZoomIndicatorToolTipForTesting == "Exit Zoom Pane")
+        #expect(
+            secondItem.paneZoomIndicatorAccessibilityLabelForTesting == "Exit Zoom Pane")
+
+        secondItem.clickPaneZoomIndicatorForTesting()
+        #expect(exitedTabIDs == [second.id])
+        #expect(activatedTabIDs.isEmpty)
+
+        secondItem.prepareForReuse()
+        #expect(!secondItem.paneZoomIndicatorIsVisibleForTesting)
+        secondItem.clickPaneZoomIndicatorForTesting()
+        #expect(exitedTabIDs == [second.id])
+    }
+
+    @Test
     func terminalStatusAggregateIsNilWithoutContributorsAndUsesOrderIndependentPrecedence() {
         let phases: [TerminalActivityPhase] = [
             .completed,

@@ -23,6 +23,7 @@ final class WorkspaceViewController: NSViewController {
     var onWorkspaceMenuTrackingChanged: ((Bool) -> Void)?
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
+    var onExitPaneZoom: ((TabID) -> Void)?
     var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
@@ -143,6 +144,9 @@ final class WorkspaceViewController: NSViewController {
         tabBarViewController.onCloseTab = { [weak self] tabID in
             self?.onCloseTab?(tabID)
         }
+        tabBarViewController.onExitPaneZoom = { [weak self] tabID in
+            self?.onExitPaneZoom?(tabID)
+        }
         tabBarViewController.onToggleBroadcast = { [weak self] in
             self?.onToggleBroadcast?()
         }
@@ -199,7 +203,8 @@ final class WorkspaceViewController: NSViewController {
     func apply(
         _ store: WorkspaceStore,
         liveTitles: [PaneID: String] = [:],
-        paneStatuses: [PaneID: TerminalActivityState] = [:]
+        paneStatuses: [PaneID: TerminalActivityState] = [:],
+        zoomedTabIDs: Set<TabID> = []
     ) {
         loadViewIfNeeded()
         workspaceSelector.apply(
@@ -225,7 +230,8 @@ final class WorkspaceViewController: NSViewController {
             activeTabID: activeWorkspace?.activeTabID,
             destinations: destinations,
             displayedTitles: Self.displayedTitles(for: tabs, liveTitles: liveTitles),
-            statuses: Self.tabStatuses(for: tabs, paneStatuses: paneStatuses)
+            statuses: Self.tabStatuses(for: tabs, paneStatuses: paneStatuses),
+            zoomedTabIDs: zoomedTabIDs
         )
     }
 
@@ -454,6 +460,7 @@ final class WorkspaceViewController: NSViewController {
         terminalAutomationPresentations: [PaneID: TerminalAutomationPresentation] = [:],
         palette: GhosttyChromePalette,
         activePaneID: PaneID? = nil,
+        zoomedPaneID: PaneID? = nil,
         splitAppearance: GhosttySplitAppearance = .fallback,
         onResize: @escaping (UUID, Double) -> Void,
         onEqualize: @escaping (UUID) -> Void,
@@ -496,6 +503,7 @@ final class WorkspaceViewController: NSViewController {
             agentResumePresentations: agentResumePresentations,
             terminalAutomationPresentations: terminalAutomationPresentations,
             activePaneID: activePaneID,
+            zoomedPaneID: zoomedPaneID,
             presentationState: presentationState,
             onResize: onResize,
             onEqualize: onEqualize,

@@ -104,6 +104,7 @@ struct ShortcutConfigurationTests {
             "split-down": "cmd+shift+d",
             "previous-pane": "cmd+left-bracket",
             "next-pane": "cmd+right-bracket",
+            "toggle-pane-zoom": "cmd+shift+x",
             "focus-left": "cmd+shift+left",
             "focus-right": "cmd+shift+right",
             "focus-up": "cmd+shift+up",
@@ -175,6 +176,10 @@ struct ShortcutConfigurationTests {
             #expect(actual[id] == defaultValue)
         }
         #expect(!ids.contains("quicktty-global-toggle"))
+        #expect(ShortcutAction.togglePaneZoom.scope == .tabPane)
+        #expect(ShortcutAction.togglePaneZoom.targetPolicy == .activeWindow)
+        #expect(ShortcutAction.togglePaneZoom.executionRoute == .tabPane)
+        #expect(ShortcutAction.togglePaneZoom.menuPolicy == .command)
     }
 
     @Test

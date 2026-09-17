@@ -161,6 +161,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     private let workspaceViewController = WorkspaceViewController()
     private let splitCoordinator = SplitCoordinator()
     private var workspaceStore: WorkspaceStore
+    private var zoomedPaneByTabID: [TabID: PaneID] = [:]
     private var selectionGeneration: UInt64 = 0
     private var createWorkspaceController: CreateWorkspaceController?
     private var agentIntegrationsSheetController: AgentIntegrationsSheetController?
@@ -277,8 +278,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hasActiveWorkspace && workspaceStore.workspaces.count > 1
     }
 
+    var isActivePaneZoomed: Bool {
+        guard let activeTab else { return false }
+        return zoomedPaneByTabID[activeTab.id] == activeTab.activePaneID
+    }
+
+    var canTogglePaneZoom: Bool {
+        (activeTab?.root.leaves.count ?? 0) > 1
+    }
+
     var canCloseActivePane: Bool {
-        activePaneID != nil
+        activePaneID != nil && !isActivePaneZoomed
     }
 
     var canCloseActiveTab: Bool {
@@ -288,11 +298,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     var canSplitActivePane: Bool {
-        activePaneID.flatMap { surfaces[$0] } != nil
+        !isActivePaneZoomed && activePaneID.flatMap { surfaces[$0] } != nil
     }
 
     var canNavigateActivePanes: Bool {
-        (activeTab?.root.leaves.count ?? 0) > 1
+        !isActivePaneZoomed && (activeTab?.root.leaves.count ?? 0) > 1
     }
 
     var canPresentAgentIntegrations: Bool {
@@ -755,8 +765,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         guard !isPreparingForTermination else { return false }
         let previousActivePaneID = activePaneID
         guard candidate != workspaceStore else { return false }
+        let previousStore = workspaceStore
         selectionGeneration = selectionGeneration(after: candidate)
         workspaceStore = candidate
+        reconcilePaneZoom(from: previousStore)
         let committedActivePaneID = activePaneID
         persistWorkspaceStore(workspaceStore)
         // WHY: Persistence can freeze reentrantly after this commit was already accepted.
@@ -768,6 +780,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             previousSurface.endSearchForDeactivation()
         }
         return true
+    }
+
+    private func reconcilePaneZoom(from previousStore: WorkspaceStore) {
+        let invalidTabIDs = zoomedPaneByTabID.compactMap { tabID, paneID -> TabID? in
+            guard let previousTab = previousStore.tab(id: tabID),
+                let committedTab = workspaceStore.tab(id: tabID),
+                previousTab.root == committedTab.root,
+                committedTab.root.leaves.count > 1,
+                committedTab.root.contains(paneID),
+                committedTab.activePaneID == paneID
+            else {
+                return tabID
+            }
+            return nil
+        }
+        for tabID in invalidTabIDs {
+            zoomedPaneByTabID.removeValue(forKey: tabID)
+        }
     }
 
     private func selectionGeneration(after candidate: WorkspaceStore) -> UInt64 {
@@ -2700,7 +2730,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func requestCloseActivePane() {
-        guard let paneID = activePaneID else { return }
+        guard !isActivePaneZoomed, let paneID = activePaneID else { return }
         guard surfaces[paneID] != nil else {
             closeUnavailablePane(paneID)
             return
@@ -2717,6 +2747,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func splitActivePane(axis: SplitAxis) throws {
+        guard !isActivePaneZoomed else { return }
         let workspaceID = workspaceStore.activeWorkspaceID
         guard
             let workspace = workspaceStore.workspace(id: workspaceID),
@@ -2921,7 +2952,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             workspaceViewController.apply(
                 workspaceStore,
                 liveTitles: liveSurfaceTitles,
-                paneStatuses: terminalActivityController.statuses
+                paneStatuses: terminalActivityController.statuses,
+                zoomedTabIDs: Set(zoomedPaneByTabID.keys)
             )
             if let surface = activePaneID.flatMap({ surfaces[$0] }), let paneID = activePaneID {
                 focus(surface, paneID: paneID)
@@ -2929,6 +2961,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         } catch {
             onError(error)
         }
+    }
+
+    func toggleZoomActivePane() {
+        guard !isPreparingForTermination, let activeTab,
+            activeTab.root.leaves.count > 1
+        else { return }
+
+        if zoomedPaneByTabID[activeTab.id] == activeTab.activePaneID {
+            zoomedPaneByTabID.removeValue(forKey: activeTab.id)
+        } else {
+            zoomedPaneByTabID[activeTab.id] = activeTab.activePaneID
+        }
+        refreshWorkspacePresentation(focusTerminal: true)
     }
 
     func focusPreviousPane() {
@@ -3616,7 +3661,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func closeUnavailablePane(_ paneID: PaneID) {
-        guard !isPreparingForTermination, surfaces[paneID] == nil,
+        guard !(isActivePaneZoomed && activePaneID == paneID),
+            !isPreparingForTermination, surfaces[paneID] == nil,
             workspaceStore.workspaces.contains(where: { workspace in
                 workspace.tabs.contains(where: { $0.root.contains(paneID) })
             }),
@@ -3669,7 +3715,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             workspaceViewController.apply(
                 workspaceStore,
                 liveTitles: liveSurfaceTitles,
-                paneStatuses: terminalActivityController.statuses
+                paneStatuses: terminalActivityController.statuses,
+                zoomedTabIDs: Set(zoomedPaneByTabID.keys)
             )
             synchronizeTerminalAcknowledgements()
             return
@@ -3811,6 +3858,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.onCloseTab = { [weak self] tabID in
             self?.requestCloseTab(tabID)
         }
+        workspaceViewController.onExitPaneZoom = { [weak self] tabID in
+            self?.clearPaneZoom(tabID: tabID)
+        }
         workspaceViewController.onToggleBroadcast = { [weak self] in
             self?.toggleBroadcast()
         }
@@ -3889,6 +3939,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceMenuTransientInteraction = nil
     }
 
+    private func clearPaneZoom(tabID: TabID) {
+        guard zoomedPaneByTabID.removeValue(forKey: tabID) != nil else { return }
+        refreshWorkspacePresentation(focusTerminal: activeTab?.id == tabID)
+    }
+
     private enum PaneFocusCommand {
         case previous
         case next
@@ -3896,6 +3951,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func focusActivePane(using command: PaneFocusCommand) {
+        guard !isActivePaneZoomed else { return }
         let workspaceID = workspaceStore.activeWorkspaceID
         guard
             let workspace = workspaceStore.workspace(id: workspaceID),
@@ -4043,7 +4099,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         workspaceViewController.apply(
             workspaceStore,
             liveTitles: liveSurfaceTitles,
-            paneStatuses: terminalActivityController.statuses
+            paneStatuses: terminalActivityController.statuses,
+            zoomedTabIDs: Set(zoomedPaneByTabID.keys)
         )
         guard !isPreparingForTermination else { return }
         let activePaneIDs = activeTab?.root.leaves ?? []
@@ -4081,6 +4138,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             terminalAutomationPresentations: activeTerminalAutomationPresentations,
             palette: ghosttyBridge.chromePalette,
             activePaneID: activePaneID,
+            zoomedPaneID: activeTab.flatMap { zoomedPaneByTabID[$0.id] },
             splitAppearance: ghosttyBridge.splitAppearance,
             onResize: { [weak self] splitID, ratio in
                 self?.updateActiveSplitRatio(id: splitID, ratio: ratio)
@@ -4153,6 +4211,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func updateActiveSplitRatio(id splitID: UUID, ratio: Double) {
+        guard !isActivePaneZoomed else { return }
         let workspaceID = workspaceStore.activeWorkspaceID
         guard let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID else { return }
         var candidate = workspaceStore
@@ -4174,6 +4233,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private func equalizeActiveSplits(triggeredBy splitID: UUID) {
+        guard !isActivePaneZoomed else { return }
         let workspaceID = workspaceStore.activeWorkspaceID
         guard
             let tabID = workspaceStore.workspace(id: workspaceID)?.activeTabID,
@@ -5017,6 +5077,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
         var workspaceStoreForTesting: WorkspaceStore {
             workspaceStore
+        }
+
+        var zoomedPaneByTabIDForTesting: [TabID: PaneID] {
+            zoomedPaneByTabID
         }
 
         var selectionGenerationForTesting: UInt64 {

@@ -60,6 +60,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
     var onActivateTab: ((TabID) -> Void)?
     var onCloseTab: ((TabID) -> Void)?
+    var onExitPaneZoom: ((TabID) -> Void)?
     var onToggleBroadcast: (() -> Void)?
     var onMoveToNewWorkspace: (([TabID]) -> Void)?
     var onMoveToWorkspace: (([TabID], WorkspaceID) -> Void)?
@@ -73,6 +74,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
     private var tabs: [TerminalTab] = []
     private var displayedTitles: [TabID: String] = [:]
     private var statuses: [TabID: TerminalStatusPresentation] = [:]
+    private var zoomedTabIDs: Set<TabID> = []
     private var destinations: [WorkspaceDestination] = []
     private var chromePalette = GhosttyChromePalette.fallback
     private var selection = TabSelectionModel()
@@ -145,7 +147,8 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         activeTabID: TabID?,
         destinations: [WorkspaceDestination],
         displayedTitles: [TabID: String] = [:],
-        statuses: [TabID: TerminalStatusPresentation] = [:]
+        statuses: [TabID: TerminalStatusPresentation] = [:],
+        zoomedTabIDs: Set<TabID> = []
     ) {
         guard !isRetiredForTermination else { return }
         let resolvedTitles = Self.resolvedDisplayedTitles(
@@ -153,12 +156,14 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             displayedTitles: displayedTitles
         )
         let resolvedStatuses = Self.resolvedStatuses(for: tabs, statuses: statuses)
+        let resolvedZoomedTabIDs = zoomedTabIDs.intersection(tabs.map(\.id))
         var synchronizedSelection = selection
         synchronizedSelection.synchronize(tabIDs: tabs.map(\.id), activeTabID: activeTabID)
         let needsReload =
             !hasAppliedPresentation || self.tabs != tabs
             || self.displayedTitles != resolvedTitles
             || self.statuses != resolvedStatuses
+            || self.zoomedTabIDs != resolvedZoomedTabIDs
             || self.destinations != destinations
             || selection != synchronizedSelection
         guard needsReload else { return }
@@ -168,6 +173,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
         self.tabs = tabs
         self.displayedTitles = resolvedTitles
         self.statuses = resolvedStatuses
+        self.zoomedTabIDs = resolvedZoomedTabIDs
         self.destinations = destinations
         selection = synchronizedSelection
         lastAppliedActiveTabID = selection.activeTabID
@@ -246,6 +252,10 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
 
         var statusesForTesting: [TabID: TerminalStatusPresentation] {
             statuses
+        }
+
+        var zoomedTabIDsForTesting: Set<TabID> {
+            zoomedTabIDs
         }
 
         var selectedTabIDsInOrderForTesting: [TabID] {
@@ -348,6 +358,7 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             isSelected: selection.selectedTabIDs.contains(tab.id),
             isPartOfMultiSelection: isPartOfMultiSelection,
             isBroadcasting: tab.isBroadcasting,
+            isPaneZoomed: zoomedTabIDs.contains(tab.id),
             chromePalette: chromePalette,
             dragSessionGenerationProvider: { [weak self] in
                 self?.dragSessionGeneration ?? 0
@@ -360,6 +371,9 @@ final class TabBarViewController: NSViewController, NSCollectionViewDataSource,
             },
             closeHandler: { [weak self] in
                 self?.onCloseTab?(tab.id)
+            },
+            exitPaneZoomHandler: { [weak self] in
+                self?.onExitPaneZoom?(tab.id)
             },
             renameHandler: { [weak self] in
                 self?.beginRename(tab.id)

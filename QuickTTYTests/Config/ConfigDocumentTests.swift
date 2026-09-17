@@ -462,26 +462,27 @@ struct ConfigDocumentTests {
 
     @Test
     func parsesAllValuesAndFiltersEntireNamespaceWithoutChangingOtherBytes() throws {
-        let source = Data(
-            ("# terminal\r\n"
-                + "font-size = 15\r\n"
-                + "quicktty-presentation-mode = quake\r\n"
-                + "quicktty-global-toggle = cmd+opt+f11\r\n"
-                + "quicktty-quake-height = 80%\r\n"
-                + "quicktty-quake-animation-duration = 0.2\r\n"
-                + "quicktty-quake-padding = 8\r\n"
-                + "quicktty-hide-on-focus-loss = false\r\n"
-                + "quicktty-restore-workspaces = false\r\n"
-                + "quicktty-restore-agent-sessions = false\r\n"
-                + "quicktty-config-editor = code --wait\r\n"
-                + "include = themes/local.conf").utf8
-        )
+        let sourceText = [
+            "# terminal",
+            "font-size = 15",
+            "quicktty-presentation-mode = quake",
+            "quicktty-global-toggle = cmd+opt+f11",
+            "quicktty-quake-height = 80%",
+            "quicktty-quake-animation-duration = 0.2",
+            "quicktty-quake-padding = 8",
+            "quicktty-hide-on-focus-loss = false",
+            "quicktty-restore-workspaces = false",
+            "quicktty-restore-agent-sessions = false",
+            "quicktty-config-editor = code --wait",
+            "include = themes/local.conf",
+        ].joined(separator: "\r\n")
+        let source = Data(sourceText.utf8)
         let document = ConfigDocument(data: source)
 
         let result = document.parse()
 
         #expect(result.diagnostics.isEmpty)
-        #expect(result.config.presentationMode == .quake)
+        #expect(result.config.presentationMode == PresentationMode.quake)
         #expect(result.config.globalToggle.stringValue == "cmd+opt+f11")
         #expect(result.config.quakeHeight == 0.8)
         #expect(result.config.quakeAnimationDuration == 0.2)
@@ -512,18 +513,19 @@ struct ConfigDocumentTests {
             )
         let document = ConfigDocument(data: source)
 
+        let expectedText =
+            "copy-on-select = clipboard\n"
+            + [
+                "# keybind = cmd+t=new_tab",
+                "keybinds = preserved",
+                "include = local.conf",
+                "keybind = clear",
+                "",
+            ].joined(separator: "\r\n")
+        let expected = byteOrderMark + Data(expectedText.utf8)
+
         #expect(document.parse().diagnostics.isEmpty)
-        #expect(
-            document.effectiveGhosttyData
-                == byteOrderMark
-                + Data(
-                    ("copy-on-select = clipboard\n"
-                        + "# keybind = cmd+t=new_tab\r\n"
-                        + "keybinds = preserved\r\n"
-                        + "include = local.conf\r\n"
-                        + "keybind = clear\r\n").utf8
-                )
-        )
+        #expect(document.effectiveGhosttyData == expected)
         #expect(
             String(decoding: document.effectiveGhosttyData, as: UTF8.self)
                 .components(separatedBy: "keybind = clear").count == 2
