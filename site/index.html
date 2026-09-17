@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="QuickTTY is a native macOS terminal workspace with tabs, splits, Quake mode, coding-agent progress, session continuity, and permission-scoped Pi terminal control.">
+    <meta name="description" content="QuickTTY is a native macOS terminal workspace with tabs, splits, pane zoom, Command Palette, Quake mode, private command notifications, and coding-agent integrations.">
     <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/">
     <link rel="icon" href="/assets/app-icon.png">
@@ -98,12 +98,24 @@
       <section class="feature-section signal-section" aria-labelledby="signal-heading">
         <div class="product-shell signal-layout">
           <div class="signal-copy reveal">
-            <p class="product-label">Find work. Follow progress.</p>
-            <h2 id="signal-heading">Terminal state stays visible.</h2>
+            <p class="product-label">Find work. Control focus. Follow progress.</p>
+            <h2 id="signal-heading">Everything important stays within reach.</h2>
             <div class="signal-list">
+              <article>
+                <h3>Command Palette</h3>
+                <p>Press <kbd>Cmd+Shift+P</kbd> to search QuickTTY commands, workspaces, and tabs without leaving the keyboard.</p>
+              </article>
+              <article>
+                <h3>Pane zoom</h3>
+                <p>Press <kbd>Cmd+Shift+X</kbd> to let one pane fill the tab, then restore the unchanged split layout with the same shortcut.</p>
+              </article>
               <article>
                 <h3>Native search</h3>
                 <p>Find text in the active terminal, move through matches, and see the current result count in a native overlay.</p>
+              </article>
+              <article>
+                <h3>Private command notifications</h3>
+                <p>Long background shell commands can report generic success or failure without exposing the command, path, title, or output.</p>
               </article>
               <article>
                 <h3>Coding-agent progress</h3>

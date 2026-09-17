@@ -87,7 +87,10 @@ quicktty-presentation-mode = normal
 quicktty-global-toggle = f12
 quicktty-quake-height = 75%
 quicktty-restore-workspaces = true
-quicktty-restore-agent-sessions = true</code></pre>
+quicktty-restore-agent-sessions = true
+quicktty-command-finish-notifications = true
+quicktty-command-finish-notification-after = 10</code></pre>
+            <p><code>quicktty-command-finish-notifications</code> enables macOS notifications when a marked shell command runs for at least <code>quicktty-command-finish-notification-after</code> seconds and finishes outside the selected tab of the key window. The notification reports only generic success or failure: it never includes the command, working directory, terminal title, or output. Ghostty shell integration or OSC 133 command markers are required, and <code>desktop-notifications = false</code> disables all QuickTTY notifications.</p>
             <p>Agent restoration requires both restore keys. It relaunches an eligible native agent by an opaque session ID into its original pane; it is not a PTY or process checkpoint. QuickTTY persists no arbitrary command or environment for restoration, and an unverified or invalid binding uses a fresh shell fallback.</p>
             <p>The generated sibling file <code>~/.config/quicktty/.ghostty-effective-config</code> belongs to QuickTTY and should not be edited.</p>
           </section>

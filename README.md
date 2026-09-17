@@ -29,6 +29,9 @@ QuickTTY is a native AppKit terminal powered by the full [`libghostty`](https://
 - **Normal and Quake modes** — move the same live workspace between a standard window and a drop-down presentation without restarting shells.
 - **Broadcast input** — send keyboard input or a confirmed paste to every pane in the active tab.
 - **Native search** — search the active terminal with match navigation and result counts.
+- **Command Palette** — find QuickTTY commands, workspaces, and tabs from one fuzzy-search overlay with `Cmd+Shift+P`.
+- **Pane zoom** — temporarily expand the active pane to fill its tab and restore the split layout with `Cmd+Shift+X`.
+- **Private command-finish notifications** — get a generic success or failure notification after a long background shell command without exposing its command, path, title, or output.
 - **Coding-agent continuity** — show standard OSC `9;4` progress and optionally relaunch a version-verified native agent session into its original pane after restart. This restores an opaque agent session ID, not a PTY or process checkpoint. Auto-resume supports installed Pi versions that report a valid semantic version and expose the required public lifecycle extension API; it is locally verified on current Pi `0.84.4`.
 - **Ghostty configuration and themes** — use the terminal engine's rendering, shell integration, fonts, palettes, and themes.
 
@@ -44,7 +47,7 @@ QuickTTY can check for stable updates in the app. An opt-in beta channel is also
 
 ## Documentation
 
-The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, search, workspaces, and coding-agent integrations. Agent integrations are installed only through an explicit preview and confirmation flow; QuickTTY does not silently write third-party configuration or persist arbitrary restore commands. Installing Pi through **Agent Integrations…** also installs the QuickTTY terminal SKILL and the shared `quicktty` launcher when it is missing.
+The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, pane zoom, Command Palette, command-finish notifications, search, workspaces, and coding-agent integrations. Agent integrations are installed only through an explicit preview and confirmation flow; QuickTTY does not silently write third-party configuration or persist arbitrary restore commands. Installing Pi through **Agent Integrations…** also installs the QuickTTY terminal SKILL and the shared `quicktty` launcher when it is missing.
 
 [Agent terminal control](docs/agent-terminal-control.md) (Russian reference) lets registered origin sessions create and control their own terminal tasks through the CLI and an English-language SKILL, with session-scoped native permission—not MCP or access to arbitrary user panes. It requires a build containing the terminal commands; the integration installer does not update the app or grant terminal-control permission.
 

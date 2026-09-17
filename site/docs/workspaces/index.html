@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Use QuickTTY tabs, splits, named workspaces, Quake mode, broadcast input, and terminal search.">
+    <meta name="description" content="Use QuickTTY tabs, splits, pane zoom, named workspaces, Quake mode, broadcast input, and terminal search.">
     <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/docs/workspaces/">
     <link rel="icon" href="/assets/app-icon.png">
@@ -43,6 +43,7 @@
           <h2>On this page</h2>
           <ol>
             <li><a href="#tabs-splits-workspaces">Tabs, splits &amp; workspaces</a></li>
+            <li><a href="#pane-zoom">Pane zoom</a></li>
             <li><a href="#quake-mode">Quake mode</a></li>
             <li><a href="#broadcast-input">Broadcast input</a></li>
             <li><a href="#search">Search</a></li>
@@ -58,6 +59,11 @@
             <h3>Workspaces</h3>
             <p>Workspaces group tabs under a required, case-insensitively unique name. Only one is visible, but processes in the others remain active. Select workspaces 1–9 with <kbd>Cmd+Opt+1</kbd> through <kbd>Cmd+Opt+9</kbd>.</p>
             <p>QuickTTY can restore workspace descriptions, tabs, split layout, current working directories, and focus after restart. It starts new processes; it does not preserve live processes across application termination.</p>
+          </section>
+          <section id="pane-zoom">
+            <h2>Pane Zoom</h2>
+            <p>Press <kbd>Cmd+Shift+X</kbd> to make the active pane fill its tab. Press the shortcut again—or use the zoom indicator in the tab bar—to return to the unchanged split layout.</p>
+            <p>Zoom changes only the presentation of the current tab. Other panes and their processes remain live, and switching tabs or workspaces does not recreate terminal sessions.</p>
           </section>
           <section id="quake-mode">
             <h2>Quake Mode</h2>

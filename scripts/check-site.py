@@ -464,6 +464,31 @@ def main() -> int:
     )
 
     workspaces_source = page_sources.get(WORKSPACES_PAGE.resolve(), "")
+    pane_zoom_guide = section_between(
+        workspaces_source, '<section id="pane-zoom">', "</section>"
+    )
+    if pane_zoom_guide is None:
+        errors.append("site/docs/workspaces/index.html: missing Pane Zoom guide")
+    else:
+        require_markers(
+            pane_zoom_guide,
+            "Pane Zoom guide",
+            ("<kbd>Cmd+Shift+X</kbd>", "unchanged split layout", "processes remain live"),
+            errors,
+        )
+
+    getting_started_source = page_sources.get(GETTING_STARTED_PAGE.resolve(), "")
+    require_markers(
+        getting_started_source,
+        "command-finish notification guide",
+        (
+            "quicktty-command-finish-notifications",
+            "quicktty-command-finish-notification-after",
+            "never includes the command, working directory, terminal title, or output",
+        ),
+        errors,
+    )
+
     quake_guide = section_between(
         workspaces_source, '<section id="quake-mode">', "</section>"
     )
@@ -653,6 +678,9 @@ def main() -> int:
         home_source,
         "home agent feature",
         (
+            "Command Palette",
+            "Pane zoom",
+            "Private command notifications",
             "Built for coding agents",
             "Session continuity",
             "Terminal control for Pi",
@@ -662,8 +690,14 @@ def main() -> int:
     )
 
     releases_source = page_sources.get((SITE / "releases" / "index.html").resolve(), "")
-    if "0.1.2" not in releases_source or not re.search(r"\bbuild\s+9\b", releases_source, re.IGNORECASE):
-        errors.append("site/releases/index.html: missing current version 0.1.2 build 9")
+    if "0.1.4" not in releases_source or not re.search(r"\bbuild\s+15\b", releases_source, re.IGNORECASE):
+        errors.append("site/releases/index.html: missing current version 0.1.4 build 15")
+    require_markers(
+        releases_source,
+        "0.1.4 release page",
+        ("Command Palette", "pane zoom", "privacy-safe notifications", "changing Spaces"),
+        errors,
+    )
     if not re.search(r"beta.{0,240}superset of stable", releases_source, re.IGNORECASE | re.DOTALL):
         errors.append("site/releases/index.html: missing beta-superset copy")
 
