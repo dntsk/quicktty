@@ -185,6 +185,47 @@ struct PresentationStateMachineTests {
     }
 
     @Test
+    func activeSpaceChangeDefersVisibleQuakeFrameRecoveryAndIgnoresHiddenWindow() throws {
+        let window = FakeQuakeWindow()
+        let animator = ManualQuakeAnimator()
+        let scheduler = ManualPresentationScheduler()
+        let deferrer = ManualPresentationDeferrer()
+        let notificationCenter = NotificationCenter()
+        let controller = makeQuakeController(
+            window: window,
+            animator: animator,
+            scheduler: scheduler,
+            animationDeferrer: deferrer,
+            activeSpaceNotificationCenter: notificationCenter
+        )
+        let targetFrame = NSRect(x: 0, y: 215, width: 1_200, height: 585)
+        let distortedFrame = NSRect(x: 0, y: 20, width: 1_200, height: 780)
+
+        try controller.requestVisibility(.shown)
+        deferrer.runActiveRequests()
+        animator.completeRequest(at: 0)
+        window.setPresentationFrame(distortedFrame)
+
+        notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+
+        #expect(window.presentationFrame == distortedFrame)
+        deferrer.runActiveRequests()
+        #expect(window.presentationFrame == targetFrame)
+
+        window.setPresentationFrame(distortedFrame)
+        notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        try controller.requestVisibility(.hidden)
+        deferrer.runActiveRequests()
+        #expect(window.presentationFrame == distortedFrame)
+
+        animator.completeRequest(at: 1)
+        window.setPresentationFrame(distortedFrame)
+        notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        deferrer.runActiveRequests()
+        #expect(window.presentationFrame == distortedFrame)
+    }
+
+    @Test
     func transitionsReparentOneControllerRestoreFrameAndPersistOnlySuccess() throws {
         let content = NSViewController()
         content.view = NSView()
@@ -654,6 +695,7 @@ struct PresentationStateMachineTests {
         animator: ManualQuakeAnimator,
         scheduler: ManualPresentationScheduler,
         animationDeferrer: any PresentationDeferring = ImmediatePresentationDeferrer(),
+        activeSpaceNotificationCenter: NotificationCenter? = nil,
         isFocusLossSuppressed: @escaping @MainActor () -> Bool = { false },
         priorApplicationProvider:
             @escaping @MainActor () ->
@@ -671,6 +713,7 @@ struct PresentationStateMachineTests {
             animator: animator,
             animationDeferrer: animationDeferrer,
             scheduler: scheduler,
+            activeSpaceNotificationCenter: activeSpaceNotificationCenter,
             isFocusLossSuppressed: isFocusLossSuppressed,
             priorApplicationProvider: priorApplicationProvider
         )

@@ -231,12 +231,14 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
     private let animator: any QuakeFrameAnimating
     private let animationDeferrer: any PresentationDeferring
     private let scheduler: any PresentationScheduling
+    private let activeSpaceNotificationCenter: NotificationCenter?
     private let isFocusLossSuppressed: FocusLossSuppression
     private let priorApplicationProvider: PriorApplicationProvider
     private let persistQuakeHeight: QuakeHeightPersistence
     private let onError: ErrorHandler
     private var animationCancellation: (any PresentationCancellation)?
     private var deferredAnimationCancellation: (any PresentationCancellation)?
+    private var activeSpaceFrameRecoveryCancellation: (any PresentationCancellation)?
     private var focusLossCancellation: (any PresentationCancellation)?
     private var animationGeneration = 0
     private var isRetiredForTermination = false
@@ -257,6 +259,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         animator: any QuakeFrameAnimating,
         animationDeferrer: any PresentationDeferring = MainRunLoopPresentationDeferrer(),
         scheduler: any PresentationScheduling,
+        activeSpaceNotificationCenter: NotificationCenter? = nil,
         isFocusLossSuppressed: @escaping FocusLossSuppression,
         priorApplicationProvider: @escaping PriorApplicationProvider,
         persistQuakeHeight: @escaping QuakeHeightPersistence = { _ in },
@@ -269,6 +272,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         self.animator = animator
         self.animationDeferrer = animationDeferrer
         self.scheduler = scheduler
+        self.activeSpaceNotificationCenter = activeSpaceNotificationCenter
         self.isFocusLossSuppressed = isFocusLossSuppressed
         self.priorApplicationProvider = priorApplicationProvider
         self.persistQuakeHeight = persistQuakeHeight
@@ -279,6 +283,12 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             self?.isRetiredForTermination == false
         }
         (window as? NSWindow)?.delegate = self
+        activeSpaceNotificationCenter?.addObserver(
+            self,
+            selector: #selector(activeSpaceDidChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
     }
 
     convenience override init() {
@@ -298,6 +308,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
             animator: AppKitQuakeFrameAnimator(),
             animationDeferrer: MainRunLoopPresentationDeferrer(),
             scheduler: TaskPresentationScheduler(),
+            activeSpaceNotificationCenter: NSWorkspace.shared.notificationCenter,
             isFocusLossSuppressed: {
                 window.hasAttachedSheet || NSApp.modalWindow != nil
                     || NSApp.mainMenu?.highlightedItem != nil
@@ -315,7 +326,13 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         isRetiredForTermination = true
         animationCancellation?.cancel()
         deferredAnimationCancellation?.cancel()
+        activeSpaceFrameRecoveryCancellation?.cancel()
         focusLossCancellation?.cancel()
+        activeSpaceNotificationCenter?.removeObserver(
+            self,
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
         resetTransientInteractions()
         if let window = quakeWindow as? NSWindow, window.delegate === self {
             window.delegate = nil
@@ -384,6 +401,12 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         animationCancellation = nil
         deferredAnimationCancellation?.cancel()
         deferredAnimationCancellation = nil
+        cancelActiveSpaceFrameRecovery()
+        activeSpaceNotificationCenter?.removeObserver(
+            self,
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
         cancelFocusLossHide()
         priorApplication = nil
         isLiveResizing = false
@@ -444,6 +467,45 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     func windowDidBecomeKey(_ notification: Notification) {
         focusDidBecomeKey()
+    }
+
+    @objc private func activeSpaceDidChange() {
+        guard !isRetiredForTermination, requestedVisibility == .shown else { return }
+        cancelActiveSpaceFrameRecovery()
+        let generation = animationGeneration
+        // WHY: AppKit can settle an all-Spaces panel's frame after dispatching the notification.
+        let cancellation = animationDeferrer.deferAction { [weak self] in
+            guard let self else { return }
+            self.activeSpaceFrameRecoveryCancellation = nil
+            guard
+                !self.isRetiredForTermination,
+                self.animationGeneration == generation,
+                self.requestedVisibility == .shown,
+                !self.isLiveResizing
+            else { return }
+            do {
+                let visibleFrame = try self.selectedVisibleFrame()
+                guard
+                    let targetFrame = self.configuration.geometry.targetFrame(in: visibleFrame)
+                else { throw QuakePresentationError.invalidVisibleFrame }
+                self.lastVisibleFrame = visibleFrame
+                if self.quakeWindow.presentationFrame != targetFrame {
+                    self.quakeWindow.setPresentationFrame(targetFrame)
+                }
+            } catch {
+                guard !self.isRetiredForTermination else { return }
+                self.onError(error)
+            }
+        }
+        guard
+            !isRetiredForTermination,
+            animationGeneration == generation,
+            requestedVisibility == .shown
+        else {
+            cancellation.cancel()
+            return
+        }
+        activeSpaceFrameRecoveryCancellation = cancellation
     }
 
     func windowWillStartLiveResize(_ notification: Notification) {
@@ -626,6 +688,7 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
         deferredAnimationCancellation = nil
         animation?.cancel()
         deferredAnimation?.cancel()
+        cancelActiveSpaceFrameRecovery()
         guard !isRetiredForTermination else { return }
         if animation != nil || deferredAnimation != nil {
             quakeWindow.setPresentationLevel(.floating)
@@ -693,6 +756,12 @@ final class QuakeWindowController: NSObject, NSWindowDelegate, QuakePresentation
 
     private func endTransientInteraction(_ identifier: UUID) {
         transientInteractionIDs.remove(identifier)
+    }
+
+    private func cancelActiveSpaceFrameRecovery() {
+        let cancellation = activeSpaceFrameRecoveryCancellation
+        activeSpaceFrameRecoveryCancellation = nil
+        cancellation?.cancel()
     }
 
     private func cancelFocusLossHide() {
