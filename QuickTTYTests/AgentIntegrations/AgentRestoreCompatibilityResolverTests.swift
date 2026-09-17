@@ -4,6 +4,7 @@ import Testing
 
 @testable import QuickTTY
 
+@Suite(.serialized)
 struct AgentRestoreCompatibilityResolverTests {
     private let piID = try! AgentAdapterID(rawValue: "pi")
     private let claudeID = try! AgentAdapterID(rawValue: "claude")

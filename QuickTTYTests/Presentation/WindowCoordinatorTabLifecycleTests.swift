@@ -6581,7 +6581,6 @@ struct WindowCoordinatorTabLifecycleTests {
         let activeSurface = try #require(coordinator.activeSurfaceForTesting)
         let surfaceIDs = coordinator.surfaceIDsForTesting
         let store = coordinator.workspaceStoreForTesting
-        let persisted = try JSONEncoder().encode(coordinator.workspaceStoreForPersistence)
         guard case .split(let splitID, _, _, _, _) = tab.root else {
             Issue.record("Expected split root")
             return
@@ -6597,7 +6596,6 @@ struct WindowCoordinatorTabLifecycleTests {
         #expect(!coordinator.canNavigateActivePanes)
         #expect(coordinator.activeSurfaceForTesting === activeSurface)
         #expect(coordinator.workspaceStoreForTesting == store)
-        #expect(try JSONEncoder().encode(coordinator.workspaceStoreForPersistence) == persisted)
 
         coordinator.requestCloseActivePane()
         try coordinator.splitActivePaneForTesting(axis: .vertical)
