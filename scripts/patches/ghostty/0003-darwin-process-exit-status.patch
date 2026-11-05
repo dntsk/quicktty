@@ -36,7 +36,7 @@ or failed probes defer to a later tick without blocking or an EINTR loop.
 Other platforms retain the high-level watcher and original timer behavior.
 
 No launch mode, C ABI, dependency, or PTY reader changes. This rebased
-revision targets Ghostty 1.4.0 and Zig 0.17.0. Native compilation and runtime
+revision targets Ghostty 1.4.0 and Zig 0.17.1. Native compilation and runtime
 verification must be repeated for this pin.
 Normal nonzero status propagation through login, cancellation/fault timing,
 and final-tail PTY EOF ordering remain runtime gates; this is not a general

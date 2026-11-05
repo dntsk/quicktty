@@ -69,7 +69,7 @@ Open it from **QuickTTY → Open Configuration…**. Valid changes reload withou
 - Full Xcode installation
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.4 or newer
 - Apple Swift Format, available as `swift format`
-- Zig exactly 0.17.0 for the pinned Ghostty revision
+- Zig exactly 0.17.1 for the pinned Ghostty revision
 
 Clone the repository with its submodules, verify the toolchain, and build:
 
