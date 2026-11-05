@@ -1,4 +1,4 @@
-Ghostty revision: f9a3f24a56bf05f70894e1a084809d4fffadf420
+Ghostty revision: 83fb95624b0439ee660c2679b43b38c8b63769cd
 
 MIT License
 

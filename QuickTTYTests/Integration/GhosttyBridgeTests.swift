@@ -354,6 +354,10 @@ struct GhosttyBridgeTests {
     @Test
     func runtimeActionTagsMatchPinnedHeader() {
         #expect(GhosttyBridge.runtimeActionTagsMatchPinnedHeader)
+        #expect(GHOSTTY_ACTION_RESIZE_WINDOW.rawValue == 69)
+        #expect(MemoryLayout<ghostty_action_resize_window_s>.size == 8)
+        #expect(MemoryLayout<ghostty_action_resize_window_s>.stride == 8)
+        #expect(MemoryLayout<ghostty_action_resize_window_s>.alignment == 4)
     }
 
     @Test

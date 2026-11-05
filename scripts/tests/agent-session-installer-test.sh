@@ -170,11 +170,13 @@ for shutdown_reason in '"quit"' '"new"' '"resume"' '"fork"'; do
     /usr/bin/grep -F "$shutdown_reason" "$pi_session_shutdown_event" >/dev/null \
         || fail "installed Pi SDK SessionShutdownEvent contract is missing reason: $shutdown_reason"
 done
+# The integration ignores subscription return values; both SDK signatures are compatible.
 for type_contract in \
-    '    on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;' \
-    '    on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;'
+    '    on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>)' \
+    '    on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>)'
 do
-    /usr/bin/grep -Fx "$type_contract" "$pi_types" >/dev/null \
+    /usr/bin/grep -Fx "${type_contract}: void;" "$pi_types" >/dev/null \
+        || /usr/bin/grep -Fx "${type_contract}: () => void;" "$pi_types" >/dev/null \
         || fail "installed Pi SDK type contract is missing: $type_contract"
 done
 "$pi_package/node_modules/.bin/jiti" "$pi_extension" >/dev/null 2>&1 \

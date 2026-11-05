@@ -2,8 +2,8 @@
 set -eu
 
 DEFAULT_DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-REQUIRED_GHOSTTY_COMMIT=f9a3f24a56bf05f70894e1a084809d4fffadf420
-REQUIRED_ZIG_VERSION=0.16.0
+REQUIRED_GHOSTTY_COMMIT=83fb95624b0439ee660c2679b43b38c8b63769cd
+REQUIRED_ZIG_VERSION=0.17.0
 QUICKTTY_FORCE_GHOSTTY_REBUILD=${QUICKTTY_FORCE_GHOSTTY_REBUILD:-0}
 
 case "$QUICKTTY_FORCE_GHOSTTY_REBUILD" in
@@ -369,8 +369,8 @@ set -- \
     -Dxcframework-target=native \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
-    -Doptimize=ReleaseFast \
-    -Dversion-string=1.3.2-dev
+    -Doptimize=fast \
+    -Dversion-string=1.4.0
 
 # Version discovery inside .build would otherwise find the superproject's Git metadata.
 # A fresh source stage also avoids deleting or reusing the user's Vendor Zig cache.

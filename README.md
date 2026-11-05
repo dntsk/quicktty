@@ -45,6 +45,8 @@ QuickTTY requires **macOS 15 or newer** on an **Apple Silicon Mac**.
 
 QuickTTY can check for stable updates in the app. An opt-in beta channel is also available; see the [release channels](https://quicktty.app/releases/) page for details. The current stable release is [0.1.4](https://github.com/dntsk/quicktty/releases/download/v0.1.4/QuickTTY-0.1.4-arm64.dmg).
 
+The current beta is [0.1.5.beta-1](https://github.com/dntsk/quicktty/releases/download/v0.1.5.beta-1/QuickTTY-0.1.5.beta-1-arm64.dmg) (build 16), with the full embedded Ghostty 1.4.0 engine. Beta releases are opt-in and are not offered on the stable channel.
+
 ## Documentation
 
 The [QuickTTY documentation](https://quicktty.app/docs/) covers installation, configuration, keyboard shortcuts, Quake mode, broadcast input, pane zoom, Command Palette, command-finish notifications, search, workspaces, and coding-agent integrations. Agent integrations are installed only through an explicit preview and confirmation flow; QuickTTY does not silently write third-party configuration or persist arbitrary restore commands. Installing Pi through **Agent Integrations…** also installs the QuickTTY terminal SKILL and the shared `quicktty` launcher when it is missing.
@@ -67,7 +69,7 @@ Open it from **QuickTTY → Open Configuration…**. Valid changes reload withou
 - Full Xcode installation
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.4 or newer
 - Apple Swift Format, available as `swift format`
-- Zig exactly 0.16.0 for the pinned Ghostty revision
+- Zig exactly 0.17.0 for the pinned Ghostty revision
 
 Clone the repository with its submodules, verify the toolchain, and build:
 

@@ -1,6 +1,6 @@
 Subject: [PATCH 2/3] termio/Exec: retain Darwin child wait status
 Origin: QuickTTY local fix (not an upstream backport)
-Base-Commit: f9a3f24a56bf05f70894e1a084809d4fffadf420 (1.3.2-dev)
+Base-Commit: 83fb95624b0439ee660c2679b43b38c8b63769cd (1.4.0)
 
 The pinned libxev ProcessKqueue.wait reaps the child but discards the raw
 wait status; its kqueue result still maps signal termination to zero. Register
@@ -36,8 +36,8 @@ or failed probes defer to a later tick without blocking or an EINTR loop.
 Other platforms retain the high-level watcher and original timer behavior.
 
 No launch mode, C ABI, dependency, or PTY reader changes. This rebased
-revision applies to Ghostty 1.3.2-dev and Zig 0.16.0 and has passed the native
-XCFramework build; runtime verification remains outstanding.
+revision targets Ghostty 1.4.0 and Zig 0.17.0. Native compilation and runtime
+verification must be repeated for this pin.
 Normal nonzero status propagation through login, cancellation/fault timing,
 and final-tail PTY EOF ordering remain runtime gates; this is not a general
 upstream fix.
@@ -51,7 +51,7 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
  /// The termios poll rate in milliseconds.
  const TERMIOS_POLL_MS = 200;
 
-+const darwin_process_status = builtin.os.tag.isDarwin() and
++const darwin_process_status = builtin.target.os.tag.isDarwin() and
 +    !xev.dynamic and xev.backend == .kqueue;
 +
  /// If we build with flatpak support then we have to keep track of
@@ -114,14 +114,12 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +    }
 +
      // Windows has no termios, so there is nothing to poll.
-     if (comptime builtin.os.tag == .windows) return;
+     if (comptime builtin.target.os.tag == .windows) return;
 
-@@ -291,6 +318,76 @@
-             .runtime_ms = runtime_ms,
-         },
+@@ -293,6 +320,76 @@
      }, .{ .forever = {} });
-+}
-+
+ }
+
 +// A null result is not proof of exit: keep cleanup ownership and poll later.
 +// A value means the child was reaped, or ECHILD released our ownership.
 +fn probeDarwinChild(pid: posix.pid_t) ?u32 {
@@ -143,7 +141,7 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +    const raw: u32 = @bitCast(raw_status);
 +    if (posix.W.IFEXITED(raw)) return posix.W.EXITSTATUS(raw);
 +    if (posix.W.IFSIGNALED(raw)) {
-+        const signal: u32 = @intFromEnum(posix.W.TERMSIG(raw));
++        const signal: u32 = @backingInt(posix.W.TERMSIG(raw));
 +        return if (signal > 0 and signal <= 127) 128 + signal else unknown;
 +    }
 +
@@ -190,9 +188,11 @@ diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
 +        );
 +    }
 +    return .disarm;
- }
-
++}
++
  fn processExit(
+     td_: ?*termio.Termio.ThreadData,
+     _: *xev.Loop,
 @@ -332,7 +429,11 @@
 
      _ = r catch |err| switch (err) {
