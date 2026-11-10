@@ -408,6 +408,7 @@ struct AgentIntegrationInstallerTests {
             Set(finalRecords.map(\.operationID)) == [
                 "agent-claude-v1-SessionStart",
                 "agent-claude-v1-SessionEnd",
+                "agent-claude-v1-PreToolUse",
             ]
         )
         #expect(finalRecords.allSatisfy { $0.beforeHash == nil })
@@ -429,6 +430,7 @@ struct AgentIntegrationInstallerTests {
                 !Set([
                     "agent-claude-v1-SessionStart",
                     "agent-claude-v1-SessionEnd",
+                    "agent-claude-v1-PreToolUse",
                 ]).contains($0.operationID)
             }
         )
@@ -592,6 +594,9 @@ struct AgentIntegrationInstallerTests {
         var hooks = try #require(root["hooks"] as? [String: Any])
         try #require(hooks["SessionStart"] != nil)
         try #require(hooks["SessionEnd"] != nil)
+        try #require(hooks["PreToolUse"] != nil)
+        // A legacy manifest must not leave newer owned nodes unclaimed in its settings.
+        hooks.removeValue(forKey: "PreToolUse")
         if useForeignSessionEndObject {
             hooks["SessionEnd"] = ["foreign": "preserve"]
         } else {

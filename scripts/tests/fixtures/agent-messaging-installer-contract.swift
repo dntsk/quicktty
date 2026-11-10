@@ -78,7 +78,7 @@ struct AgentMessagingInstallerContract {
     }
 
     private static func claudeContract(repository: URL, temporary: URL) async throws {
-        for scenario in ["upgrade", "uninstall", "tamper"] {
+        for scenario in ["upgrade", "start-only", "uninstall", "tamper", "unowned-question"] {
             let root = temporary.appending(path: "owned-claude-\(scenario)")
             let home = root.appending(path: "home")
             let support = root.appending(path: "support")
@@ -139,7 +139,8 @@ struct AgentMessagingInstallerContract {
                     status.first?.status == .conflict, "Modified owned Claude hook was overwritten")
                 continue
             }
-            pre.remove(at: ownedIndex)
+            if scenario != "unowned-question" { pre.remove(at: ownedIndex) }
+            if scenario == "start-only" { hooks.removeValue(forKey: "SessionEnd") }
             hooks["PreToolUse"] = pre
             object["hooks"] = hooks
             try JSONSerialization.data(withJSONObject: object).write(to: config)
@@ -149,10 +150,29 @@ struct AgentMessagingInstallerContract {
             guard case .trusted(let records) = try store.load() else {
                 throw InstallerContractFailure()
             }
-            let legacy = records.filter { $0.operationID != "agent-claude-v1-PreToolUse" }
+            let legacy = records.filter {
+                $0.operationID != "agent-claude-v1-PreToolUse"
+                    && (scenario != "start-only"
+                        || $0.operationID == "agent-claude-v1-SessionStart")
+            }
             let saved = try store.prepareSave(legacy)
             _ = try fs.apply([saved], matching: [saved.preview])
-            if scenario == "upgrade" {
+            if scenario == "unowned-question" {
+                let before = try Data(contentsOf: config)
+                let status = try await installer.status(selectedAdapterIDs: ["claude"])
+                let update = try await installer.prepare(
+                    action: .install, selectedAdapterIDs: ["claude"])
+                let result = try await installer.apply(planID: update.planID)
+                let after = try Data(contentsOf: config)
+                try AgentMessagingContract.require(
+                    status.first?.status == .conflict
+                        && update.adapters.first?.status == .conflict
+                        && result.adapters.first?.status == .conflict
+                        && after == before,
+                    "An exact question hook without ownership was silently claimed")
+                continue
+            }
+            if scenario == "upgrade" || scenario == "start-only" {
                 let status = try await installer.status(selectedAdapterIDs: ["claude"])
                 try AgentMessagingContract.require(
                     status.first?.status == .updateAvailable,
@@ -165,6 +185,17 @@ struct AgentMessagingInstallerContract {
                 let result = try await installer.apply(planID: update.planID)
                 try AgentMessagingContract.require(
                     result.adapters.first?.status == .succeeded, "Claude update failed")
+                let converged = try await installer.status(selectedAdapterIDs: ["claude"])
+                guard case .trusted(let updatedRecords) = try store.load() else {
+                    throw InstallerContractFailure()
+                }
+                try AgentMessagingContract.require(
+                    converged.first?.status == .installed
+                        && Set(updatedRecords.map(\.operationID)) == [
+                            "agent-claude-v1-SessionStart", "agent-claude-v1-SessionEnd",
+                            "agent-claude-v1-PreToolUse",
+                        ],
+                    "Claude legacy update did not converge to all current owned hooks")
             }
             let remove = try await installer.prepare(
                 action: .uninstall, selectedAdapterIDs: ["claude"])
@@ -184,7 +215,7 @@ struct AgentMessagingInstallerContract {
             )
         }
         print(
-            "PASS: guarded Claude hook preview/legacy upgrade+uninstall/foreign preservation/tamper protection"
+            "PASS: guarded Claude hook preview/start-only+legacy upgrade/uninstall/foreign preservation/unowned rejection/tamper protection"
         )
     }
 }
