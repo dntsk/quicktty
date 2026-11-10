@@ -24,6 +24,8 @@ do {
         exit(InternalWrapCommand.run(adapterID: adapterID, arguments: arguments))
     case .terminal(let terminal):
         exit(TerminalCommand.run(terminal))
+    case .agentRequest:
+        exit(AgentMessagingCommand.run())
     }
 } catch let error as QuickTTYCommand.ParseError {
     if CommandLine.arguments.dropFirst().first == "terminal" {

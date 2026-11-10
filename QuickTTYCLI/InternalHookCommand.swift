@@ -3,8 +3,15 @@ import Foundation
 
 enum InternalHookCommand {
     static func run(adapterID: String, event: String) -> Int32 {
-        guard let input = readStandardInput(),
-            let identity = makeIdentity(adapterID: adapterID),
+        guard let input = readStandardInput() else { return EXIT_FAILURE }
+        if adapterID == "claude",
+            event == "PreToolUse" || event == ClaudeQuestionRuntime.installedHookEvent
+        {
+            return ClaudeQuestionCommand.run(
+                input: input,
+                requireVerifiedRuntime: event == ClaudeQuestionRuntime.installedHookEvent)
+        }
+        guard let identity = makeIdentity(adapterID: adapterID),
             let message = NativeLifecycleHookNormalizer.normalize(
                 adapterID: adapterID,
                 event: event,
@@ -15,6 +22,12 @@ enum InternalHookCommand {
             (try? AgentSocketClient.send(message, to: socketPath)) == true
         else {
             return EXIT_FAILURE
+        }
+        if let helperPath = Bundle.main.executableURL?.path,
+            let context = AgentMessagingInstructions.sessionStartOutput(
+                adapterID: adapterID, event: event, helperPath: helperPath)
+        {
+            FileHandle.standardOutput.write(context + Data([10]))
         }
         return EXIT_SUCCESS
     }

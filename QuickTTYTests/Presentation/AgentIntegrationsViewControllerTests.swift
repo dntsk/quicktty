@@ -120,6 +120,30 @@ struct AgentIntegrationsViewControllerTests {
     }
 
     @Test
+    func ownedPiUpdateDoesNotTouchOrRequireConflictingPathLauncher() async throws {
+        let recorder = IntegrationInstallerRecorder(
+            statuses: integrationStatuses(overrides: ["pi": .updateAvailable]))
+        let launcherRecorder = LauncherInstallerRecorder(status: .conflict)
+        let confirmations = ConfirmationRecorder(result: true)
+        let viewController = makeViewController(
+            recorder: recorder, launcherRecorder: launcherRecorder,
+            confirmationPresenter: { confirmations.present($0) })
+        viewController.loadView()
+        await viewController.reloadStatus()
+        viewController.setSelected("pi", selected: true)
+        viewController.integrationButtonForTesting.performClick(nil)
+        await viewController.waitForApplyTaskForTesting()
+
+        #expect(await launcherRecorder.preparedActions.isEmpty)
+        #expect(await launcherRecorder.appliedPlanIDs.isEmpty)
+        #expect(await recorder.appliedPlanIDs == ["prepared-plan"])
+        let preview = try #require(confirmations.requests.first?.previewText)
+        #expect(preview.contains("~/.pi/agent/skills/quicktty-terminal/SKILL.md"))
+        #expect(!preview.contains("~/.local/bin/quicktty"))
+        #expect(viewController.messageForTesting == "Integration update finished.")
+    }
+
+    @Test
     func piInstallDoesNotApplyIntegrationWhenLauncherApplyFails() async {
         let recorder = IntegrationInstallerRecorder(statuses: integrationStatuses())
         let launcherRecorder = LauncherInstallerRecorder(failsInstallApply: true)

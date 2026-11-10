@@ -15,6 +15,7 @@ struct TerminalControlEnvironment: Equatable, Sendable {
     }
 
     static func read(
+        socketKey: String = "QUICKTTY_CONTROL_SOCKET",
         value: (String, Int) -> Data? = processValue
     ) -> TerminalControlEnvironment? {
         func string(_ key: String, maximumBytes: Int) -> String? {
@@ -32,7 +33,7 @@ struct TerminalControlEnvironment: Equatable, Sendable {
             let paneToken = string("QUICKTTY_PANE_TOKEN", maximumBytes: 64),
             (try? AgentIPCValueValidator.validatePaneToken(paneToken)) != nil,
             let socketPath = string(
-                "QUICKTTY_CONTROL_SOCKET",
+                socketKey,
                 maximumBytes: MemoryLayout.size(ofValue: sockaddr_un().sun_path) - 1
             ),
             socketPath != "/",

@@ -98,6 +98,8 @@ public actor AgentIntegrationInstaller {
         "codebuddy", "droid", "qoder", "kimi", "ollama",
     ]
 
+    static let claudeQuestionHookEvent = "PreToolUseVerified"
+
     public static let maximumPendingAdapters = 20
     public static let planLifetime: TimeInterval = 300
 
@@ -591,7 +593,7 @@ public actor AgentIntegrationInstaller {
             case .none:
                 mutations = []
             case .json(let relativePath):
-                let hooks = try events.map { lifecycleEvent in
+                var hooks = try events.map { lifecycleEvent in
                     let command =
                         "\(try posixSingleQuoted(helperExecutable.path)) internal hook \(id) \(lifecycleEvent)"
                     let node = try JSONSerialization.data(
@@ -605,6 +607,20 @@ public actor AgentIntegrationInstaller {
                         operationID: "\(operationID)-\(lifecycleEvent)",
                         commandNode: node
                     )
+                }
+                if id == "claude" {
+                    let command =
+                        "\(try posixSingleQuoted(helperExecutable.path)) internal hook claude \(claudeQuestionHookEvent)"
+                    let node = try JSONSerialization.data(
+                        withJSONObject: [
+                            "matcher": "^AskUserQuestion$",
+                            "hooks": [["command": command, "type": "command", "timeout": 330]],
+                        ], options: [.sortedKeys, .withoutEscapingSlashes])
+                    hooks.append(
+                        (
+                            jsonPointer: "/hooks/PreToolUse",
+                            operationID: "\(operationID)-PreToolUse", commandNode: node
+                        ))
                 }
                 mutations = [
                     .json(

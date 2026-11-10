@@ -148,12 +148,16 @@ public struct JSONHookMutation: Sendable {
         fileSystem: AgentIntegrationFileSystem,
         records: [AgentIntegrationOwnershipRecord]
     ) throws -> AgentIntegrationMutationPlan {
-        guard let before = try fileSystem.read(path), records.count == hooks.count else {
-            throw AgentIntegrationInstallerError.ownershipMismatch
+        let installed = hooks.filter { hook in
+            records.contains { $0.operationID == hook.operationID }
         }
+        guard let before = try fileSystem.read(path), !records.isEmpty,
+            records.count == installed.count, records.allSatisfy(matchesOwnershipIdentity)
+        else { throw AgentIntegrationInstallerError.ownershipMismatch }
         let baseline = try Self.groupedBaseline(in: records, whenEmpty: nil)
         var root = try Self.object(from: before)
-        for hook in hooks {
+        // A trusted older policy owns only its original nodes, never newly introduced hooks.
+        for hook in installed {
             guard let record = records.first(where: { $0.operationID == hook.operationID }),
                 record.path == path, record.kind == .jsonHook,
                 record.jsonPointer == hook.jsonPointer

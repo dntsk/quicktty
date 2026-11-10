@@ -210,6 +210,7 @@ final class AgentIntegrationsViewController: NSViewController {
     private let confirmationPresenter: ConfirmationPresenter?
 
     private let contentStack = NSStackView()
+    private var telegramView: AgentTelegramView?
     private let integrationsStack = NSStackView()
     private let launcherStack = NSStackView()
     private let bindingsStack = NSStackView()
@@ -312,6 +313,12 @@ final class AgentIntegrationsViewController: NSViewController {
         explanation.textColor = .secondaryLabelColor
         explanation.setAccessibilityLabel("Agent integrations instructions")
         contentStack.addArrangedSubview(explanation)
+        if let service = AgentMessagingService.current {
+            let telegram = AgentTelegramView(service: service)
+            telegramView = telegram
+            contentStack.addArrangedSubview(section(title: "Telegram", content: telegram))
+            telegram.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        }
 
         actionSelector.selectedSegment = 0
         actionSelector.target = self
@@ -492,7 +499,10 @@ final class AgentIntegrationsViewController: NSViewController {
             let response = try await installer.prepare(generation, selectedAction, selection)
             guard accepts(response: response, generation: generation) else { return }
             let prepared = bounded(response.value, selectedAdapterIDs: Set(selection))
-            if selectedAction == .install, selection.contains("pi") {
+            // Owned updates use the exact bundled helper, not a possibly unrelated PATH launcher.
+            if selectedAction == .install, selection.contains("pi"),
+                summaries.first(where: { $0.adapterID == "pi" })?.status != .updateAvailable
+            {
                 let launcherResponse = try await launcherInstaller.prepare(generation, .install)
                 guard accepts(response: launcherResponse, generation: generation) else { return }
                 launcherPreparedSummary = bounded(launcherResponse.value)
@@ -871,6 +881,7 @@ final class AgentIntegrationsViewController: NSViewController {
 
     func cancelDismissibleTasks() {
         guard canDismiss else { return }
+        telegramView?.cancelSetup()
         applyTask?.cancel()
         applyTask = nil
         cancelNonApplyTasks()
@@ -1218,15 +1229,16 @@ final class AgentIntegrationsViewController: NSViewController {
             checkbox.state = selectedAdapterIDs.contains(adapterID) ? .on : .off
             checkbox.isEnabled = !isBusy && selectableAdapterIDs.contains(adapterID)
             checkbox.setAccessibilityLabel("Select \(definition?.displayName ?? adapterID)")
-            let capability = summary?.capability.rawValue ?? capabilityText(definition?.capability)
-            let status = summary?.status.rawValue ?? "loading"
+            let status = integrationStatusText(summary?.status)
+            let messaging = definition?.messagingCapability
             let label = NSTextField(
                 labelWithString:
-                    "\(definition?.displayName ?? adapterID) — \(capability) — \(status)"
+                    "\(definition?.displayName ?? adapterID) — \(status) · \(messaging?.label ?? "unavailable")"
             )
             label.lineBreakMode = .byTruncatingTail
+            label.toolTip = messaging?.explanation
             label.setAccessibilityLabel(
-                "\(definition?.displayName ?? adapterID), \(capability), \(status)"
+                "\(definition?.displayName ?? adapterID), \(status), messaging: \(messaging?.label ?? "unavailable")"
             )
             let row = NSStackView(views: [checkbox, label])
             row.orientation = .horizontal
@@ -1370,12 +1382,19 @@ final class AgentIntegrationsViewController: NSViewController {
         }
     }
 
-    private func capabilityText(_ capability: AgentIntegrationCapability?) -> String {
-        switch capability {
-        case .nativeLifecycle: "nativeLifecycle"
-        case .wrapperLifecycle: "wrapperLifecycle"
-        case .blocked: "blocked"
-        case nil: "unknown"
+    private func integrationStatusText(_ status: AgentIntegrationInstallerStatus?) -> String {
+        switch status {
+        case .available: "Ready to install"
+        case .installed, .noOp: "Installed"
+        case .updateAvailable: "Update available"
+        case .missing: "Agent not found"
+        case .blocked: "Not supported yet"
+        case .unverified: "Not verified"
+        case .conflict: "Conflicting installation"
+        case .succeeded: "Updated"
+        case .failed: "Needs attention"
+        case .skipped: "Skipped"
+        case nil: "Checking…"
         }
     }
 

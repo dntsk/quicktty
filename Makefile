@@ -17,6 +17,9 @@ endif
 ifeq ($(origin RELEASE_LABEL),command line)
 $(error RELEASE_LABEL must be passed through the process environment before make, not on the command line)
 endif
+ifeq ($(origin DEVELOPER_ID_PROFILE),command line)
+$(error DEVELOPER_ID_PROFILE must be passed through the process environment before make, not on the command line)
+endif
 endif
 
 DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
@@ -31,7 +34,7 @@ SWIFT_SOURCES := QuickTTY Shared QuickTTYCLI QuickTTYTests
 # Build and test share one DerivedData directory.
 .NOTPARALLEL:
 
-.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check lint build test check
+.PHONY: generate doctor ghostty ghostty-resources-test release release-contract notarize notarize-contract beta-feed beta-feed-contract signed-release signed-alpha format callback-contract agent-messaging-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check lint build test check
 
 generate: ghostty
 	xcodegen generate --spec project.yml
@@ -50,6 +53,7 @@ release:
 
 release-contract:
 	./scripts/tests/build-release-test.sh
+	/usr/bin/python3 scripts/tests/release-keychain-test.py
 
 notarize:
 	./scripts/notarize-dmg.sh
@@ -75,6 +79,10 @@ format:
 callback-contract:
 	./scripts/check-runtime-callbacks.sh
 
+agent-messaging-contract:
+	./scripts/tests/agent-messaging-test.sh
+	./scripts/tests/agent-messaging-adapter-test.sh
+
 agent-integrations-contract:
 	./scripts/tests/agent-integrations-test.sh
 
@@ -93,7 +101,7 @@ agent-session-installer-contract:
 site-check:
 	/usr/bin/env -u DEVELOPER_DIR /usr/bin/python3 scripts/check-site.py
 
-lint: release-contract notarize-contract beta-feed-contract callback-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check
+lint: release-contract notarize-contract beta-feed-contract callback-contract agent-messaging-contract agent-integrations-contract cli-helper-contract agent-launch-contract agent-wrapper-contract agent-session-installer-contract site-check
 	swift format lint --recursive $(SWIFT_SOURCES)
 
 build: generate

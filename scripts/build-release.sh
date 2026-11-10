@@ -20,7 +20,7 @@ repo_root=$(CDPATH= cd -P "$script_dir/.." && pwd -P) || {
 . "$script_dir/release-helpers.sh"
 
 MARKETING_VERSION=0.1.5
-BUILD_NUMBER=16
+BUILD_NUMBER=17
 BUNDLE_IDENTIFIER=com.dntsk.QuickTTY
 MINIMUM_SYSTEM_VERSION=15.0
 PRODUCT_NAME=QuickTTY
@@ -172,6 +172,8 @@ verify_signed_app_bundle() {
     signed_app=$1
 
     release_verify_app_code_layout "$signed_app" "$PRODUCT_NAME" "$file_path"
+    "$python_path" "$release_keychain_verifier" verify \
+        "$DEVELOPER_ID_PROFILE" "$DEVELOPMENT_TEAM" "$signed_app"
     verify_cli_helper_signature "$signed_app"
     release_verify_nested_code_recursively \
         "$signed_app" "$codesign_path" "$file_path" "$CODE_SIGN_IDENTITY" "$DEVELOPMENT_TEAM"
@@ -382,6 +384,9 @@ file_path=/usr/bin/file
 stat_path=/usr/bin/stat
 git_path=/usr/bin/git
 plist_buddy=/usr/libexec/PlistBuddy
+python_path=/usr/bin/python3
+cp_path=/bin/cp
+release_keychain_verifier=$script_dir/release-keychain.py
 mkdir_path=/bin/mkdir
 ln_path=/bin/ln
 
@@ -395,6 +400,8 @@ for required_tool_path in \
     "$stat_path" \
     "$git_path" \
     "$plist_buddy" \
+    "$python_path" \
+    "$cp_path" \
     "$mkdir_path" \
     "$ln_path" \
     "$RELEASE_FIND_PATH" \
@@ -405,6 +412,10 @@ for required_tool_path in \
 do
     require_executable_path "$required_tool_path"
 done
+
+require_regular_file "$release_keychain_verifier"
+[ -n "${DEVELOPER_ID_PROFILE:-}" ] || release_fail 'DEVELOPER_ID_PROFILE must be set'
+"$python_path" "$release_keychain_verifier" profile "$DEVELOPER_ID_PROFILE" "$DEVELOPMENT_TEAM"
 
 xcodebuild_path=$(resolve_selected_xcode_tool xcodebuild)
 lipo_path=$(resolve_selected_xcode_tool lipo)
@@ -500,7 +511,10 @@ staged_app=$stage_dir/$PRODUCT_NAME.app
 "$ditto_path" "$archive_app" "$staged_app"
 "$script_dir/copy-cli-helper.sh" \
     "$cli_build_product" "$staged_app/Contents/Helpers/$CLI_HELPER_NAME"
-remove_cli_build_root "$archive_path" "$cli_build_root"
+app_entitlements_path=$cli_build_root/telegram.entitlements
+"$python_path" "$release_keychain_verifier" prepare \
+    "$DEVELOPER_ID_PROFILE" "$DEVELOPMENT_TEAM" "$archive_app" "$app_entitlements_path"
+"$cp_path" "$DEVELOPER_ID_PROFILE" "$staged_app/Contents/embedded.provisionprofile"
 release_verify_sparkle_signing_layout "$staged_app"
 
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
@@ -526,6 +540,7 @@ verify_cli_helper_signature "$staged_app"
     "$staged_app/Contents/Frameworks/Sparkle.framework" \
     || release_fail 'could not re-sign Sparkle.framework'
 "$codesign_path" --force --sign "$CODE_SIGN_IDENTITY" --timestamp --options runtime \
+    --entitlements "$app_entitlements_path" \
     "$staged_app" \
     || release_fail 'could not re-sign staged app after Sparkle re-sign'
 
@@ -535,6 +550,7 @@ verify_cli_helper_signature "$staged_app"
 [ "$("$readlink_path" "$stage_dir/Applications")" = /Applications ] \
     || release_fail 'Applications staging symlink does not target /Applications'
 verify_signed_app_bundle "$staged_app"
+remove_cli_build_root "$archive_path" "$cli_build_root"
 
 release_assert_generated_path_absent "$release_dir" "$dmg_path"
 dmg_pending=yes

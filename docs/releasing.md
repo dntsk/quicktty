@@ -53,11 +53,16 @@
    ```sh
    DEVELOPMENT_TEAM=... \
    CODE_SIGN_IDENTITY='Developer ID Application: ...' \
+   DEVELOPER_ID_PROFILE=/absolute/path/QuickTTY-Developer-ID.provisionprofile \
    NOTARY_PROFILE=QuickTTY \
    make signed-release
    ```
 
-3. Требовать успешные strict `codesign`, hardened runtime, Apple `Accepted`, stapler validation и Gatekeeper assessment.
+   `DEVELOPER_ID_PROFILE` — обязательный локальный `.provisionprofile` для Developer ID-дистрибуции, не development/App Store profile. Это public signing metadata; файл не коммитить. До очистки release outputs pipeline проверяет macOS, team/App ID prefix, срок, отсутствие device restrictions/debugging и доступ к нужной Keychain group. Профиль должен разрешать тот же Developer ID certificate, которым подписан archive.
+
+   Archive — промежуточный build input; перед финальной подписью staged app pipeline встраивает exact profile и создаёт app-only `com.apple.application-identifier`/`keychain-access-groups`. Финальная подпись обязана сохранить точную group `<team>.com.dntsk.QuickTTY`, чтобы читать соединение из предыдущей local development app. Helper проверяет certificate/profile, embedded bytes и exact entitlements после outer signing; CLI остаётся без entitlements. Никакого автоматического cloud provisioning или создания certificates внутри `make signed-release`.
+
+3. Требовать успешные strict `codesign`, hardened runtime, Apple `Accepted`, stapler validation и Gatekeeper assessment. Проверки CMS metadata не заменяют OS/runtime validation profile: до публикации подтвердить работоспособность Developer ID app и сохранённого Telegram-подключения отдельным разрешённым GUI smoke.
 4. Зафиксировать final DMG path, size, SHA-256 и notarization evidence JSON. Если notarization не принята, не создавать tag или GitHub Release.
 
 ## 3. Final appcast

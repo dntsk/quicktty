@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminalControlSocketServer: TerminalControlSocketServer?
     private var terminalControlMessageRouter: TerminalControlMessageRouter?
     private var agentSessionController: AgentSessionController?
+    private var agentMessagingService: AgentMessagingService?
     private var agentMessageRouter: AgentMessageRouter?
     private var agentLifecycleActionRouter: AgentLifecycleActionRouter?
     private let shortcutController = ShortcutController()
@@ -112,6 +113,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             )
             self.windowCoordinator = windowCoordinator
+            if let agentSessionController {
+                do {
+                    let messaging = try AgentMessagingService(
+                        sessions: agentSessionController,
+                        workspaceProvider: { [weak windowCoordinator] in
+                            windowCoordinator?.workspaceStoreForPersistence.workspaces ?? []
+                        },
+                        paneIsLive: { [weak windowCoordinator] in
+                            windowCoordinator?.terminalDestination(for: $0) != nil
+                        }
+                    )
+                    agentMessagingService = messaging
+                    AgentMessagingService.current = messaging
+                } catch {
+                    logger.error("Agent messaging disabled: socket startup failed")
+                }
+            }
             do {
                 let installers = try Self.makeProductionAgentIntegrationInstallers(
                     executableSearchPath: executableSearchPath
@@ -326,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func freezeTerminalControlDelivery() {
         // WHY: Revocation callbacks must not schedule model cleanup before the final snapshot.
         isTerminating = true
+        agentMessagingService?.shutdown()
         terminalControlMessageRouter?.disable()
         windowCoordinator?.freezeTerminalControlForApplicationTermination()
     }

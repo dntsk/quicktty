@@ -1,10 +1,11 @@
 # Coding Agent Integrations
 
-QuickTTY разделяет три возможности интеграции с coding agents:
+QuickTTY разделяет четыре возможности интеграции с coding agents:
 
 - стандартный terminal progress (OSC `9;4`) в интерфейсе tabs и workspaces;
 - необязательное восстановление native-сессии агента в исходной панели;
-- управление собственными терминальными задачами через `quicktty terminal` и отдельно загружаемый SKILL, с нативным разрешением для origin/сессии (см. ниже).
+- управление собственными терминальными задачами через `quicktty terminal` и отдельно загружаемый SKILL, с нативным разрешением для origin/сессии (см. ниже);
+- [Telegram-вопросы, статусы и однократные решения](agent-telegram.md) через однократное подключение бота и общий сохраняемый переключатель, `quicktty agent request`, явные Pi tools и version-gated Claude questions. Это не автоматический перехват любых native permission dialogs.
 
 Session restoration relaunches an agent with its opaque native session ID. It is not a PTY, shell, process, scrollback, or memory checkpoint. Every non-agent pane starts a fresh shell after QuickTTY restarts.
 
@@ -35,7 +36,7 @@ A resumed launch uses the fixed bundled helper named `quicktty`. QuickTTY builds
 - `QUICKTTY_PANE_TOKEN` — random per-pane credential;
 - `QUICKTTY_AGENT_HELPER` — fixed bundled `quicktty` path.
 
-При доступном terminal-control endpoint добавляется `QUICKTTY_CONTROL_SOCKET`. Созданные через terminal-control managed children не получают lifecycle/control credentials и не регистрируются как новый origin. Наличие окружения в обычной панели само по себе не даёт terminal grant: нужна активная зарегистрированная сессия и нативное разрешение пользователя. Агент не должен печатать или копировать credentials; для terminal-control их читает сам CLI.
+При доступном terminal-control endpoint добавляется `QUICKTTY_CONTROL_SOCKET`; при доступном messaging endpoint — `QUICKTTY_MESSAGE_SOCKET`. Messaging использует отдельный grant и сам не исполняет команды. Созданные через terminal-control managed children не получают lifecycle/control/messaging credentials и не регистрируются как новый origin. Наличие окружения в обычной панели само по себе не даёт terminal grant: нужна активная зарегистрированная сессия и нативное разрешение пользователя. Агент не должен печатать или копировать credentials; для terminal-control их читает сам CLI.
 
 Lifecycle messages are bounded and canonical, and must match the current instance, pane, and pane token. Retry rotates the token and attempt generation. During application termination QuickTTY freezes registration, clears pane credentials, rejects later lifecycle messages, flushes state, and then stops the socket and terminal surfaces. This preserves bindings across QuickTTY shutdown without accepting stale unregister events.
 
@@ -48,7 +49,7 @@ The registry contains these 20 IDs in this order. “Native” means a documente
 | 1 | `claude` | native | Unverified; fresh shell |
 | 2 | `codex` | native | Unverified; fresh shell |
 | 3 | `grok` | blocked | Ambiguous official identity |
-| 4 | `pi` | native | Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; locally and runtime verified on current Pi `0.84.4` |
+| 4 | `pi` | native | Any installed version reporting a valid semantic version and exposing the required public lifecycle extension API; historically locally and runtime verified on Pi `0.84.4` |
 | 5 | `omp` | native | Unverified; fresh shell |
 | 6 | `campfire` | blocked | Not a sessionful agent |
 | 7 | `amp` | wrapper | Unverified; fresh shell; wrapper required for lifecycle |
@@ -66,7 +67,7 @@ The registry contains these 20 IDs in this order. “Native” means a documente
 | 19 | `kimi` | native | Unverified; fresh shell |
 | 20 | `ollama` | blocked | Missing persistent session API |
 
-Totals are exactly 11 native, 3 wrapper, and 6 blocked. At present, only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the integration is locally verified on current Pi `0.84.4`. Every other launch-capable entry remains documented but version-unverified and therefore starts a fresh shell until a verified policy and tests are added. QuickTTY does not claim working auto-resume for those entries.
+Totals are exactly 11 native, 3 wrapper, and 6 blocked. At present, only Pi has a locally and runtime-verified launch policy: installed Pi versions reporting a valid semantic version and exposing the required public lifecycle extension API are accepted, and the historical runtime verification used Pi `0.84.4`. Every other launch-capable entry remains documented but version-unverified and therefore starts a fresh shell until a verified policy and tests are added. QuickTTY does not claim working auto-resume for those entries.
 
 ## Installer CLI
 
@@ -98,11 +99,21 @@ There are no silent configuration writes. Installation, update, and uninstallati
 
 ## Agent Integrations sheet
 
-Open **QuickTTY → Agent Integrations…**. The sheet uses the same installer core, ordered registry, capabilities, statuses, previews, backups, ownership checks, and uninstall rules as the CLI; it does not spawn the CLI. Select Install or Uninstall, select eligible entries, review the paths and mutation kinds, and confirm before Apply. Installing Pi includes its lifecycle extension, the English-language QuickTTY terminal SKILL at `~/.pi/agent/skills/quicktty-terminal/SKILL.md`, and the shared launcher `~/.local/bin/quicktty` when it is missing. All changes appear in one preview. A foreign launcher blocks Pi installation before Pi files are changed. If a newly created launcher must be rolled back, QuickTTY removes it only after an exact ownership check. Uninstalling Pi removes its QuickTTY-owned lifecycle extension and SKILL but keeps the shared launcher. The sheet also provides an independent launcher install/uninstall action; an unrelated file or symlink at that path is a conflict and is never overwritten.
+Open **QuickTTY → Agent Integrations…**. The sheet uses the same installer core, ordered registry, capabilities, statuses, previews, backups, ownership checks, and uninstall rules as the CLI; it does not spawn the CLI. Select Install or Uninstall, select eligible entries, review the paths and mutation kinds, and confirm before Apply. Installing Pi includes its lifecycle extension, the English-language QuickTTY terminal SKILL at `~/.pi/agent/skills/quicktty-terminal/SKILL.md`, and the shared launcher `~/.local/bin/quicktty` when it is missing. All changes appear in one preview. A foreign launcher blocks initial Pi installation before Pi files are changed. Updating an already owned Pi integration does not require or change the PATH launcher: the extension uses the exact bundled helper. If a newly created launcher must be rolled back, QuickTTY removes it only after an exact ownership check. Uninstalling Pi removes its QuickTTY-owned lifecycle extension and SKILL but keeps the shared launcher. The sheet also provides an independent launcher install/uninstall action; an unrelated file or symlink at that path is a conflict and is never overwritten.
 
 Once per application build, startup may check for `updateAvailable` integrations and open this same sheet with only those integrations selected in registry order. QuickTTY records the offer only after the sheet is displayed, so dismissing it or an update error does not prompt again in that build. Detection, selection, and presentation are automatic; filesystem changes are not. Every update still shows the bounded preview and requires explicit confirmation before apply. A missing window, cancelled or failed status check, or no available updates causes no prompt, record, or configuration write.
 
 The pane section shows only the known agent name and `Active`, `Restoring`, `Unverified`, or `Failed`. It never renders raw session IDs. **Retry** re-runs compatibility checks, rotates pane credentials, and attempts the saved binding again. **Forget** removes the binding and creates a fresh shell. Diagnostics are bounded and redacted; prompts, transcripts, commands, terminal text, environment values, and session IDs are not displayed.
+
+## Telegram: подключить один раз
+
+В **Agent Integrations → Telegram** один раз подключите бота и подтвердите свой Telegram-аккаунт. **Use Telegram for agents** сохраняет общее включение: бот автоматически восстанавливается из Keychain при запуске, а все живые зарегистрированные агенты во всех workspaces получают свежий runtime channel grant. Ручных workspace/session checkbox и повторного pairing нет. Выключение сохраняет паузу между запусками. Старые вопросы/одобрения не восстанавливаются; разрешение пользоваться каналом не одобряет действия и не выдаёт terminal-control grant.
+
+Обновлённый Pi extension добавляет `quicktty_ask_user`, `quicktty_confirm_action`, `quicktty_notify` только после принятой lifecycle registration. Это явные инструменты модели: они не читают экран, не перехватывают чужие dialogs и не запускают подтверждаемую команду. Публичный API сверён с установленным Pi **1.5.0**. Кроме loader/mock-helper contract, настоящий SDK agent loop с faux provider проверяет вопрос/ответ/продолжение, approve/deny, notify, schema и abort. Batch, содержащий confirmation и другую команду, блокируется SDK hooks до выполнения любого tool. Единый дополнительный non-GUI contract проверяет настоящий SDK с real CLI, authenticated lifecycle/messaging sockets, host service и mock Telegram: choice, elevated phrase, deny, notify, abort/revoke и ответ обратно в SDK. Это не новая auto-resume, live-model или real-bot verification.
+
+Claude/Codex/Gemini получают общую CLI-инструкцию через documented SessionStart additionalContext только после принятой authenticated регистрации. Это не grant; для Claude контекст также проверен в настоящем SDK/model request, для остальных двух пока только API/schema contracts. Guarded Claude PreToolUse entry проверен на официальном arm64 CLI 2.1.318 / SDK 0.3.318 с локальным faux API и mock Telegram, включая cancel/revoke/fallback; SIGTERM helper покрыт отдельным CLI contract. Owned update добавляет только exact `^AskUserQuestion$` hook с timeout 330s и `PreToolUseVerified` entry. Он пропускает только системные shell parents и проверяет SHA256 первого другого same-UID executable, не argv/env/transcript. Имя файла не выдаёт версию: копия exact artifact с другим именем также проверена native suite; непроверенный binary оставляет native prompt. Preview/backup/legacy upgrade+uninstall и сохранение чужих hooks проверены только во временном HOME; реальные настройки не изменялись. Это не native action approvals или interactive TUI/live-bot verification; restore policy не менялась.
+
+Копировать инструкции в supported agents не нужно: Pi получает tools/prompt guidelines из extension, Claude/Codex/Gemini — startup context. Для остальных зарегистрированных CLI-агентов общий JSON-протокол есть, но автоматическая доставка контекста и native forwarding ещё не заявляются. UI помечает Pi tools, Claude 2.1.318 / CLI, общий CLI и существующие blocked entries отдельно. Полный [контракт, ограничения и матрица](agent-telegram.md) описывают реальные границы проверки. Изменённый owned Pi extension устанавливается только через previewed update с backup; уже установленные файлы сами не изменяются.
 
 ## Терминальные задачи: CLI + SKILL
 

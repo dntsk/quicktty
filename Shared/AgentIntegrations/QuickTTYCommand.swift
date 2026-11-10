@@ -8,12 +8,14 @@ public enum QuickTTYCommand: Equatable, Sendable {
     case internalLaunch
     case internalWrap(adapterID: String, arguments: [String])
     case terminal(TerminalCLICommand)
+    case agentRequest
 
     public static let usage = """
         Usage:
           quicktty integrations status [ids...]
           quicktty integrations install [ids...] [--yes]
           quicktty integrations uninstall [ids...] [--yes]
+          quicktty agent request < request.json
         """ + "\n" + TerminalCLICommand.usage
 
     public static func parse(_ arguments: [String]) throws -> QuickTTYCommand {
@@ -28,6 +30,9 @@ public enum QuickTTYCommand: Equatable, Sendable {
             return try parseInternal(Array(arguments.dropFirst()))
         case "terminal":
             return .terminal(try TerminalCLICommand.parse(Array(arguments.dropFirst())))
+        case "agent":
+            guard arguments == ["agent", "request"] else { throw ParseError.invalidGrammar }
+            return .agentRequest
         default:
             if command.hasPrefix("-") {
                 throw ParseError.unknownFlag(command)

@@ -189,6 +189,7 @@ final class AgentLifecycleCredentialStore: Sendable {
 enum AgentSessionControllerValidationError: Error, Equatable, Sendable {
     case invalidSocketPath
     case invalidControlSocketPath
+    case invalidMessagingSocketPath
     case invalidHelperPath
 }
 
@@ -207,6 +208,9 @@ final class AgentSessionController {
 
     private let socketPath: String
     private let controlSocketPath: String?
+    private var messagingSocketPath: String?
+    var onMessagingLifecycle: (@MainActor (AgentSessionLifecycleAction) -> Void)?
+    var onMessagingInvalidation: (@MainActor (PaneID?) -> Void)?
     private let helperPath: String
     private let tokenGenerator: TokenGenerator
     private let dateProvider: DateProvider
@@ -265,6 +269,7 @@ final class AgentSessionController {
         else {
             return nil
         }
+        onMessagingInvalidation?(paneID)
         return environment(for: paneID, token: token)
     }
 
@@ -278,11 +283,25 @@ final class AgentSessionController {
         else {
             return nil
         }
+        onMessagingInvalidation?(paneID)
         return environment(for: paneID, token: token)
     }
 
     func revoke(paneID: PaneID) {
         credentialStore.revoke(paneID: paneID)
+        onMessagingInvalidation?(paneID)
+    }
+
+    func installMessagingSocket(_ path: String) throws {
+        guard messagingSocketPath == nil,
+            AgentWorkingDirectoryValidator.isCanonicalAbsolutePath(path),
+            (try? AgentUnixSocketAddress(path: path)) != nil,
+            Self.endpointComparisonURL(for: path) != Self.endpointComparisonURL(for: socketPath),
+            controlSocketPath.map({
+                Self.endpointComparisonURL(for: path) != Self.endpointComparisonURL(for: $0)
+            }) ?? true
+        else { throw AgentSessionControllerValidationError.invalidMessagingSocketPath }
+        messagingSocketPath = path
     }
 
     func environment(for paneID: PaneID) -> [String: String]? {
@@ -294,6 +313,7 @@ final class AgentSessionController {
 
     func freeze() {
         credentialStore.freeze()
+        onMessagingInvalidation?(nil)
     }
 
     nonisolated func credential(for preflight: AgentIPCPreflight) -> String? {
@@ -333,7 +353,8 @@ final class AgentSessionController {
             else {
                 return false
             }
-            return onAction(.register(paneID: message.paneID, binding: binding))
+            return performMessagingObservedAction(
+                .register(paneID: message.paneID, binding: binding), message: message)
 
         case .replace(
             let adapterID,
@@ -352,21 +373,29 @@ final class AgentSessionController {
             else {
                 return false
             }
-            return onAction(
+            return performMessagingObservedAction(
                 .replace(
                     paneID: message.paneID,
                     previousSessionID: previousSessionID,
                     binding: binding
-                ))
+                ), message: message)
 
         case .unregister(let adapterID, let sessionID):
-            return onAction(
+            return performMessagingObservedAction(
                 .unregister(
                     paneID: message.paneID,
                     adapterID: adapterID,
                     sessionID: sessionID
-                ))
+                ), message: message)
         }
+    }
+
+    private func performMessagingObservedAction(
+        _ action: AgentSessionLifecycleAction, message: AgentValidatedLifecycleMessage
+    ) -> Bool {
+        let accepted = onAction(action)
+        if accepted, credentialStore.isCurrent(message) { onMessagingLifecycle?(action) }
+        return accepted
     }
 
     private func environment(for paneID: PaneID, token: String) -> [String: String] {
@@ -378,6 +407,7 @@ final class AgentSessionController {
             "QUICKTTY_AGENT_HELPER": helperPath,
         ]
         environment["QUICKTTY_CONTROL_SOCKET"] = controlSocketPath
+        environment["QUICKTTY_MESSAGE_SOCKET"] = messagingSocketPath
         return environment
     }
 
