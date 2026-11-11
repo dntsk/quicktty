@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Connect a Telegram bot to QuickTTY, answer agent questions with Reply, approve one exact action, and control the channel across all workspaces.">
+    <meta name="theme-color" content="#f2f3f1">
+    <link rel="canonical" href="https://quicktty.app/docs/telegram/">
+    <link rel="icon" href="/assets/app-icon.png">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Telegram for coding agents — QuickTTY</title>
+    <script src="/assets/site.js" defer></script>
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="QuickTTY home">
+        <img src="/assets/app-icon.png" width="34" height="34" alt="QuickTTY app icon">
+        <span>QuickTTY</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+        <span>Menu</span><span class="nav-toggle-mark" aria-hidden="true"></span>
+      </button>
+      <nav class="site-nav" id="site-navigation" aria-label="Primary navigation">
+        <a href="/#product">Product</a>
+        <a aria-current="page" href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a href="https://github.com/dntsk/quicktty">GitHub</a>
+        <a class="nav-download" href="https://github.com/dntsk/quicktty/releases/latest">Download</a>
+      </nav>
+    </header>
+    <main id="main-content">
+      <header class="page-hero docs-page-hero shell reveal">
+        <p class="page-meta"><a href="/docs/">All documentation</a> / Telegram guide</p>
+        <div>
+          <p class="eyebrow">Telegram guide</p>
+          <h1>Answer your agent from Telegram.</h1>
+          <p class="lede">Connect your own bot once. Reply to a question, approve one exact action, or receive a brief status while your agent runs on your Mac.</p>
+        </div>
+      </header>
+      <div class="docs-layout shell">
+        <nav class="docs-sidebar" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#connect-bot">Connect your bot</a></li>
+            <li><a href="#pi-setup">Set up Pi</a></li>
+            <li><a href="#reply">Answer questions</a></li>
+            <li><a href="#approvals">One-time approvals</a></li>
+            <li><a href="#channel-controls">Toggle and status</a></li>
+            <li><a href="#agent-support">Agent support</a></li>
+            <li><a href="#cli">CLI reference</a></li>
+            <li><a href="#privacy">Privacy and limits</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+          </ol>
+        </nav>
+        <article class="docs-content">
+          <section id="connect-bot">
+            <h2>Connect your bot once</h2>
+            <div class="note"><strong>Build requirement</strong>The controls in this guide require QuickTTY <strong>0.1.5.beta-4, build 19</strong>, or newer. To install a beta, follow <a href="/docs/getting-started/#installation-updates">Installation &amp; Updates</a>; the stable channel never offers a prerelease.</div>
+            <ol class="workflow-steps">
+              <li><strong>Use a dedicated bot.</strong> Create a bot with Telegram’s BotFather and keep its token private. Do not share this bot with another polling app or webhook.</li>
+              <li><strong>Open QuickTTY → Agent Integrations… → Telegram.</strong> Enter the token in the secure field and choose <strong>Connect bot</strong>. Never send the token to your agent or paste it into a terminal command.</li>
+              <li><strong>Open a private chat with your bot.</strong> Send the exact <code>/start &lt;code&gt;</code> shown by QuickTTY. The one-time code expires after five minutes.</li>
+              <li><strong>Confirm your account on the Mac.</strong> Check the proposed user ID and choose <strong>Confirm Telegram user …</strong> in QuickTTY. Sending the code alone does not authorize the account.</li>
+              <li><strong>Leave Use Telegram for agents enabled.</strong> The section shows <strong>Connected</strong> and automatically includes authenticated registered agents in all workspaces.</li>
+            </ol>
+            <p>The token and paired account are saved in the device-only macOS Keychain, not synchronized to other devices. The enabled channel reconnects after an app restart without another token or pairing step. You do not need a separate checkbox for each workspace or new session.</p>
+            <p>Channel access allows an agent to ask; it does not approve actions or grant <a href="/docs/agent-terminal-control/">terminal control</a>.</p>
+          </section>
+
+          <section id="pi-setup">
+            <h2>Set up or update Pi</h2>
+            <ol>
+              <li>In <strong>QuickTTY → Agent Integrations…</strong>, select Pi and install or update its integration. Review the file-change preview and explicitly confirm the operation.</li>
+              <li>Start Pi in a QuickTTY pane. In an existing Pi session, run <code>/reload</code> after applying an integration update.</li>
+              <li>Ask the agent to send a short test question through Telegram, then answer that message with Reply.</li>
+            </ol>
+            <p>After QuickTTY accepts the session’s lifecycle registration, Pi receives <code>quicktty_ask_user</code>, <code>quicktty_confirm_action</code>, and <code>quicktty_notify</code>, with their usage instructions. Copying instructions into every conversation is unnecessary.</p>
+            <p>Updating QuickTTY itself does not silently replace installed agent integrations. If initial registration fails temporarily, the current Pi extension retries before a later agent prompt; tools become available only after registration succeeds. It does not resend old questions or approvals.</p>
+          </section>
+
+          <section id="reply">
+            <h2>Answer the exact question</h2>
+            <p>A question opens Telegram’s <strong>Reply</strong> interface and may also offer answer buttons. Choose a button, or send text as a reply to that exact bot message. If Reply is not open, select the message and use Telegram’s Reply action.</p>
+            <p>Do not send an unrelated message such as “yes” to the bot and expect QuickTTY to guess the session. While requests are waiting, unmatched text receives feedback explaining that it needs a Reply. Accepted text receives a short acknowledgement without repeating your answer.</p>
+            <p>You can also answer in <strong>Agent Integrations… → Waiting for your reply</strong> on the Mac. The first valid local or Telegram answer closes the request; later replies cannot answer it again or a different session.</p>
+          </section>
+
+          <section id="approvals">
+            <h2>Approve one action, not a session</h2>
+            <p>An action request shows the operation, affected resources, and consequences. Read all three before using <strong>Подтвердить один раз</strong> (“Confirm once”), or decline the request. This button also handles elevated Telegram requests; you do not need to copy a UUID phrase into the chat.</p>
+            <p>Approval belongs to that exact unchanged request, from the paired account in the paired private chat, once. Plain “yes” is not approval for an action. Expired, denied, cancelled, or revoked requests cannot be revived by a late reply or an old button.</p>
+            <p>The confirmation tool <strong>does not execute the action</strong>. The agent must receive <code>approved</code> first, then perform only the authorized action in a separate tool call. Re-reading an old approval is not permission to repeat an operation.</p>
+            <div class="note"><strong>Native permissions still apply</strong>Telegram does not replace an agent’s native permission rules, macOS security dialogs, or QuickTTY terminal-control permission. Local elevated confirmation in the QuickTTY sheet still uses the exact <code>CONFIRM &lt;request-uuid&gt;</code> phrase.</div>
+          </section>
+
+          <section id="channel-controls">
+            <h2>One switch for all workspaces</h2>
+            <p>Press <kbd>Cmd+Opt+T</kbd> while QuickTTY is active to toggle Telegram for all registered agents in all workspaces. The same control is available from the application menu, <strong>Use Telegram for agents</strong> in Agent Integrations, and the clickable Telegram indicator in the Normal or Quake top bar.</p>
+            <p>This is an application-local shortcut, not a system-wide hotkey. To customize it, use the <a href="/docs/shortcuts/#keyboard-shortcuts">shortcut configuration</a>:</p>
+            <pre><code>quicktty-shortcut = toggle-telegram=cmd+opt+t</code></pre>
+            <div class="shortcut-table-wrap" role="region" aria-label="Telegram channel states" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Indicator</th><th scope="col">Meaning</th></tr></thead>
+                <tbody>
+                  <tr><td>Telegram Off</td><td>The channel is paused.</td></tr>
+                  <tr><td>Telegram…</td><td>Connecting or reconnecting.</td></tr>
+                  <tr><td>Telegram On</td><td>The enabled channel is connected.</td></tr>
+                  <tr><td>Telegram Setup</td><td>Finish pairing your account on the Mac.</td></tr>
+                  <tr><td>Telegram Error</td><td>Open Agent Integrations to inspect the connection problem.</td></tr>
+                  <tr><td>Telegram —</td><td>The local messaging subsystem is unavailable.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>Turning the channel off saves the pause and revokes pending requests and messaging access without deleting the bot. Turning it on restores the connection and fresh access for eligible sessions, not old answers or approvals. The enabled or paused state survives restarts.</p>
+            <p>Under <strong>Connection settings</strong>, use <strong>Reconnect</strong> to retry, <strong>Change bot…</strong> to pair another bot, or <strong>Forget bot</strong> to remove the saved connection.</p>
+          </section>
+
+          <section id="agent-support">
+            <h2>What each integration provides</h2>
+            <p>QuickTTY does not automatically forward every question or native permission dialog from every agent. The current integration must explicitly submit a structured request through the tools or CLI.</p>
+            <div class="shortcut-table-wrap" role="region" aria-label="Telegram agent support" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Agent</th><th scope="col">Current messaging integration</th></tr></thead>
+                <tbody>
+                  <tr><td>Pi</td><td>Dedicated question, one-time action confirmation, and notification tools after accepted lifecycle registration.</td></tr>
+                  <tr><td>Claude Code</td><td>CLI instructions after SessionStart. A guarded question hook supports the exact verified arm64 2.1.318 binary; other binaries fall back to the native prompt. This is not automatic action-permission forwarding.</td></tr>
+                  <tr><td>Codex and Gemini</td><td>CLI instructions after SessionStart. Native question and permission forwarding is not implemented; vendor runtime behavior is not verified.</td></tr>
+                  <tr><td>Other launch-capable adapters</td><td>Shared CLI backend for an authenticated registered origin. Automatic instruction delivery and vendor runtime are not verified.</td></tr>
+                  <tr><td>Blocked adapters</td><td>No messaging access; an existing lifecycle blocker is not removed by enabling Telegram.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>See the <a href="/docs/agents/#coding-agent-integrations">agent registry</a> for native, wrapper, and blocked adapters. Session restoration and messaging support are separate capabilities.</p>
+          </section>
+
+          <section id="cli">
+            <h2>CLI reference</h2>
+            <p><code>quicktty agent request</code> reads one JSON object from stdin and writes one JSON result to stdout. Run it from the authenticated registered agent’s original QuickTTY pane, with its integration current and Telegram connected and enabled. Do not copy session credentials into another shell.</p>
+            <p>Generate a request UUID once per logical question or action, and retain it with the unchanged payload until the request finishes. This example sends a harmless choice question; only the generated UUID is interpolated, not arbitrary question text:</p>
+            <pre><code>request_id=$(/usr/bin/uuidgen) &amp;&amp;
+printf '{"version":1,"operation":"question","requestID":"%s","text":"Which response format would you prefer?","choices":["Short","Detailed"],"timeoutMilliseconds":900000}\n' "$request_id" |
+  quicktty agent request</code></pre>
+            <p>Every operation includes <code>version: 1</code> and <code>requestID</code>. Available operations:</p>
+            <div class="shortcut-table-wrap" role="region" aria-label="Messaging CLI operations" tabindex="0">
+              <table class="shortcut-table">
+                <thead><tr><th scope="col">Operation</th><th scope="col">Additional fields and behavior</th></tr></thead>
+                <tbody>
+                  <tr><td><code>question</code></td><td><code>text</code>, optional <code>choices</code> and <code>timeoutMilliseconds</code>.</td></tr>
+                  <tr><td><code>action</code></td><td><code>text</code> describes the operation; <code>resources</code> and <code>consequences</code> are required. Optional <code>elevated</code> defaults to <code>true</code>; optional <code>timeoutMilliseconds</code>.</td></tr>
+                  <tr><td><code>status</code></td><td>Only the original question/action request ID; inspect its known state.</td></tr>
+                  <tr><td><code>wait</code></td><td>The original request ID and a bounded <code>timeoutMilliseconds</code> of 100–30000 ms.</td></tr>
+                  <tr><td><code>cancel</code></td><td>The original request ID; closes a pending request, not an already executed action.</td></tr>
+                  <tr><td><code>notify</code></td><td>A fresh request ID, <code>text</code>, and <code>status</code>: <code>working</code>, <code>waiting</code>, <code>completed</code>, or <code>failed</code>. Working does not notify the phone.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>An initial submission may return <code>pending</code>. Use <code>wait</code> or <code>status</code> with the same request ID to obtain the eventual answer; one CLI invocation is not an unbounded wait. Unlike the raw CLI, Pi’s question and confirmation tools handle the bounded waiting for you.</p>
+            <p>Question/action deadlines are 1–1800 seconds, default 900 seconds. Questions allow up to 2304 UTF-8 bytes and eight unique choices of up to 64 bytes each. Action text allows 1024 bytes, resources/consequences 768 bytes each, and notification text 512 bytes. Keep requests small and non-secret; never truncate an action to hide relevant details.</p>
+            <p>A question returns <code>text</code> with an answer, or <code>choice</code> with a zero-based <code>choiceIndex</code> and label. Only <code>approved</code> for the exact unchanged action authorizes it once. <code>pending</code>, <code>denied</code>, <code>cancelled</code>, <code>expired</code>, <code>revoked</code>, <code>error</code>, and an exit code of zero are not approval. Notify <code>accepted</code> means queued, not proven delivery.</p>
+            <p>After <code>deliveryUncertain</code>, inspect <code>status</code> for the same request ID; do not send another question with a fresh ID. After <code>requestIDConflict</code>, stop and reconcile the original payload. Reading an old <code>approved</code> result never authorizes another execution.</p>
+          </section>
+
+          <section id="privacy">
+            <h2>Privacy and operating limits</h2>
+            <ul>
+              <li><strong>Bot chats are not end-to-end encrypted.</strong> Explicitly submitted questions, action descriptions, answers, brief notifications, displayed workspace/agent names, and request IDs travel through Telegram.</li>
+              <li><strong>Credentials stay local.</strong> QuickTTY keeps the bot token and paired account in device-only, non-synchronizing Keychain storage. Internal session/pane credentials are not included in Telegram messages.</li>
+              <li><strong>No transcript relay.</strong> Send only the minimum non-secret content. Do not send tokens, passwords, raw tool arguments, terminal dumps, or transcripts. QuickTTY cannot guarantee redaction of secrets embedded in text chosen by an agent.</li>
+              <li><strong>Your Mac remains the host.</strong> QuickTTY and the registered agent must remain running, and the Mac must be awake and online for requests to progress. Telegram does not move execution to the cloud or preserve shell processes during sleep.</li>
+              <li><strong>Requests are temporary.</strong> Deadlines continue across sleep. App restart does not restore old questions, answers, or approvals. Ending or replacing the origin session revokes its pending requests.</li>
+            </ul>
+            <p>Read the <a href="/privacy/#telegram-heading">privacy disclosure</a> for the app’s storage and network behavior.</p>
+          </section>
+
+          <section id="troubleshooting">
+            <h2>Recover without guessing</h2>
+            <dl class="error-list">
+              <div><dt>The agent still waits after I typed an answer</dt><dd>Use Reply on the exact question, from the paired account in the private chat. Unthreaded text is never assigned to a guessed session. Check the acknowledgement or answer locally under Waiting for your reply.</dd></div>
+              <div><dt>The bot connects, but Pi has no Telegram tools</dt><dd>Check the installed app version, apply the Pi integration update, then run <code>/reload</code> or start Pi again inside QuickTTY. Registration must succeed; do not copy credentials or guess an origin.</dd></div>
+              <div><dt>Another app or webhook is using this bot</dt><dd>Use a dedicated bot or stop the other poller yourself. QuickTTY does not silently remove someone else’s webhook. Do not run two QuickTTY instances polling the same bot.</dd></div>
+              <div><dt>Pairing expired or Telegram rejected the token</dt><dd>Connect again for a fresh five-minute code. If needed, obtain a valid token from BotFather and enter it only in the secure field; never send it to the agent.</dd></div>
+              <div><dt>Keychain or network connection failed</dt><dd>Open Agent Integrations, inspect the connection state, and use Reconnect when appropriate. Temporary connection failures retry with backoff; message sends are not automatically repeated.</dd></div>
+              <div><dt><code>permissionRequired</code> or channel unavailable</dt><dd>Check the switch and current connection. Telegram is an optional channel, not a gate: ask and answer in the terminal instead, subject to the same native permission rules. An unanswered request is never approval.</dd></div>
+              <div><dt>An old button or late reply no longer works</dt><dd>The request may have expired, been cancelled, or lost its origin/grant. Do not replay an approval or bypass a denial with another ID. A genuinely new action needs a new explicit decision.</dd></div>
+              <div><dt>I received no completion notification</dt><dd>Working updates do not notify the phone, and accepted only means queued. Verify actual task completion separately; do not infer delivery or success from a quiet chat.</dd></div>
+            </dl>
+          </section>
+          <nav class="docs-sequence" aria-label="Documentation pages">
+            <a rel="prev" href="/docs/agent-terminal-control/"><span>Previous</span>Agent terminal control</a>
+          </nav>
+        </article>
+      </div>
+    </main>
+    <footer class="site-footer shell">
+      <div><span class="footer-mark">Q<span>TTY</span></span><p>Native terminal workspace for macOS.</p></div>
+      <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/docs/">Docs</a><a href="/releases/">Releases</a><a href="/privacy/">Privacy</a><a href="https://github.com/dntsk/quicktty">GitHub</a></nav>
+      <p class="copyright">© <span data-current-year>2026</span> QuickTTY</p>
+    </footer>
+  </body>
+</html>

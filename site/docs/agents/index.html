@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Connect coding agents to QuickTTY for progress, version-verified native session continuity, and permission-scoped Pi terminal tasks.">
+    <meta name="description" content="Connect coding agents to QuickTTY for progress, session continuity, Pi terminal tasks, and Telegram questions and one-time approvals.">
     <meta name="theme-color" content="#f2f3f1">
     <link rel="canonical" href="https://quicktty.app/docs/agents/">
     <link rel="icon" href="/assets/app-icon.png">
@@ -35,7 +35,7 @@
         <div>
           <p class="eyebrow">Agent guide</p>
           <h1>Coding agent integrations</h1>
-          <p class="lede">Choose progress, session continuity, or terminal control independently—and see exactly what QuickTTY installs.</p>
+          <p class="lede">Choose progress, session continuity, terminal control, or Telegram messaging independently—and see exactly what QuickTTY installs.</p>
         </div>
       </header>
       <div class="docs-layout shell">
@@ -45,13 +45,14 @@
             <li><a href="#coding-agent-integrations">Capabilities</a></li>
             <li><a href="#install-integrations">Install integrations</a></li>
             <li><a href="#pi">Pi one-click setup</a></li>
+            <li><a href="#telegram">Telegram messaging</a></li>
             <li><a href="#osc-progress">OSC progress</a></li>
           </ol>
         </nav>
         <article class="docs-content">
           <section id="coding-agent-integrations">
             <h2>Coding Agent Integrations</h2>
-            <p>QuickTTY treats coding-agent integration as three separate capabilities. Use only the layer you need; installing one does not silently enable the others.</p>
+            <p>QuickTTY treats coding-agent integration as separate capabilities. Use only the layer you need; installing one does not silently enable the others.</p>
             <div class="capability-grid" aria-label="Agent integration capabilities">
               <article><span>01</span><h3>Progress</h3><p>Show standard OSC <code>9;4</code> state in tabs and workspaces without parsing terminal output.</p></article>
               <article><span>02</span><h3>Session continuity</h3><p>Relaunch an eligible native session by opaque ID in its original pane.</p></article>
@@ -105,6 +106,10 @@ quicktty integrations uninstall [ids...] [--yes]</code></pre>
               <p><span>Pi capability</span><strong>Run terminal tasks in real QuickTTY panes.</strong></p>
               <a href="/docs/agent-terminal-control/">Read the terminal control guide <span aria-hidden="true">→</span></a>
             </aside>
+
+            <h3 id="telegram">Telegram questions and one-time approvals</h3>
+            <p>Connect your own bot once in <strong>QuickTTY → Agent Integrations… → Telegram</strong>, pair your private account, and let authenticated registered agents in all workspaces use the channel. Answer questions with Telegram Reply or buttons, and approve one exact action without granting blanket permission. <kbd>Cmd+Opt+T</kbd> toggles the persistent channel across all workspaces.</p>
+            <p>Pi receives dedicated messaging tools after accepted registration. Other adapters have different CLI or guarded-hook support; enabling Telegram does not automatically forward every native question or permission dialog. Follow the <a href="/docs/telegram/">Telegram guide</a> for setup, integration updates, reply matching, supported agents, privacy, and troubleshooting.</p>
 
             <h3 id="osc-progress">OSC progress</h3>
             <p>Progress setup is independent from session restoration. Manual progress-only examples remain bundled at:</p>

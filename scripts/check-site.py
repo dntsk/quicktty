@@ -17,6 +17,7 @@ WORKSPACES_PAGE = SITE / "docs" / "workspaces" / "index.html"
 SHORTCUTS_PAGE = SITE / "docs" / "shortcuts" / "index.html"
 AGENTS_PAGE = SITE / "docs" / "agents" / "index.html"
 TERMINAL_CONTROL_PAGE = SITE / "docs" / "agent-terminal-control" / "index.html"
+TELEGRAM_PAGE = SITE / "docs" / "telegram" / "index.html"
 EXPECTED_PAGES = {
     SITE / "index.html",
     DOCS_HUB,
@@ -25,6 +26,7 @@ EXPECTED_PAGES = {
     SHORTCUTS_PAGE,
     AGENTS_PAGE,
     TERMINAL_CONTROL_PAGE,
+    TELEGRAM_PAGE,
     SITE / "releases" / "index.html",
     SITE / "privacy" / "index.html",
 }
@@ -424,6 +426,7 @@ def main() -> int:
         SHORTCUTS_PAGE,
         AGENTS_PAGE,
         TERMINAL_CONTROL_PAGE,
+        TELEGRAM_PAGE,
     )
     for path in docs_paths:
         parser = parsed_pages.get(path.resolve())
@@ -453,7 +456,7 @@ def main() -> int:
         errors.append("site/docs/index.html: missing legacy compatibility anchors")
     for route in (
         "/docs/getting-started/", "/docs/workspaces/", "/docs/shortcuts/",
-        "/docs/agents/", "/docs/agent-terminal-control/",
+        "/docs/agents/", "/docs/agent-terminal-control/", "/docs/telegram/",
     ):
         if f'href="{route}"' not in hub_source:
             errors.append(f"site/docs/index.html: missing documentation route {route}")
@@ -673,6 +676,53 @@ def main() -> int:
         ),
         errors,
     )
+
+    telegram_source = page_sources.get(TELEGRAM_PAGE.resolve(), "")
+    telegram_parser = parsed_pages.get(TELEGRAM_PAGE.resolve())
+    telegram_sections = {
+        "connect-bot", "pi-setup", "reply", "approvals", "channel-controls",
+        "agent-support", "cli", "privacy", "troubleshooting",
+    }
+    if telegram_parser is None or not telegram_sections.issubset(telegram_parser.ids):
+        errors.append("site/docs/telegram/index.html: missing Telegram guide sections")
+    if telegram_parser is not None and telegram_parser.canonicals != [
+        "https://quicktty.app/docs/telegram/"
+    ]:
+        errors.append("site/docs/telegram/index.html: incorrect canonical URL")
+    require_markers(
+        telegram_source,
+        "Telegram guide",
+        (
+            "0.1.5.beta-4", "build 19", "Agent Integrations…", "Connect bot",
+            "private chat", "/start", "Confirm Telegram user", "Keychain",
+            "<code>/reload</code>", "quicktty_ask_user", "quicktty_confirm_action",
+            "quicktty_notify", "Reply", "Подтвердить один раз",
+            "does not execute the action", "native permission", "not approval",
+            "Cmd+Opt+T", "toggle-telegram=cmd+opt+t", "all workspaces",
+            "quicktty agent request", "deliveryUncertain", "requestIDConflict",
+            "not end-to-end encrypted", "not proven delivery",
+            "does not automatically forward every question",
+        ),
+        errors,
+    )
+    for label, source in (
+        ("agent integrations guide", agents_source),
+        ("terminal control guide", terminal_source),
+    ):
+        require_markers(source, label, ('href="/docs/telegram/"',), errors)
+    privacy_source = page_sources.get((SITE / "privacy" / "index.html").resolve(), "")
+    telegram_privacy = section_between(
+        privacy_source, 'aria-labelledby="telegram-heading"', "</section>"
+    )
+    if telegram_privacy is None:
+        errors.append("site/privacy/index.html: missing Telegram privacy disclosure")
+    else:
+        require_markers(
+            telegram_privacy,
+            "Telegram privacy disclosure",
+            ("Keychain", "not end-to-end encrypted", 'href="/docs/telegram/#privacy"'),
+            errors,
+        )
 
     require_markers(
         home_source,
