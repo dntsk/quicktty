@@ -75,6 +75,19 @@ import time
 root = pathlib.Path(__file__).parent
 if sys.argv[1:4] == ["internal", "hook", "pi"]:
     lifecycle = json.load(sys.stdin)
+    with (root / "lifecycle.jsonl").open("a") as output:
+        output.write(json.dumps({"event": sys.argv[4], "payload": lifecycle}) + "\n")
+    reject = root / "reject-next-lifecycle"
+    if reject.exists():
+        reject.unlink()
+        raise SystemExit(1)
+    hold = root / "hold-next-lifecycle"
+    if hold.exists():
+        hold.unlink()
+        (root / "lifecycle-held").touch()
+        deadline = time.monotonic() + 3
+        while not (root / "release-lifecycle").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
     raise SystemExit(1 if lifecycle.get("session_id") == "not-registered" else 0)
 if sys.argv[1:] != ["agent", "request"]:
     raise SystemExit("unexpected helper grammar")
@@ -119,12 +132,13 @@ PY
 chmod 700 "$test_root/helper.py"
 cat >"$test_root/contract.ts" <<'TS'
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, watch } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import extension from "./index.ts";
 
 const root = process.argv[2];
+process.env.QUICKTTY_AGENT_SOCKET = "/fixture/unused-lifecycle.sock";
 const calls = () => existsSync(join(root, "calls.jsonl"))
   ? readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 const tools = new Map<string, any>();
@@ -196,6 +210,85 @@ async function main() {
   extension({ on: (event: string, handler: any) => outsideHandlers.set(event, handler), registerTool: (tool: any) => outsideTools.set(tool.name, tool) } as unknown as ExtensionAPI);
   await outsideHandlers.get("session_start")({ reason: "startup" }, { cwd: "/tmp", sessionManager: { getSessionId: () => "not-registered" } });
   assert.equal(outsideTools.size, 0, "an unregistered agent gained QuickTTY tools");
+  await outsideHandlers.get("session_shutdown")({ reason: "quit" }, context);
+
+  const lifecycleCalls = () => readFileSync(join(root, "lifecycle.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const beforeStart = { systemPromptOptions: { toolSnippets: {}, toolGuidelines: {} } };
+  const integration = (sessionID: string) => {
+    const handlers = new Map<string, any>();
+    const definitions = new Map<string, any>();
+    const registrations: string[] = [];
+    const notices: string[] = [];
+    extension({
+      on: (event: string, handler: any) => handlers.set(event, handler),
+      registerTool: (tool: any) => { registrations.push(tool.name); definitions.set(tool.name, tool); },
+      getAllTools: () => [...definitions.values()],
+    } as unknown as ExtensionAPI);
+    return { handlers, registrations, notices, ctx: {
+      cwd: "/tmp", hasUI: true,
+      ui: { notify: (text: string) => notices.push(text) },
+      sessionManager: { getSessionId: () => sessionID },
+    } };
+  };
+  const retry = integration("retry-private-session");
+  writeFileSync(join(root, "reject-next-lifecycle"), "");
+  await retry.handlers.get("session_start")({}, retry.ctx);
+  assert.equal(retry.registrations.length, 0);
+  assert.equal(retry.notices.length, 1, "failed registration was silently ignored");
+  assert(retry.notices[0].includes("helperRejected"), "failure omitted the bounded diagnostic code");
+  assert(!JSON.stringify(retry.notices).includes("retry-private-session"));
+  assert(retry.handlers.has("before_agent_start"), "no recovery hook after failed registration");
+  await Promise.all([retry.handlers.get("before_agent_start")(beforeStart, retry.ctx), retry.handlers.get("before_agent_start")(beforeStart, retry.ctx)]);
+  assert.equal(retry.registrations.length, 3, "tools were not restored exactly once");
+  const recoveredCalls = lifecycleCalls().filter((value) => value.payload.session_id === "retry-private-session");
+  assert.equal(recoveredCalls.length, 2, "concurrent recovery duplicated registration");
+  assert.deepEqual(recoveredCalls[0], recoveredCalls[1], "recovery changed the lifecycle payload");
+  await retry.handlers.get("before_agent_start")(beforeStart, retry.ctx);
+  assert.equal(lifecycleCalls().filter((value) => value.payload.session_id === "retry-private-session").length, 2);
+  await retry.handlers.get("session_shutdown")({ reason: "new" }, retry.ctx);
+
+  const switched = integration("switch-private-session");
+  writeFileSync(join(root, "reject-next-lifecycle"), "");
+  await switched.handlers.get("session_start")({}, switched.ctx);
+  writeFileSync(join(root, "reject-next-lifecycle"), "");
+  await switched.handlers.get("before_agent_start")(beforeStart, switched.ctx);
+  assert.equal(switched.registrations.length, 0, "rejected switch fell back to startup registration");
+  assert.equal(switched.notices.length, 1);
+  await switched.handlers.get("before_agent_start")(beforeStart, switched.ctx);
+  assert.equal(switched.registrations.length, 3);
+  const switchCalls = lifecycleCalls().filter((value) => value.payload.session_id === "switch-private-session");
+  assert.equal(switchCalls.length, 3);
+  assert(switchCalls.every((value) => value.event === "session_switch"));
+  assert.equal(switchCalls[0].payload.previous_session_id, "retry-private-session");
+  assert.deepEqual(switchCalls[0], switchCalls[1], "switch recovery lost the previous session");
+  assert.deepEqual(switchCalls[0], switchCalls[2]);
+  await switched.handlers.get("session_shutdown")({ reason: "quit" }, switched.ctx);
+
+  const rejected = integration("not-registered");
+  await rejected.handlers.get("session_start")({}, rejected.ctx);
+  await rejected.handlers.get("before_agent_start")({}, rejected.ctx);
+  await rejected.handlers.get("before_agent_start")({}, rejected.ctx);
+  assert.equal(rejected.registrations.length, 0, "repeated refusal exposed tools");
+  assert.equal(rejected.notices.length, 1, "failure warning repeated on every prompt");
+  await rejected.handlers.get("session_shutdown")({ reason: "quit" }, rejected.ctx);
+  const afterShutdown = lifecycleCalls().length;
+  await rejected.handlers.get("before_agent_start")({}, rejected.ctx);
+  assert.equal(lifecycleCalls().length, afterShutdown, "shutdown restarted registration");
+
+  const late = integration("late-private-session");
+  writeFileSync(join(root, "hold-next-lifecycle"), "");
+  const held = new Promise<void>((resolve, reject) => {
+    const watcher = watch(root, () => {
+      if (existsSync(join(root, "lifecycle-held"))) { clearTimeout(timer); watcher.close(); resolve(); }
+    });
+    const timer = setTimeout(() => { watcher.close(); reject(new Error("Lifecycle fixture did not start")); }, 2_000);
+  });
+  const starting = late.handlers.get("session_start")({}, late.ctx);
+  await held;
+  await late.handlers.get("session_shutdown")({ reason: "quit" }, late.ctx);
+  writeFileSync(join(root, "release-lifecycle"), "");
+  await starting;
+  assert.equal(late.registrations.length, 0, "late acknowledgement exposed tools after shutdown");
   console.log("PASS: Pi messaging adapter (installed SDK loader, mock API/helper; no agent, GUI, network, or credentials)");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const HELPER_PATH = "__QUICKTTY_HELPER_PATH__";
 const MAXIMUM_PAYLOAD_BYTES = 65_536;
@@ -26,18 +26,20 @@ function isBounded(value: string, maximumBytes: number): boolean {
   return value.length > 0 && Buffer.byteLength(value, "utf8") <= maximumBytes;
 }
 
-async function send(event: string, payload: Record<string, string>): Promise<boolean> {
-  const input = Buffer.from(JSON.stringify(payload), "utf8");
-  if (input.byteLength > MAXIMUM_PAYLOAD_BYTES) return false;
+type LifecycleResult = "accepted" | "payloadTooLarge" | "helperTimedOut" | "helperSpawnFailed" | "helperInputFailed" | "helperRejected";
 
-  return new Promise<boolean>((resolve) => {
+async function send(event: string, payload: Record<string, string>): Promise<LifecycleResult> {
+  const input = Buffer.from(JSON.stringify(payload), "utf8");
+  if (input.byteLength > MAXIMUM_PAYLOAD_BYTES) return "payloadTooLarge";
+
+  return new Promise<LifecycleResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (accepted = false): void => {
+    const finish = (result: LifecycleResult): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      resolve(accepted);
+      resolve(result);
     };
     const child = spawn(HELPER_PATH, ["internal", "hook", "pi", event], {
       shell: false,
@@ -45,11 +47,11 @@ async function send(event: string, payload: Record<string, string>): Promise<boo
     });
     timer = setTimeout(() => {
       child.kill("SIGKILL");
-      finish();
+      finish("helperTimedOut");
     }, HELPER_TIMEOUT_MS);
-    child.once("error", () => finish());
-    child.once("close", (code) => finish(code === 0));
-    child.stdin.once("error", () => finish());
+    child.once("error", () => finish("helperSpawnFailed"));
+    child.once("close", (code) => finish(code === 0 ? "accepted" : "helperRejected"));
+    child.stdin.once("error", () => finish("helperInputFailed"));
     child.stdin.end(input);
   });
 }
@@ -289,6 +291,41 @@ function installMessagingTools(pi: ExtensionAPI): {
 
 export default function quickTTYSessionIntegration(pi: ExtensionAPI): void {
   let messaging: ReturnType<typeof installMessagingTools> | undefined;
+  let registration: {
+    event: string;
+    payload: Record<string, string>;
+    inFlight?: Promise<void>;
+    warned?: boolean;
+  } | undefined;
+  const register = async (ctx: ExtensionContext): Promise<void> => {
+    const pending = registration;
+    if (!pending || pending.payload.session_id !== ctx.sessionManager.getSessionId()) return;
+    pending.inFlight ??= (async () => {
+      const result = await send(pending.event, pending.payload);
+      // Shutdown or replacement must win over a late helper acknowledgement.
+      if (registration !== pending) return;
+      if (result === "accepted") {
+        messaging ??= installMessagingTools(pi);
+        registration = undefined;
+      } else if (!pending.warned && ctx.hasUI && "QUICKTTY_AGENT_SOCKET" in process.env) {
+        pending.warned = true;
+        ctx.ui.notify(`QuickTTY session registration failed (${result}). Telegram tools are unavailable; registration will retry before the next prompt. You can continue locally.`, "warning");
+      }
+    })();
+    try { await pending.inFlight; }
+    finally { pending.inFlight = undefined; }
+  };
+  pi.on("before_agent_start", async (event, ctx) => {
+    const wasRegistered = messaging !== undefined;
+    await register(ctx);
+    if (wasRegistered || !messaging) return;
+    // Pi snapshots prompt metadata before this hook; refresh newly registered tools' rules too.
+    for (const tool of pi.getAllTools()) {
+      if (!["quicktty_ask_user", "quicktty_confirm_action", "quicktty_notify"].includes(tool.name)) continue;
+      event.systemPromptOptions.toolSnippets[tool.name] = tool.description;
+      event.systemPromptOptions.toolGuidelines[tool.name] = tool.promptGuidelines ?? [];
+    }
+  });
   pi.on("message_end", (event) => {
     if (event.message.role !== "assistant") return;
     messaging?.observeBatch(event.message.content.filter((block) => block.type === "toolCall").map((block) => block.name));
@@ -304,21 +341,19 @@ export default function quickTTYSessionIntegration(pi: ExtensionAPI): void {
     shared.previousSessionID = undefined;
     shared.currentSessionID = sessionID;
 
-    if (previousSessionID && isBounded(previousSessionID, 512)) {
-      const accepted = await send("session_switch", {
-        previous_session_id: previousSessionID,
-        session_id: sessionID,
-        cwd: ctx.cwd,
-      });
-      if (accepted) messaging ??= installMessagingTools(pi);
-      return;
-    }
-    if (await send("session_start", { session_id: sessionID, cwd: ctx.cwd })) {
-      messaging ??= installMessagingTools(pi);
-    }
+    registration = previousSessionID && isBounded(previousSessionID, 512) ? {
+      event: "session_switch",
+      payload: { previous_session_id: previousSessionID, session_id: sessionID, cwd: ctx.cwd },
+    } : {
+      event: "session_start",
+      payload: { session_id: sessionID, cwd: ctx.cwd },
+    };
+    await register(ctx);
   });
 
   pi.on("session_shutdown", async (event, ctx) => {
+    const previousSessionID = registration?.payload.previous_session_id;
+    registration = undefined;
     await messaging?.shutdown();
     messaging = undefined;
     const shared = state();
@@ -332,7 +367,7 @@ export default function quickTTYSessionIntegration(pi: ExtensionAPI): void {
       return;
     }
     if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
-      shared.previousSessionID = sessionID;
+      shared.previousSessionID = previousSessionID ?? sessionID;
     }
   });
 }

@@ -93,15 +93,18 @@ const finalText = (text) => ai.fauxAssistantMessage(text);
 
 try {
   assert(!session.getActiveToolNames().includes("quicktty_ask_user"));
+  writeFileSync(join(root, "reject-next-lifecycle"), "");
   await session.bindExtensions({ onError: (error) => errors.push(error) });
-  for (const name of ["quicktty_ask_user", "quicktty_confirm_action", "quicktty_notify"]) {
-    assert(session.getActiveToolNames().includes(name), `SDK did not activate dynamically registered ${name}`);
-  }
+  assert(!session.getActiveToolNames().includes("quicktty_ask_user"), "failed startup exposed tools");
 
   let continued = false;
   faux.setResponses([
     (context) => {
-      assert(ai.getCurrentTools(context.messages).some((tool) => tool.name === "quicktty_ask_user"));
+      const declared = ai.getCurrentTools(context.messages).map((tool) => tool.name);
+      for (const name of ["quicktty_ask_user", "quicktty_confirm_action", "quicktty_notify"]) {
+        assert(declared.includes(name), `First provider request missed recovered ${name}`);
+      }
+      assert(ai.getCurrentSystemPrompt(context.messages).includes("quicktty_confirm_action"), "recovered tools lack prompt guidelines");
       return toolCall("quicktty_ask_user", { question: "SDK fixture: choose", choices: ["One", "Two"] }, "sdk-question");
     },
     (context) => {
@@ -113,7 +116,10 @@ try {
     },
   ]);
   const questionRun = session.prompt("Run isolated question fixture");
-  const waiting = await waitForCall((value) => value.operation === "wait" && calls().some((original) => original.requestID === value.requestID && original.text === "SDK fixture: choose"));
+  const waiting = await waitForCall((value) => value.operation === "wait" && calls().some((original) => original.requestID === value.requestID && original.text === "SDK fixture: choose")).catch((error) => {
+    console.error("SDK fixture final message:", session.messages.at(-1));
+    throw error;
+  });
   assert.equal(continued, false, "Agent continued before a user answer");
   answer(waiting, { state: "choice", choiceIndex: 1, text: "Two" });
   await questionRun;
