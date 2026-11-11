@@ -19,7 +19,12 @@ private final class AgentMessagingServiceRouter {
 
 @MainActor
 final class AgentMessagingService {
-    static var current: AgentMessagingService?
+    static let didChangeNotification = Notification.Name("QuickTTY.AgentMessagingService.didChange")
+    static var current: AgentMessagingService? {
+        didSet {
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        }
+    }
     private let workspaceProvider: @MainActor () -> [Workspace]
     private let paneIsLive: @MainActor (PaneID) -> Bool
     private let credentials: TelegramCredentialStore
@@ -104,13 +109,18 @@ final class AgentMessagingService {
             revokedOrigins.insert(origin)
             connection.revoke(origin)
         }
+        changed()
+    }
+
+    private func changed() {
         onChange?()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
     private func connectionChanged() {
         guard !isFrozen, !isReconcilingAccess else { return }
         reconcileAccess()
-        onChange?()
+        changed()
     }
 
     private func reconcileAccess() {
@@ -197,7 +207,7 @@ final class AgentMessagingService {
         case .unregister(let pane, _, _): invalidate(pane)
         }
         reconcileAccess()
-        onChange?()
+        changed()
     }
 
     private func invalidate(_ pane: PaneID?) {
@@ -215,7 +225,7 @@ final class AgentMessagingService {
             revokedOrigins.removeAll()
             for origin in previous { connection.revoke(origin) }
         }
-        onChange?()
+        changed()
     }
 
     fileprivate func handle(_ request: AgentMessagingRequest, context: AgentMessagingSocketContext)

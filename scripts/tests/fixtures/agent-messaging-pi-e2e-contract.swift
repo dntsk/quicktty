@@ -114,19 +114,54 @@ struct AgentMessagingPiE2EContract {
         _ = await network.callback(message: question.message, data: choice)
         try await waitUntil { exists(root, "sdk-question-done") }
 
+        let textQuestion = try await prompt(
+            "E2E fixture: free text", service: service, network: network)
+        let beforeText = await network.messageBodies.count
+        _ = await network.reply(text: "Foreign text", user: 43)
+        _ = await network.reply(text: "Group text", chatType: "group")
+        let forwarded = await network.reply(text: "Relayed text", relayed: true)
+        try await waitUntil { await network.offset > forwarded }
+        try require(
+            await network.messageBodies.count == beforeText,
+            "Untrusted text generated Telegram feedback")
+        let orphan = await network.reply(text: "Unthreaded private fixture answer")
+        try await waitUntil { await network.offset > orphan }
+        try await waitUntil { await network.contains("Ответ не передан агенту") }
+        try require(
+            service.connection.snapshot(textQuestion.snapshot.request.id)?.state == .pending,
+            "Unthreaded text guessed an origin")
+        try require(!exists(root, "sdk-text-done"), "SDK continued after unthreaded text")
+        _ = await network.reply(
+            message: textQuestion.message, text: "Explicit private fixture answer")
+        try await waitUntil { exists(root, "sdk-text-done") }
+        try await waitUntil { await network.contains("Ответ принят и передан агенту") }
+
         let approve = try await prompt("E2E fixture: approve", service: service, network: network)
         guard case .action(let action) = approve.snapshot.request.prompt else {
             throw PiE2EFailure(message: "SDK action became another prompt type")
         }
         try require(action.risk == .elevated, "Real SDK action did not default to elevated")
+        let beforeInvalidAction = await network.messageBodies.count
         let wrongPhrase = await network.reply(message: approve.message, text: "yes")
         try await waitUntil { await network.offset > wrongPhrase }
         try require(
             service.connection.snapshot(approve.snapshot.request.id)?.state == .pending,
             "Elevated SDK action accepted an inexact phrase")
         try require(!exists(root, "sdk-approved"), "SDK completed the action before approval")
-        _ = await network.reply(
-            message: approve.message, text: approve.snapshot.request.confirmationPhrase)
+        try await waitUntil { await network.messageBodies.count == beforeInvalidAction + 1 }
+        guard
+            let approval = await network.button(
+                message: approve.message, label: "Подтвердить один раз")
+        else {
+            throw PiE2EFailure(message: "Elevated action requires copying text instead of a button")
+        }
+        let foreignApproval = await network.callback(
+            message: approve.message, data: approval, user: 43)
+        try await waitUntil { await network.offset > foreignApproval }
+        try require(
+            service.connection.snapshot(approve.snapshot.request.id)?.state == .pending,
+            "Foreign callback approved an elevated action")
+        _ = await network.callback(message: approve.message, data: approval)
         try await waitUntil { exists(root, "sdk-approved") }
 
         let deny = try await prompt("E2E fixture: deny", service: service, network: network)
@@ -173,7 +208,20 @@ struct AgentMessagingPiE2EContract {
                 )
             }
         }
-        try require(bodies.count == 6, "SDK integration duplicated or omitted a message")
+        try require(bodies.count == 10, "SDK integration duplicated or omitted a prompt/feedback")
+        for body in bodies {
+            let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+            let text = json["text"] as! String
+            let markup = json["reply_markup"] as! [String: Any]
+            if text.contains("E2E fixture: free text") {
+                try require(
+                    markup["force_reply"] as? Bool == true, "SDK free question missed Reply")
+            }
+            try require(
+                !text.contains("Unthreaded private fixture answer")
+                    && !text.contains("Explicit private fixture answer"),
+                "Text feedback echoed the private answer")
+        }
         service.shutdown()
         await network.drain()
         await lifecycle.stop()
@@ -288,9 +336,14 @@ private actor PiE2ENetwork {
         )
     }
 
-    func reply(message: Int, text: String) -> Int {
-        enqueue(
-            "\"message\":{\"message_id\":\(1_000 + nextUpdate),\"date\":1,\"from\":{\"id\":42,\"is_bot\":false},\"chat\":{\"id\":42,\"type\":\"private\"},\"text\":\"\(text)\",\"reply_to_message\":{\"message_id\":\(message)}}"
+    func reply(
+        message: Int? = nil, text: String, user: Int = 42, chatType: String = "private",
+        relayed: Bool = false
+    ) -> Int {
+        let reference = message.map { ",\"reply_to_message\":{\"message_id\":\($0)}" } ?? ""
+        let relay = relayed ? ",\"forward_origin\":{}" : ""
+        return enqueue(
+            "\"message\":{\"message_id\":\(1_000 + nextUpdate),\"date\":1,\"from\":{\"id\":\(user),\"is_bot\":false},\"chat\":{\"id\":42,\"type\":\"\(chatType)\"},\"text\":\"\(text)\"\(reference)\(relay)}"
         )
     }
 

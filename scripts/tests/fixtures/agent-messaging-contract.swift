@@ -283,6 +283,7 @@ struct AgentMessagingContract {
             body.replacingOccurrences(of: "\"id\":42,\"is_bot\"", with: "\"id\":43,\"is_bot\""),
             body.replacingOccurrences(of: "\"type\":\"private\"", with: "\"type\":\"group\""),
             body.replacingOccurrences(of: "\"message_id\":100", with: "\"message_id\":99"),
+            body.replacingOccurrences(of: ",\"reply_to_message\":{\"message_id\":100}", with: ""),
             body + ",\"forward_origin\":{}",
             body + ",\"via_bot\":{\"id\":9,\"is_bot\":true}",
             body + ",\"sender_chat\":{\"id\":42,\"type\":\"private\"}",
@@ -348,11 +349,27 @@ struct AgentMessagingContract {
         let actionSnapshot = try ledger.submit(actionRequest, now: 7)
         let actionPrompt = try TelegramPrompt(snapshot: actionSnapshot)
         try require(
-            actionPrompt.text.contains(actionRequest.confirmationPhrase), "Missing elevated phrase")
+            !actionPrompt.text.contains(actionRequest.confirmationPhrase),
+            "Telegram still requires copying a confirmation phrase")
         try require(
-            actionPrompt.buttons.flatMap { $0 }.allSatisfy { !$0.callbackData.hasSuffix(":a") },
-            "Elevated approval button exists")
-        _ = try ledger.resolveLocal(actionRequest.id, answer: .deny, now: 8)
+            actionPrompt.buttons.flatMap { $0 }.contains { $0.callbackData.hasSuffix(":a") },
+            "Elevated Telegram action has no one-time approval button")
+        let actionReference = try TelegramMessageReference(chatID: 42, messageID: 103)
+        _ = try ledger.bindTelegram(actionRequest.id, message: actionReference, now: 7)
+        let approval = TelegramCallbackData(requestID: actionRequest.id, answer: .approve)
+        let approvalJSON =
+            "{\"update_id\":4,\"callback_query\":{\"id\":\"approve\",\"from\":{\"id\":42,\"is_bot\":false},\"data\":\"\(approval.encoded)\",\"message\":{\"message_id\":103,\"date\":1,\"chat\":{\"id\":42,\"type\":\"private\"}}}}"
+        let wrongApproval = approvalJSON.replacingOccurrences(
+            of: "\"id\":42,\"is_bot\"", with: "\"id\":43,\"is_bot\"")
+        try require(
+            try router.route(update(wrongApproval), ledger: &ledger, now: 8) == nil,
+            "Foreign sender approved an elevated Telegram action")
+        try require(
+            try router.route(update(approvalJSON), ledger: &ledger, now: 8)?.state
+                == .resolved(.approved), "Elevated Telegram button was not accepted")
+        try require(
+            try router.route(update(approvalJSON), ledger: &ledger, now: 8) == nil,
+            "Elevated Telegram button was reusable")
         try rejects(.requestUnavailable) {
             _ = try ledger.bindTelegram(
                 actionRequest.id, message: try TelegramMessageReference(chatID: 42, messageID: 103),
@@ -474,6 +491,9 @@ struct AgentMessagingContract {
         let sendRequest = await transport.lastRequest
         let sendJSON =
             try JSONSerialization.jsonObject(with: sendRequest!.httpBody!) as! [String: Any]
+        try require(
+            (sendJSON["reply_markup"] as? [String: Any])?["force_reply"] as? Bool == true,
+            "Question did not open the Telegram reply interface")
         try require(sendJSON["parse_mode"] == nil, "Prompt enables Telegram markup")
         try require(sendJSON["protect_content"] as? Bool == true, "Prompt content is not protected")
         try require(
@@ -484,6 +504,49 @@ struct AgentMessagingContract {
             "Wire leaked session ID")
         try await client.answerCallbackQuery("query-id", text: "Answered")
         try await client.clearButtons(sent)
+        let clearRequest = await transport.lastRequest
+        let clearJSON =
+            try JSONSerialization.jsonObject(with: clearRequest!.httpBody!) as! [String: Any]
+        try require(
+            (clearJSON["reply_markup"] as? [String: Any])?["force_reply"] == nil,
+            "Editing buttons attempted to change the immutable force_reply field")
+        _ = try ledger.resolveLocal(snapshot.request.id, answer: .cancel, now: 1)
+        let freeText = try ledger.submit(
+            request(origin: first, prompt: .question(text: "Type a free answer", choices: [])),
+            now: 2)
+        let freePrompt = try TelegramPrompt(snapshot: freeText)
+        try require(
+            !freePrompt.text.contains("выберите вариант"),
+            "Free-text question promises nonexistent answer options")
+        try require(
+            freePrompt.buttons.flatMap { $0 }.contains { $0.text == "Отменить запрос" },
+            "Opening reply removed Telegram cancellation")
+        _ = try await client.sendPrompt(freeText, to: peer)
+        let freeRequest = await transport.lastRequest
+        let freeJSON =
+            try JSONSerialization.jsonObject(with: freeRequest!.httpBody!) as! [String: Any]
+        try require(
+            (freeJSON["reply_markup"] as? [String: Any])?["force_reply"] as? Bool == true,
+            "Free-text question did not open Reply")
+        _ = try ledger.resolveLocal(freeText.request.id, answer: .cancel, now: 3)
+        for risk in [AgentInteractionRisk.standard, .elevated] {
+            let action = try ledger.submit(
+                request(
+                    origin: first,
+                    prompt: .action(
+                        AgentInteractionAction(
+                            operation: "Fixture action", resources: "Fixture",
+                            consequences: "None", risk: risk))), now: 4)
+            _ = try await client.sendPrompt(action, to: peer)
+            let actionRequest = await transport.lastRequest
+            let actionJSON =
+                try JSONSerialization.jsonObject(with: actionRequest!.httpBody!) as! [String: Any]
+            let markup = actionJSON["reply_markup"] as? [String: Any]
+            try require(
+                markup?["force_reply"] == nil,
+                "Button-only action opened an unnecessary text reply interface")
+            _ = try ledger.resolveLocal(action.request.id, answer: .cancel, now: 5)
+        }
 
         for (status, body, expected) in [
             (

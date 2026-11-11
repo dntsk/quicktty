@@ -694,6 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let togglePaneZoomMenuItemAction = #selector(AppDelegate.togglePaneZoom)
     static let toggleBroadcastMenuItemAction = #selector(AppDelegate.toggleBroadcast)
     static let agentIntegrationsMenuItemAction = #selector(AppDelegate.openAgentIntegrations)
+    static let toggleTelegramMenuItemAction = #selector(AppDelegate.toggleTelegram)
     static let copyMenuItemAction = #selector(NSText.copy(_:))
     static let pasteMenuItemAction = #selector(NSText.paste(_:))
     static let selectAllMenuItemAction = #selector(NSText.selectAll(_:))
@@ -869,6 +870,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.removeItem(duplicate)
             }
         }
+        return mainMenu
+    }
+
+    @discardableResult
+    static func installToggleTelegramMenuItem(
+        in existingMainMenu: NSMenu?,
+        target: AnyObject,
+        shortcutController: ShortcutController? = nil
+    ) -> NSMenu {
+        let mainMenu = existingMainMenu ?? NSMenu()
+        let menu = applicationMenu(in: mainMenu)
+        let matches = menu.items.filter { $0.title == "Use Telegram for Agents" }
+        let item =
+            matches.first
+            ?? NSMenuItem(
+                title: "Use Telegram for Agents", action: toggleTelegramMenuItemAction,
+                keyEquivalent: "t")
+        item.action = toggleTelegramMenuItemAction
+        item.keyEquivalent = "t"
+        item.keyEquivalentModifierMask = [.command, .option]
+        item.target = target
+        if matches.isEmpty { menu.addItem(item) }
+        for duplicate in matches.dropFirst() { menu.removeItem(duplicate) }
+        shortcutController?.register(item, for: .toggleTelegram)
         return mainMenu
     }
 
@@ -1754,6 +1779,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == Self.toggleTelegramMenuItemAction {
+            menuItem.state = agentMessagingService?.connection.isEnabled == true ? .on : .off
+            return !isTerminating && agentMessagingService != nil
+        }
         if menuItem.action == Self.commandPaletteMenuItemAction {
             return windowCoordinator?.canPresentCommandPalette == true
         }
@@ -1896,6 +1925,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleBroadcast() {
         windowCoordinator?.toggleBroadcast()
+    }
+
+    @objc private func toggleTelegram() {
+        guard !isTerminating else { return }
+        agentMessagingService?.connection.toggleEnabled()
     }
 
     @objc private func togglePresentationMode() {
@@ -2102,6 +2136,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu = Self.installAgentIntegrationsMenuItem(
             in: mainMenu,
             target: self
+        )
+        mainMenu = Self.installToggleTelegramMenuItem(
+            in: mainMenu,
+            target: self,
+            shortcutController: shortcutController
         )
         mainMenu = Self.installQuitMenuItem(
             in: mainMenu,

@@ -198,6 +198,7 @@ struct TelegramInlineButton: Encodable, Equatable, Sendable {
 struct TelegramPrompt: Sendable {
     let text: String
     let buttons: [[TelegramInlineButton]]
+    let forceReply: Bool
 
     init(snapshot: AgentInteractionSnapshot) throws {
         guard snapshot.state == .pending else { throw AgentInteractionError.requestUnavailable }
@@ -215,28 +216,26 @@ struct TelegramPrompt: Sendable {
         }
         switch request.prompt {
         case .question(let question, let choices):
+            forceReply = true
             lines.append(question)
             for (index, choice) in choices.enumerated() {
                 lines.append("\(index + 1). \(choice)")
                 rows.append([button(choice, .choice(index))])
             }
-            lines.append("\nОтветьте на это сообщение или выберите вариант.")
+            lines.append(
+                choices.isEmpty
+                    ? "\nВведите ответ в поле ответа на это сообщение."
+                    : "\nВыберите вариант или введите ответ в поле ответа на это сообщение.")
+            lines.append("Если поле не открылось, выберите «Ответить» в меню этого сообщения.")
         case .action(let action):
+            forceReply = false
             lines += [
                 "Действие:", action.operation,
                 "\nРесурсы:", action.resources,
                 "\nПоследствия:", action.consequences,
             ]
-            if action.risk == .elevated {
-                lines += [
-                    "\nДля однократного подтверждения ответьте на это сообщение точной фразой:",
-                    request.confirmationPhrase,
-                ]
-                rows.append([button("Отказать", .deny)])
-            } else {
-                lines.append("\nРазрешение только на указанное действие, один раз.")
-                rows.append([button("Разрешить один раз", .approve), button("Отказать", .deny)])
-            }
+            lines.append("\nРазрешение только на указанное действие, один раз.")
+            rows.append([button("Подтвердить один раз", .approve), button("Отказать", .deny)])
         }
         rows.append([button("Отменить запрос", .cancel)])
         let rendered = lines.joined(separator: "\n")

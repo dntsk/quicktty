@@ -45,7 +45,7 @@ QuickTTY requires **macOS 15 or newer** on an **Apple Silicon Mac**.
 
 QuickTTY can check for stable updates in the app. An opt-in beta channel is also available; see the [release channels](https://quicktty.app/releases/) page for details. The current stable release is [0.1.4](https://github.com/dntsk/quicktty/releases/download/v0.1.4/QuickTTY-0.1.4-arm64.dmg).
 
-The current beta is [0.1.5.beta-4](https://github.com/dntsk/quicktty/releases/download/v0.1.5.beta-4/QuickTTY-0.1.5.beta-4-arm64.dmg) (build 19), with automatic recovery of Pi session registration for Telegram tools, persistent Telegram connections for supported coding-agent integrations, and the full embedded Ghostty 1.4.0 engine. Beta releases are opt-in and are not offered on the stable channel.
+The current beta is [0.1.5.beta-4](https://github.com/dntsk/quicktty/releases/download/v0.1.5.beta-4/QuickTTY-0.1.5.beta-4-arm64.dmg) (build 19), with a global Telegram channel toggle (`Cmd+Opt+T`) and visible status indicator, one-click action approvals, guided text replies, and automatic recovery of Pi messaging tools. It includes the full embedded Ghostty 1.4.0 engine. Beta releases are opt-in and are not offered on the stable channel.
 
 ## Documentation
 

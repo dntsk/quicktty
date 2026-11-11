@@ -5,6 +5,7 @@ import Synchronization
 struct AgentMessagingAutoconnectContract {
     static func run() async throws {
         try preferencesPersistence()
+        try channelStateProjection()
         try await restartAndPause()
         try await transientStartupFailure()
         try await noSavedBot()
@@ -27,6 +28,26 @@ struct AgentMessagingAutoconnectContract {
         restarted.saveEnabled(true)
         try AgentMessagingContract.require(
             preferences.loadEnabled(), "Global enable was not persisted")
+    }
+
+    private static func channelStateProjection() throws {
+        let peer = try TelegramPeer(userID: 42, chatID: 42)
+        let cases: [(Bool, TelegramConnectionPhase, TelegramChannelState)] = [
+            (false, .disconnected, .off), (true, .disconnected, .connecting),
+            (true, .verifying, .connecting), (true, .connected(peer), .active),
+            (false, .connected(peer), .off),
+            (false, .pairing(code: "fixture", candidate: nil), .setup),
+            (true, .failed(.network(.conflict)), .failed),
+        ]
+        try AgentMessagingContract.require(
+            TelegramChannelState(isEnabled: true, phase: .connected(peer), hasError: true)
+                == .failed,
+            "Indicator reports an active connection after a poll failure")
+        for (enabled, phase, expected) in cases {
+            try AgentMessagingContract.require(
+                TelegramChannelState(isEnabled: enabled, phase: phase) == expected,
+                "Telegram indicator misrepresents connection/channel state")
+        }
     }
 
     private static func restartAndPause() async throws {
@@ -61,7 +82,20 @@ struct AgentMessagingAutoconnectContract {
             second.snapshots().isEmpty && second.snapshot(pending.id) == nil
                 && !second.hasGrant(origin),
             "Restart restored old requests or grants")
-        second.disconnect()
+        let other = try AgentMessagingContract.origin()
+        second.setEnabledWorkspaces([origin.workspaceID, other.workspaceID])
+        try second.authorize(origin, workspaceName: "First", agentName: "Pi")
+        try second.authorize(other, workspaceName: "Second", agentName: "Pi")
+        let firstQuestion = try AgentMessagingContract.request(origin: origin)
+        let otherQuestion = try AgentMessagingContract.request(origin: other)
+        try second.submit(firstQuestion)
+        try second.submit(otherQuestion)
+        second.toggleEnabled()
+        try AgentMessagingContract.require(
+            second.phase == .disconnected && !second.hasGrant(origin) && !second.hasGrant(other)
+                && second.snapshot(firstQuestion.id)?.state == .resolved(.revoked)
+                && second.snapshot(otherQuestion.id)?.state == .resolved(.revoked),
+            "Global toggle did not revoke every origin and pending request")
         try AgentMessagingContract.require(!preferences.loadEnabled(), "Pause was not persisted")
         second.shutdown()
         await network.drain()
@@ -73,7 +107,7 @@ struct AgentMessagingAutoconnectContract {
             credentials.loads == 2 && paused.phase == .disconnected,
             "Paused restart touched credentials or reconnected")
         let pausedSignal = AutoconnectSignal(paused)
-        paused.resume()
+        paused.toggleEnabled()
         await pausedSignal.wait { if case .connected = paused.phase { true } else { false } }
         try AgentMessagingContract.require(preferences.loadEnabled(), "Resume was not persisted")
         paused.disconnect(forget: true)

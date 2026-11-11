@@ -216,6 +216,10 @@ final class TelegramConnectionController {
         changed()
     }
 
+    func toggleEnabled() {
+        if isEnabled { disconnect() } else { resume() }
+    }
+
     func disconnect(forget: Bool = false) {
         guard !isFrozen else { return }
         restoreTask?.cancel()
@@ -453,6 +457,8 @@ final class TelegramConnectionController {
             if let callback = update.callbackQuery, let client {
                 let text = resolved == nil ? "Запрос недоступен или уже закрыт" : "Ответ принят"
                 maintain { try await client.answerCallbackQuery(callback.id, text: text) }
+            } else {
+                replyFeedback(update, accepted: resolved != nil, peer: peer)
             }
         } catch {
             if let callback = update.callbackQuery, let client {
@@ -460,9 +466,22 @@ final class TelegramConnectionController {
                     try await client.answerCallbackQuery(
                         callback.id, text: "Ответ не принят: проверьте запрос")
                 }
+            } else {
+                replyFeedback(update, accepted: false, peer: peer)
             }
         }
         cleanResolvedButtons()
+    }
+
+    private func replyFeedback(_ update: TelegramUpdate, accepted: Bool, peer: TelegramPeer) {
+        guard update.callbackQuery == nil, let message = update.message,
+            peer.accepts(message.from, in: message.chat), !message.isRelayed,
+            message.messageID > 0, message.date > 0,
+            let text = message.text, (1...4_096).contains(text.utf8.count), let client,
+            accepted || ledger.snapshots(now: clock()).contains(where: { $0.state == .pending })
+        else { return }
+        // An unthreaded answer cannot identify an origin, even when only one request is pending.
+        maintain { try await client.sendReplyFeedback(accepted: accepted, to: peer) }
     }
 
     private func shouldDefer(_ update: TelegramUpdate, peer: TelegramPeer) -> Bool {

@@ -98,6 +98,7 @@ struct ShortcutConfigurationTests {
             "open-config": "cmd+comma",
             "command-palette": "cmd+shift+p",
             "toggle-presentation": "cmd+opt+p",
+            "toggle-telegram": "cmd+opt+t",
             "new-tab": "cmd+t",
             "close-pane": "cmd+w",
             "close-tab": "cmd+opt+w",

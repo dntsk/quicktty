@@ -1987,6 +1987,9 @@ struct AppDelegateLifecycleTests {
             shortcutController: controller
         )
 
+        _ = AppDelegate.installToggleTelegramMenuItem(
+            in: mainMenu, target: delegate, shortcutController: controller)
+
         let structuralActions = ShortcutAction.allCases.filter {
             if case .terminal = $0.executionRoute { return false }
             return true

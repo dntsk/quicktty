@@ -34,6 +34,7 @@ final class WorkspaceViewController: NSViewController {
     var onWindowKeyStateChanged: ((Bool) -> Void)?
 
     let workspaceSelector = WorkspaceSelector()
+    let telegramChannelButton = TelegramChannelButton()
     let tabBarViewController = TabBarViewController()
     private let chromeView = NSView()
     private let terminalContentView = NSView()
@@ -67,6 +68,8 @@ final class WorkspaceViewController: NSViewController {
 
         workspaceSelector.translatesAutoresizingMaskIntoConstraints = false
         chromeView.addSubview(workspaceSelector)
+        telegramChannelButton.translatesAutoresizingMaskIntoConstraints = false
+        chromeView.addSubview(telegramChannelButton)
 
         addChild(tabBarViewController)
         let tabBarView = tabBarViewController.view
@@ -95,7 +98,12 @@ final class WorkspaceViewController: NSViewController {
             chromeView.heightAnchor.constraint(equalToConstant: Self.chromeHeight),
             tabBarView.leadingAnchor.constraint(equalTo: chromeView.leadingAnchor, constant: 6),
             tabBarView.trailingAnchor.constraint(
+                equalTo: telegramChannelButton.leadingAnchor, constant: -6),
+            telegramChannelButton.trailingAnchor.constraint(
                 equalTo: workspaceSelector.leadingAnchor, constant: -8),
+            telegramChannelButton.centerYAnchor.constraint(equalTo: chromeView.centerYAnchor),
+            telegramChannelButton.widthAnchor.constraint(equalToConstant: 116),
+            telegramChannelButton.heightAnchor.constraint(equalToConstant: 22),
             workspaceSelector.trailingAnchor.constraint(
                 equalTo: chromeView.trailingAnchor, constant: -10),
             workspaceSelector.centerYAnchor.constraint(equalTo: chromeView.centerYAnchor),

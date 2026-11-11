@@ -91,6 +91,18 @@ try {
   assert.equal(session.getLastAssistantText(), "question-continued");
   mark("sdk-question-done");
   faux.setResponses([
+    call("quicktty_ask_user", { question: "E2E fixture: free text" }, "e2e-text"),
+    (context) => {
+      const answer = reply(context, "quicktty_ask_user");
+      assert.equal(answer.state, "text");
+      assert.equal(answer.text, "Explicit private fixture answer");
+      return final("text-answer-continued");
+    },
+  ]);
+  await session.prompt("Run authenticated free-text fixture");
+  assert.equal(session.getLastAssistantText(), "text-answer-continued");
+  mark("sdk-text-done");
+  faux.setResponses([
     call("quicktty_confirm_action", { operation: "E2E fixture: approve", resources: "memory counter", consequences: "increment fixture only" }, "e2e-approve"),
     (context) => {
       assert.equal(reply(context, "quicktty_confirm_action").state, "approved");
@@ -145,7 +157,7 @@ try {
   assert.deepEqual(errors, []);
   assert.deepEqual(await runtime.listCredentials(), []);
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-  console.log("PASS: Pi SDK → real CLI/authenticated IPC → mock Telegram → SDK (question/elevated/deny/notify/abort/revoke; no GUI or real credentials)");
+  console.log("PASS: Pi SDK → real CLI/authenticated IPC → mock Telegram → SDK (question/text feedback/elevated button/deny/notify/abort/revoke; no GUI or real credentials)");
 } finally {
   await session.abort();
   session.dispose();

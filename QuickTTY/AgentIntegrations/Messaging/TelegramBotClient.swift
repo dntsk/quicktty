@@ -103,7 +103,8 @@ struct TelegramBotClient: Sendable {
         to peer: TelegramPeer
     ) async throws -> TelegramMessageReference {
         let prompt = try TelegramPrompt(snapshot: snapshot)
-        return try await sendText(prompt.text, buttons: prompt.buttons, to: peer)
+        return try await sendText(
+            prompt.text, buttons: prompt.buttons, forceReply: prompt.forceReply, to: peer)
     }
 
     func sendStatus(
@@ -118,14 +119,24 @@ struct TelegramBotClient: Sendable {
         return try await sendText(text, buttons: [], to: peer)
     }
 
+    func sendReplyFeedback(accepted: Bool, to peer: TelegramPeer) async throws {
+        let text =
+            accepted
+            ? "Ответ принят и передан агенту."
+            : "Ответ не передан агенту. На вопрос отвечайте через «Ответить» в меню его сообщения; действие подтверждайте кнопкой под запросом."
+        _ = try await sendText(text, buttons: [], to: peer)
+    }
+
     private func sendText(
-        _ text: String, buttons: [[TelegramInlineButton]], to peer: TelegramPeer
+        _ text: String, buttons: [[TelegramInlineButton]], forceReply: Bool = false,
+        to peer: TelegramPeer
     ) async throws -> TelegramMessageReference {
         let message: TelegramMessage = try await call(
             .sendMessage,
             body: SendMessageBody(
                 chatID: peer.chatID, text: text,
-                replyMarkup: InlineKeyboard(inlineKeyboard: buttons)
+                replyMarkup: InlineKeyboard(
+                    inlineKeyboard: buttons, forceReply: forceReply ? true : nil)
             )
         )
         guard message.chat.id == peer.chatID, message.chat.type == "private",
@@ -292,8 +303,16 @@ private struct UpdatesBody: Encodable, Sendable {
 
 private struct InlineKeyboard: Encodable, Sendable {
     let inlineKeyboard: [[TelegramInlineButton]]
+    let forceReply: Bool?
+
+    init(inlineKeyboard: [[TelegramInlineButton]], forceReply: Bool? = nil) {
+        self.inlineKeyboard = inlineKeyboard
+        self.forceReply = forceReply
+    }
+
     enum CodingKeys: String, CodingKey {
         case inlineKeyboard = "inline_keyboard"
+        case forceReply = "force_reply"
     }
 }
 

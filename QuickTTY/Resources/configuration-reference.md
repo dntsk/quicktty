@@ -96,8 +96,11 @@ The global Quake toggle is outside the local registry; its default is `quicktty-
 | `open-config` | `cmd+comma` |
 | `command-palette` | `cmd+shift+p` |
 | `toggle-presentation` | `cmd+opt+p` |
+| `toggle-telegram` | `cmd+opt+t` |
 
 `command-palette` opens an in-window fuzzy search over QuickTTY commands and every workspace and tab. Unavailable commands remain visible with a reason; terminal/Ghostty actions are not included.
+
+`toggle-telegram` turns the saved Telegram channel on or off for all registered agents in every workspace. The clickable Telegram indicator in the top bar shows Off, connecting, On, setup, or error. Turning it off revokes pending requests; reconnecting does not restore old approvals. The bot must be configured through Agent Integrations first.
 
 ### Tabs and panes
 

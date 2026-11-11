@@ -150,7 +150,7 @@ struct AgentInteractionLedger: Sendable {
         guard snapshot.telegramMessage == message else {
             throw AgentInteractionError.invalidTelegramMessage
         }
-        return try resolve(snapshot, answer: answer)
+        return try resolve(snapshot, answer: answer, allowsElevatedButton: true)
     }
 
     private mutating func pending(_ id: UUID, now: UInt64) throws -> AgentInteractionSnapshot {
@@ -164,7 +164,8 @@ struct AgentInteractionLedger: Sendable {
 
     private mutating func resolve(
         _ snapshot: AgentInteractionSnapshot,
-        answer: AgentInteractionAnswer
+        answer: AgentInteractionAnswer,
+        allowsElevatedButton: Bool = false
     ) throws -> AgentInteractionSnapshot {
         let resolution: AgentInteractionResolution
         switch (snapshot.request.prompt, answer) {
@@ -179,7 +180,7 @@ struct AgentInteractionLedger: Sendable {
             resolution = .choice(index: index, label: choices[index])
         case (.action, .deny):
             resolution = .denied
-        case (.action(let action), .approve) where action.risk == .standard:
+        case (.action(let action), .approve) where action.risk == .standard || allowsElevatedButton:
             resolution = .approved
         case (.action(let action), .text(let text))
         where action.risk == .elevated && text == snapshot.request.confirmationPhrase:
