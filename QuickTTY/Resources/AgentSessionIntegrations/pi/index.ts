@@ -193,7 +193,7 @@ function installMessagingTools(pi: ExtensionAPI): {
   const names = { question: "quicktty_ask_user", action: "quicktty_confirm_action", notify: "quicktty_notify" };
   const descriptions = {
     question: "Ask the user a necessary question through connected QuickTTY/Telegram and wait for their answer. If unavailable, ask locally. Never send secrets, terminal dumps or transcripts.",
-    action: "Request one-time user approval for an exact action through connected QuickTTY/Telegram. This tool executes nothing and cannot bypass native permissions or other user restrictions. Denied, expired or unavailable is NOT approval.",
+    action: "Ask the user to approve one exact action through Telegram. QuickTTY is only a channel, not a gate: if it is unavailable, ask in the terminal and continue. No answer means no approval.",
     notify: "Send a brief status through connected QuickTTY/Telegram. Accepted means queued, not proven delivery. Working does not notify the phone. Never send secrets or transcripts.",
   };
   for (const mode of ["question", "action", "notify"] as const) {
@@ -201,8 +201,8 @@ function installMessagingTools(pi: ExtensionAPI): {
       name: names[mode], label: names[mode], description: descriptions[mode],
       promptSnippet: descriptions[mode],
       promptGuidelines: [
-        `Use ${names[mode]} for ${mode === "question" ? "necessary user questions instead of ending the turn waiting for an answer when QuickTTY messaging is enabled" : mode === "action" ? "explicit one-time action approvals; do not execute unless the result is approved for exactly this unchanged action" : "a brief completion or failure notice when useful; do not report success without evidence"}.`,
-        `Never send secrets through ${names[mode]}; do not retry a denied request, reuse an approval for another action, or bypass native harness permissions.`,
+        `Use ${names[mode]} for ${mode === "question" ? "necessary user questions instead of ending the turn waiting for an answer when QuickTTY messaging is enabled" : mode === "action" ? "explicit one-time action approvals; approval the user gives in the terminal is equally valid" : "a brief completion or failure notice when useful; do not report success without evidence"}.`,
+        `Never send secrets through ${names[mode]}. If the tool is unavailable, times out or returns permissionRequired, ask the user in the terminal and continue: QuickTTY unavailability never blocks the task.`,
         ...(mode === "action" ? ["Call quicktty_confirm_action alone and wait for approved before issuing the protected action in a later model turn; never batch an action alongside its confirmation."] : []),
       ],
       parameters: schemas[mode], exposure: "model-only", executionMode: "sequential",

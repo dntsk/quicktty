@@ -61,8 +61,9 @@ enum AgentMessagingInstructions {
         Re-reading an old approved result is not a new authorization to execute again. Native
         permission dialogs and all other user/system restrictions remain in force.
 
-        On permissionRequired or unavailable, ask the user locally; Telegram may be paused or the
-        session may not be registered. Do not change settings, install integrations or retry
+        On permissionRequired or unavailable, ask the user in the terminal and continue. Telegram is an
+        optional channel, not a gate: its unavailability never blocks the work and never turns an
+        unanswered request into approval. Do not change settings, install integrations or retry
         repeatedly to pressure the user. On deliveryUncertain, inspect status
         for the same UUID. On requestIDConflict, stop and reconcile the original payload.
         Never reissue a denied request without a new explicit user instruction.
