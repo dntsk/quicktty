@@ -48,7 +48,7 @@ final class AgentTelegramView: NSStackView {
         spacing = 10
         setAccessibilityLabel("Telegram agent questions and decisions")
         enabledButton.toolTip =
-            "Connect automatically when QuickTTY starts. Applies to registered agents in all current and future workspaces. Does not approve actions."
+            "Enable Telegram for this QuickTTY session. Starts off each time you launch QuickTTY. Applies to registered agents in all current and future workspaces. Does not approve actions."
         addArrangedSubview(enabledButton)
         statusImage.setAccessibilityElement(false)
         statusImage.widthAnchor.constraint(equalToConstant: 16).isActive = true
@@ -60,7 +60,7 @@ final class AgentTelegramView: NSStackView {
         statusLabel.setAccessibilityLabel("Telegram connection status")
         let explanation = NSTextField(
             wrappingLabelWithString:
-                "Connect once. QuickTTY reconnects on launch and lets registered agents in every workspace send questions and receive your replies. Each action still needs your approval."
+                "Pair your bot once, then turn Telegram on when needed. Telegram starts off each time you launch QuickTTY. When enabled, registered agents in every workspace can send questions and receive your replies. Each action still needs your approval."
         )
         explanation.textColor = .secondaryLabelColor
         addArrangedSubview(explanation)
@@ -133,7 +133,7 @@ final class AgentTelegramView: NSStackView {
         connectTask?.cancel()
         connectTask = nil
         tokenField.stringValue = ""
-        // Closing a settings sheet must not cancel the application's automatic reconnect task.
+        // Closing a settings sheet must not cancel a connection enabled outside the sheet.
         guard ownsSetup else { return }
         switch service.connection.phase {
         case .verifying, .pairing: service.connection.disconnect()

@@ -4,30 +4,30 @@ import Synchronization
 @MainActor
 struct AgentMessagingAutoconnectContract {
     static func run() async throws {
-        try preferencesPersistence()
+        try sessionPreferences()
         try channelStateProjection()
         try await restartAndPause()
         try await transientStartupFailure()
         try await noSavedBot()
         try await permanentFailuresStop()
-        print("PASS: Telegram automatic connection, restart, pause, forget and startup retry")
+        print("PASS: Telegram starts off, manual connection, restart, pause, forget and retry")
     }
 
-    private static func preferencesPersistence() throws {
-        let suite = "com.dntsk.QuickTTY.tests.telegram.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = TelegramConnectionPreferences.standard(defaults: defaults)
+    private static func sessionPreferences() throws {
+        let preferences = TelegramConnectionPreferences.standard()
         try AgentMessagingContract.require(
-            preferences.loadEnabled(), "Existing paired bot migration was disabled")
-        preferences.saveEnabled(false)
-        let restarted = TelegramConnectionPreferences.standard(
-            defaults: UserDefaults(suiteName: suite)!)
+            !preferences.loadEnabled(), "Telegram is enabled in a new application session")
+        preferences.saveEnabled(true)
         try AgentMessagingContract.require(
-            !restarted.loadEnabled(), "Restart forgot persistent pause")
+            preferences.loadEnabled(), "Manual enable was not retained in the current session")
+        let restarted = TelegramConnectionPreferences.standard()
+        try AgentMessagingContract.require(
+            !restarted.loadEnabled(), "A new application session inherited enabled Telegram")
         restarted.saveEnabled(true)
+        restarted.saveEnabled(false)
         try AgentMessagingContract.require(
-            preferences.loadEnabled(), "Global enable was not persisted")
+            preferences.loadEnabled() && !restarted.loadEnabled(),
+            "Separate application sessions share Telegram state")
     }
 
     private static func channelStateProjection() throws {
@@ -51,16 +51,23 @@ struct AgentMessagingAutoconnectContract {
     }
 
     private static func restartAndPause() async throws {
-        let preferences = TelegramConnectionPreferences.transient(enabled: true)
+        let preferences = TelegramConnectionPreferences.standard()
         let credentials = AutoconnectCredentials()
         let network = AutoconnectNetwork()
         let first = controller(credentials, network, preferences)
         let firstSignal = AutoconnectSignal(first)
         first.start()
         first.start()
+        await Task.yield()
+        let startupVerifications = await network.verifications
+        try AgentMessagingContract.require(
+            !first.isEnabled && first.phase == .disconnected && credentials.loads == 0
+                && startupVerifications == 0,
+            "Startup accessed credentials or Telegram before manual enable")
+        first.toggleEnabled()
         await firstSignal.wait { if case .connected = first.phase { true } else { false } }
         try AgentMessagingContract.require(
-            credentials.loads == 1, "Startup duplicated Keychain load")
+            credentials.loads == 1, "Manual enable duplicated Keychain load")
         let origin = try AgentMessagingContract.origin()
         first.setEnabledWorkspaces([origin.workspaceID])
         try first.authorize(origin, workspaceName: "Before restart", agentName: "Pi")
@@ -72,12 +79,22 @@ struct AgentMessagingAutoconnectContract {
         await network.drain()
         try AgentMessagingContract.require(preferences.loadEnabled(), "Shutdown paused Telegram")
 
-        let second = controller(credentials, network, preferences)
+        let restartedPreferences = TelegramConnectionPreferences.standard()
+        let second = controller(credentials, network, restartedPreferences)
         let secondSignal = AutoconnectSignal(second)
+        let verificationsBeforeRestart = await network.verifications
         second.start()
+        await Task.yield()
+        let verificationsAfterRestart = await network.verifications
+        try AgentMessagingContract.require(
+            !second.isEnabled && second.phase == .disconnected && credentials.loads == 1
+                && credentials.removals == 0
+                && verificationsAfterRestart == verificationsBeforeRestart,
+            "Restart after enabled Telegram accessed credentials, network or removed the bot")
+        second.toggleEnabled()
         await secondSignal.wait { if case .connected = second.phase { true } else { false } }
         try AgentMessagingContract.require(
-            credentials.loads == 2, "Restart did not restore saved bot")
+            credentials.loads == 2, "Manual enable after restart did not restore saved bot")
         try AgentMessagingContract.require(
             second.snapshots().isEmpty && second.snapshot(pending.id) == nil
                 && !second.hasGrant(origin),
@@ -96,11 +113,13 @@ struct AgentMessagingAutoconnectContract {
                 && second.snapshot(firstQuestion.id)?.state == .resolved(.revoked)
                 && second.snapshot(otherQuestion.id)?.state == .resolved(.revoked),
             "Global toggle did not revoke every origin and pending request")
-        try AgentMessagingContract.require(!preferences.loadEnabled(), "Pause was not persisted")
+        try AgentMessagingContract.require(
+            !restartedPreferences.loadEnabled(), "Pause did not update the current session")
         second.shutdown()
         await network.drain()
 
-        let paused = controller(credentials, network, preferences)
+        let pausedPreferences = TelegramConnectionPreferences.standard()
+        let paused = controller(credentials, network, pausedPreferences)
         paused.start()
         await Task.yield()
         try AgentMessagingContract.require(
@@ -109,10 +128,11 @@ struct AgentMessagingAutoconnectContract {
         let pausedSignal = AutoconnectSignal(paused)
         paused.toggleEnabled()
         await pausedSignal.wait { if case .connected = paused.phase { true } else { false } }
-        try AgentMessagingContract.require(preferences.loadEnabled(), "Resume was not persisted")
+        try AgentMessagingContract.require(
+            pausedPreferences.loadEnabled(), "Resume did not update the current session")
         paused.disconnect(forget: true)
         try AgentMessagingContract.require(
-            !preferences.loadEnabled() && credentials.removals == 1,
+            !pausedPreferences.loadEnabled() && credentials.removals == 1,
             "Forget retained enabled state or saved bot")
         paused.shutdown()
         await network.drain()

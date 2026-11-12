@@ -56,15 +56,15 @@
         <article class="docs-content">
           <section id="connect-bot">
             <h2>Connect your bot once</h2>
-            <div class="note"><strong>Build requirement</strong>The controls in this guide require QuickTTY <strong>0.1.5.beta-4, build 19</strong>, or newer. To install a beta, follow <a href="/docs/getting-started/#installation-updates">Installation &amp; Updates</a>; the stable channel never offers a prerelease.</div>
+            <div class="note"><strong>Build requirement</strong>The controls in this guide require QuickTTY <strong>0.1.5.beta-4, build 19</strong>, or newer. To install a beta, follow <a href="/docs/getting-started/#installation-updates">Installation &amp; Updates</a>; the stable channel never offers a prerelease. Telegram starting off on every app launch requires <strong>0.1.5.beta-5, build 20</strong>, or newer.</div>
             <ol class="workflow-steps">
               <li><strong>Use a dedicated bot.</strong> Create a bot with Telegram’s BotFather and keep its token private. Do not share this bot with another polling app or webhook.</li>
               <li><strong>Open QuickTTY → Agent Integrations… → Telegram.</strong> Enter the token in the secure field and choose <strong>Connect bot</strong>. Never send the token to your agent or paste it into a terminal command.</li>
               <li><strong>Open a private chat with your bot.</strong> Send the exact <code>/start &lt;code&gt;</code> shown by QuickTTY. The one-time code expires after five minutes.</li>
               <li><strong>Confirm your account on the Mac.</strong> Check the proposed user ID and choose <strong>Confirm Telegram user …</strong> in QuickTTY. Sending the code alone does not authorize the account.</li>
-              <li><strong>Leave Use Telegram for agents enabled.</strong> The section shows <strong>Connected</strong> and automatically includes authenticated registered agents in all workspaces.</li>
+              <li><strong>Use Telegram when needed.</strong> After pairing, the section shows <strong>Connected</strong> and includes authenticated registered agents in all workspaces. On later app launches, turn the channel on manually.</li>
             </ol>
-            <p>The token and paired account are saved in the device-only macOS Keychain, not synchronized to other devices. The enabled channel reconnects after an app restart without another token or pairing step. You do not need a separate checkbox for each workspace or new session.</p>
+            <p>The token and paired account are saved in the device-only macOS Keychain, not synchronized to other devices. Telegram starts off on every app launch, even if it was previously enabled. Turn it on manually to restore the saved connection without another token or pairing step. You do not need a separate checkbox for each workspace or new session.</p>
             <p>Channel access allows an agent to ask; it does not approve actions or grant <a href="/docs/agent-terminal-control/">terminal control</a>.</p>
           </section>
 
@@ -112,7 +112,7 @@
                 </tbody>
               </table>
             </div>
-            <p>Turning the channel off saves the pause and revokes pending requests and messaging access without deleting the bot. Turning it on restores the connection and fresh access for eligible sessions, not old answers or approvals. The enabled or paused state survives restarts.</p>
+            <p>Turning the channel off stops Telegram network activity and revokes pending requests and messaging access without deleting the bot. Turning it on restores the connection and fresh access for eligible sessions, not old answers or approvals. Enabling lasts only for the current QuickTTY session; the next app launch always starts with Telegram off.</p>
             <p>Under <strong>Connection settings</strong>, use <strong>Reconnect</strong> to retry, <strong>Change bot…</strong> to pair another bot, or <strong>Forget bot</strong> to remove the saved connection.</p>
           </section>
 
